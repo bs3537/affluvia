@@ -412,6 +412,8 @@ export function Dashboard() {
   const snapEmergency: any = pickWidget(dashSnapshot, 'emergency_readiness');
   const snapCash: any = pickWidget(dashSnapshot, 'cash_flow');
   const snapRisk: any = pickWidget(dashSnapshot, 'risk_profile');
+  const snapSpouseRisk: any = pickWidget(dashSnapshot, 'spouse_risk_profile');
+  const snapInsurance: any = pickWidget(dashSnapshot, 'insurance_adequacy');
 
   
   // Progressive disclosure states for dashboard widgets
@@ -845,7 +847,7 @@ export function Dashboard() {
     );
   }
 
-  if (!profile && !dashSnapshot) {
+  if (!profile) {
     return (
       <div className="p-6 fade-in">
         {/* Hero Section */}

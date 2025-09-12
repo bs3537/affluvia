@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, ReferenceLine, ComposedChart } from 'recharts';
 import { Info, TrendingUp, Calculator, RefreshCw } from 'lucide-react';
@@ -10,11 +10,11 @@ import { useDashboardSnapshot, pickWidget } from '@/hooks/useDashboardSnapshot';
 type BandsResponse = {
   ages: number[];
   percentiles: {
-    p05: number[];
+    p05?: number[];
     p25: number[];
     p50: number[];
     p75: number[];
-    p95: number[];
+    p95?: number[];
   };
   meta: {
     currentAge: number;
@@ -86,6 +86,9 @@ export function RetirementPortfolioProjectionsOptimized({
 }: RetirementPortfolioProjectionsOptimizedProps) {
   const [data, setData] = useState<BandsResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStart, setLoadingStart] = useState<number | null>(null);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const loadingTimerRef = useRef<number | null>(null);
   const [hasCalculated, setHasCalculated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { data: snapshot } = useDashboardSnapshot();
@@ -174,6 +177,8 @@ export function RetirementPortfolioProjectionsOptimized({
     }
     
     setLoading(true);
+    setLoadingStart(Date.now());
+    setLoadingSeconds(0);
     setError(null);
     
     try {
@@ -218,8 +223,28 @@ export function RetirementPortfolioProjectionsOptimized({
       setError(e.message || 'Failed to generate optimized confidence bands');
     } finally {
       setLoading(false);
+      setLoadingStart(null);
+      setLoadingSeconds(0);
     }
   };
+
+  // Update loading seconds while generating
+  useEffect(() => {
+    if (loading && loadingStart) {
+      if (loadingTimerRef.current) {
+        clearInterval(loadingTimerRef.current);
+      }
+      loadingTimerRef.current = window.setInterval(() => {
+        setLoadingSeconds((Date.now() - loadingStart) / 1000);
+      }, 100);
+    }
+    return () => {
+      if (loadingTimerRef.current) {
+        clearInterval(loadingTimerRef.current);
+        loadingTimerRef.current = null;
+      }
+    };
+  }, [loading, loadingStart]);
 
   // Auto-refresh on optimization completion (mirrors the other widget)
   useEffect(() => {
@@ -235,14 +260,14 @@ export function RetirementPortfolioProjectionsOptimized({
   const chartData = useMemo(() => {
     if (!data) return [] as any[];
     const { ages, percentiles } = data;
-    const rows = ages.map((age, i) => ({
-      age,
-      p95: percentiles.p95[i] || 0,
-      p75: percentiles.p75[i] || 0,
-      p50: percentiles.p50[i] || 0,
-      p25: percentiles.p25[i] || 0,
-      p05: percentiles.p05[i] || 0,
-    }));
+    const rows = ages.map((age, i) => {
+      const p75 = percentiles.p75?.[i] ?? 0;
+      const p50 = percentiles.p50?.[i] ?? 0;
+      const p25 = percentiles.p25?.[i] ?? 0;
+      const p95 = percentiles.p95?.[i] ?? p75;
+      const p05 = percentiles.p05?.[i] ?? p25;
+      return { age, p95, p75, p50, p25, p05 };
+    });
     // Derive stacked areas for band fills
     return rows.map(r => ({
       ...r,
@@ -302,7 +327,7 @@ export function RetirementPortfolioProjectionsOptimized({
               className="flex items-center gap-2"
             >
               <Calculator className="w-4 h-4" />
-              {loading ? 'Generating...' : 'Generate Confidence Bands'}
+              {loading ? `Generating... ${loadingSeconds.toFixed(1)}s` : 'Generate Confidence Bands'}
             </Button>
             {error && (
               <p className="text-red-400 text-sm text-center max-w-sm">{error}</p>
