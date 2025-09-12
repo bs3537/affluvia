@@ -311,10 +311,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getFinancialProfile(userId: number): Promise<FinancialProfile | undefined> {
-    const profiles = await db
-      .select()
-      .from(financialProfiles)
-      .where(eq(financialProfiles.userId, userId));
+    // Use retry wrapper to mitigate transient pool timeouts and connection issues
+    const profiles = await withDatabaseRetry(() =>
+      db.select().from(financialProfiles).where(eq(financialProfiles.userId, userId))
+    );
 
     const profile = profiles[0];
 

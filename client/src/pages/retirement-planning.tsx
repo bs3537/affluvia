@@ -2839,7 +2839,7 @@ function RetirementPlanningInner() {
 
 
                   {/* Investment Strategy (aligned; 2-up with spouse on desktop) */}
-                  <div className={`grid grid-cols-1 md:grid-cols-2 ${isMarried ? 'lg:grid-cols-2' : ''} gap-6 items-end`}>
+                  <div className={`grid grid-cols-1 ${isMarried ? 'md:grid-cols-2' : 'md:grid-cols-1'} gap-8 items-end`}>
                   {/* User Investment Strategy */}
                   <div className="space-y-2">
                     <Label className="text-sm font-medium text-gray-300 flex items-center">
@@ -3174,8 +3174,8 @@ function RetirementPlanningInner() {
                   </div>
                   )}
 
-                  {/* Monthly expenses and part-time income (aligned; 3-up on desktop when married) */}
-                  <div className={`grid grid-cols-1 md:grid-cols-2 ${isMarried ? 'lg:grid-cols-3' : ''} gap-6 items-end`}>
+                  {/* Monthly expenses and part-time income (aligned; spread out to fill full width) */}
+                  <div className={`grid grid-cols-1 gap-8 ${isMarried ? 'md:grid-cols-3' : 'md:grid-cols-2'} items-end`}>
                     {/* Monthly Expenses in Retirement */}
                     <div className="space-y-2">
                       <Label htmlFor="monthly-expenses" className="text-sm font-medium text-gray-300 flex items-center">

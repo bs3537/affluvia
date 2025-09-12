@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, ReferenceLine, ComposedChart } from 'recharts';
 import { Info, TrendingUp, Calculator, RefreshCw } from 'lucide-react';
@@ -10,11 +10,11 @@ import { Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger }
 type BandsResponse = {
   ages: number[];
   percentiles: {
-    p05: number[];
+    p05?: number[];
     p25: number[];
     p50: number[];
     p75: number[];
-    p95: number[];
+    p95?: number[];
   };
   meta: {
     currentAge: number;
@@ -72,6 +72,9 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export function RetirementConfidenceEnhancedBands() {
   const [data, setData] = useState<BandsResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStart, setLoadingStart] = useState<number | null>(null);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const loadingTimerRef = useRef<number | null>(null);
   const [needsCalculation, setNeedsCalculation] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { data: snapshot } = useDashboardSnapshot();
@@ -121,6 +124,8 @@ export function RetirementConfidenceEnhancedBands() {
 
   const generateBands = async () => {
     setLoading(true);
+    setLoadingStart(Date.now());
+    setLoadingSeconds(0);
     setError(null);
     try {
       const response = await fetch('/api/calculate-retirement-bands', {
@@ -143,20 +148,42 @@ export function RetirementConfidenceEnhancedBands() {
       setError(e.message || 'Failed to generate confidence bands');
     } finally {
       setLoading(false);
+      setLoadingStart(null);
+      setLoadingSeconds(0);
     }
   };
+
+  // Update the visible loading seconds while generating
+  useEffect(() => {
+    if (loading && loadingStart) {
+      if (loadingTimerRef.current) {
+        clearInterval(loadingTimerRef.current);
+      }
+      loadingTimerRef.current = window.setInterval(() => {
+        setLoadingSeconds((Date.now() - loadingStart) / 1000);
+      }, 100);
+    }
+    return () => {
+      if (loadingTimerRef.current) {
+        clearInterval(loadingTimerRef.current);
+        loadingTimerRef.current = null;
+      }
+    };
+  }, [loading, loadingStart]);
 
   const chartData = useMemo(() => {
     if (!data) return [] as any[];
     const { ages, percentiles } = data;
-    const rows = ages.map((age, i) => ({
-      age,
-      p95: percentiles.p95[i] || 0,
-      p75: percentiles.p75[i] || 0,
-      p50: percentiles.p50[i] || 0,
-      p25: percentiles.p25[i] || 0,
-      p05: percentiles.p05[i] || 0,
-    }));
+    const rows = ages.map((age, i) => {
+      const p75 = percentiles.p75?.[i] ?? 0;
+      const p50 = percentiles.p50?.[i] ?? 0;
+      const p25 = percentiles.p25?.[i] ?? 0;
+      // Server intentionally slims payload to p25/p50/p75.
+      // Fall back to p75/p25 for missing tails to avoid runtime errors.
+      const p95 = percentiles.p95?.[i] ?? p75;
+      const p05 = percentiles.p05?.[i] ?? p25;
+      return { age, p95, p75, p50, p25, p05 };
+    });
     // Derive stacked areas for band fills
     return rows.map(r => ({
       ...r,
@@ -202,13 +229,13 @@ export function RetirementConfidenceEnhancedBands() {
             <p className="text-gray-400 text-center">
               Generate detailed retirement confidence bands
             </p>
-            <Button
+          <Button
               onClick={generateBands}
               disabled={loading}
               className="flex items-center gap-2"
             >
               <Calculator className="w-4 h-4" />
-              {loading ? 'Generating...' : 'Generate Confidence Bands'}
+              {loading ? `Generating... ${loadingSeconds.toFixed(1)}s` : 'Generate Confidence Bands'}
             </Button>
             {error && (
               <p className="text-red-400 text-sm text-center">{error}</p>

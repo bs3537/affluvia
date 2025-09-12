@@ -55,7 +55,7 @@ export function CashFlowWidgetV2() {
   const { data: profile, isLoading, error } = useQuery({
     queryKey: ['financial-profile'],
     queryFn: async () => {
-      const response = await fetch('/api/financial-profile?fast=true');
+      const response = await fetch('/api/financial-profile?fast=true', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch profile');
       return response.json();
     }

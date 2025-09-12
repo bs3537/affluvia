@@ -975,62 +975,67 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
     
     res.json(responseData);
     
-    // Pre-calculate stress tests in background (non-blocking)
-    console.log('🚀 Triggering background stress test pre-calculation...');
-    setTimeout(async () => {
-      try {
-        const { DEFAULT_STRESS_SCENARIOS } = await import('../../shared/stress-test-types');
-        const { runStressTests } = await import('../stress-test-engine');
-        const { widgetCacheManager } = await import('../widget-cache-manager');
-        
-        // Pre-calculate batch stress tests for optimized plan
-        const scenarioRequests = DEFAULT_STRESS_SCENARIOS.map(scenario => ({
-          request: {
-            scenarios: [{ ...scenario, enabled: true }],
-            optimizationVariables: optimizationVariables,
-            runCombined: false
-          },
-          scenario
-        }));
-        
-        // Run all scenarios in parallel
-        const [baselineResponse, ...scenarioResponses] = await Promise.all([
-          runStressTests(profile, { scenarios: [], optimizationVariables, runCombined: false }),
-          ...scenarioRequests.map(({ request }) => runStressTests(profile, request))
-        ]);
-        
-        const baselineScore = baselineResponse.baseline.successProbability;
-        const individualResults = scenarioResponses.map((result, index) => {
-          const scenario = scenarioRequests[index].scenario;
-          return {
-            scenarioId: scenario.id,
-            scenarioName: scenario.name,
-            baselineScore,
-            stressedScore: result.individualResults[0]?.successProbability || baselineScore,
-            impact: result.individualResults[0]?.impactPercentage || 0,
-            description: scenario.description
-          };
-        });
-        
-        // Cache the batch stress test results
-        const cacheKey = 'batch_stress_optimized';
-        const cacheHash = widgetCacheManager.generateInputHash(cacheKey, {
-          profileUpdatedAt: profile.lastUpdated,
-          optimizationVariables,
-          plan: 'optimized'
-        });
-        
-        await widgetCacheManager.cacheWidget(userId, cacheKey, cacheHash, {
-          baseline: baselineScore,
-          scenarios: individualResults,
-          timestamp: Date.now()
-        }, 4);
-        
-        console.log('✅ Background stress test pre-calculation complete');
-      } catch (error) {
-        console.error('Background stress test pre-calculation failed:', error);
-      }
-    }, 100); // Small delay to ensure response is sent first
+    // Pre-calculate stress tests in background (non-blocking) — opt-in only
+    const enableStressPrecalc = (process.env.ENABLE_OPTIMIZATION_STRESS_PRECALC === '1') || body?.precomputeStress === true;
+    if (enableStressPrecalc) {
+      console.log('🚀 Triggering background stress test pre-calculation (opt-in)...');
+      setTimeout(async () => {
+        try {
+          const { DEFAULT_STRESS_SCENARIOS } = await import('../../shared/stress-test-types');
+          const { runStressTests } = await import('../stress-test-engine');
+          const { widgetCacheManager } = await import('../widget-cache-manager');
+          
+          // Pre-calculate batch stress tests for optimized plan
+          const scenarioRequests = DEFAULT_STRESS_SCENARIOS.map(scenario => ({
+            request: {
+              scenarios: [{ ...scenario, enabled: true }],
+              optimizationVariables: optimizationVariables,
+              runCombined: false
+            },
+            scenario
+          }));
+          
+          // Run all scenarios in parallel
+          const [baselineResponse, ...scenarioResponses] = await Promise.all([
+            runStressTests(profile, { scenarios: [], optimizationVariables, runCombined: false }),
+            ...scenarioRequests.map(({ request }) => runStressTests(profile, request))
+          ]);
+          
+          const baselineScore = baselineResponse.baseline.successProbability;
+          const individualResults = scenarioResponses.map((result, index) => {
+            const scenario = scenarioRequests[index].scenario;
+            return {
+              scenarioId: scenario.id,
+              scenarioName: scenario.name,
+              baselineScore,
+              stressedScore: result.individualResults[0]?.successProbability || baselineScore,
+              impact: result.individualResults[0]?.impactPercentage || 0,
+              description: scenario.description
+            };
+          });
+          
+          // Cache the batch stress test results
+          const cacheKey = 'batch_stress_optimized';
+          const cacheHash = widgetCacheManager.generateInputHash(cacheKey, {
+            profileUpdatedAt: profile.lastUpdated,
+            optimizationVariables,
+            plan: 'optimized'
+          });
+          
+          await widgetCacheManager.cacheWidget(userId, cacheKey, cacheHash, {
+            baseline: baselineScore,
+            scenarios: individualResults,
+            timestamp: Date.now()
+          }, 4);
+          
+          console.log('✅ Background stress test pre-calculation complete');
+        } catch (error) {
+          console.error('Background stress test pre-calculation failed:', error);
+        }
+      }, 100); // Small delay to ensure response is sent first
+    } else {
+      console.log('⏭️ Skipping background stress test pre-calculation (disabled)');
+    }
     
   } catch (error) {
     console.error('Error calculating optimization score:', error);
