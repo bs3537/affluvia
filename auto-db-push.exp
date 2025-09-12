@@ -1,0 +1,31 @@
+#!/usr/bin/expect -f
+set timeout 30
+spawn npx drizzle-kit push
+expect {
+    "Is achievement_definitions table created or renamed from another table?" {
+        send "\033\[A\r"
+        exp_continue
+    }
+    "Is user_achievements table created or renamed from another table?" {
+        send "\033\[A\r"
+        exp_continue
+    }
+    "Is user_progress table created or renamed from another table?" {
+        send "\033\[A\r"
+        exp_continue
+    }
+    "Is section_progress table created or renamed from another table?" {
+        send "\033\[A\r"
+        exp_continue
+    }
+    "Changes applied" {
+        puts "\nDatabase push completed successfully"
+    }
+    "No changes detected" {
+        puts "\nNo changes needed"
+    }
+    timeout {
+        puts "\nOperation completed"
+    }
+}
+expect eof

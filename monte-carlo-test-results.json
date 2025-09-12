@@ -1,0 +1,21 @@
+{
+  "testDate": "2025-09-01T04:50:53.660Z",
+  "iterations": 1000,
+  "profiles": [
+    {
+      "name": "Conservative Saver Family",
+      "medianEndingBalance": 0,
+      "confidenceIntervals": []
+    },
+    {
+      "name": "Aggressive Accumulator",
+      "medianEndingBalance": 0,
+      "confidenceIntervals": []
+    },
+    {
+      "name": "Late Starter Couple",
+      "medianEndingBalance": 0,
+      "confidenceIntervals": []
+    }
+  ]
+}

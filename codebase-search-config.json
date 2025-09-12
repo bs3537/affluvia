@@ -1,0 +1,27 @@
+{
+  "indexing": {
+    "enabled": true,
+    "engines": ["zoekt", "enhanced", "warp"],
+    "preferred": "zoekt",
+    "paths": {
+      "client": "./client/src",
+      "server": "./server",
+      "shared": "./shared",
+      "scripts": "./scripts"
+    },
+    "filePatterns": {
+      "include": ["*.ts", "*.tsx", "*.js", "*.jsx"],
+      "exclude": ["node_modules/**", "dist/**", "*.test.*", "*.spec.*"]
+    }
+  },
+  "search": {
+    "contextLines": 5,
+    "maxResults": 50,
+    "categories": {
+      "components": ["function", "const", "export", "tsx"],
+      "api": ["app.get", "app.post", "router", "endpoint"],
+      "financial": ["MonteCarloSimulation", "retirement", "optimization", "calculation"],
+      "database": ["drizzle", "select", "insert", "update", "schema"]
+    }
+  }
+}

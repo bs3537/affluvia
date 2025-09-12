@@ -1,0 +1,17 @@
+{
+  "version": "2025-US",
+  "assets": {
+    "usStocks": { "expectedReturnCAGR": 0.075, "volatility": 0.18 },
+    "intlStocks": { "expectedReturnCAGR": 0.07, "volatility": 0.20 },
+    "bonds": { "expectedReturnCAGR": 0.04, "volatility": 0.06 },
+    "reits": { "expectedReturnCAGR": 0.065, "volatility": 0.19 },
+    "cash": { "expectedReturnCAGR": 0.025, "volatility": 0.01 }
+  },
+  "correlations": {
+    "usStocks":   { "usStocks": 1.00, "intlStocks": 0.80, "bonds": 0.10, "reits": 0.65, "cash": 0.00 },
+    "intlStocks": { "usStocks": 0.80, "intlStocks": 1.00, "bonds": 0.05, "reits": 0.60, "cash": 0.00 },
+    "bonds":      { "usStocks": 0.10, "intlStocks": 0.05, "bonds": 1.00, "reits": 0.15, "cash": 0.30 },
+    "reits":      { "usStocks": 0.65, "intlStocks": 0.60, "bonds": 0.15, "reits": 1.00, "cash": 0.05 },
+    "cash":       { "usStocks": 0.00, "intlStocks": 0.00, "bonds": 0.30, "reits": 0.05, "cash": 1.00 }
+  }
+}

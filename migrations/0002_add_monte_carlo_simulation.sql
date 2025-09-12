@@ -1,0 +1,1 @@
+ALTER TABLE "financial_profiles" ADD COLUMN "monte_carlo_simulation" jsonb;

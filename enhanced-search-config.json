@@ -1,0 +1,30 @@
+{
+  "searchPatterns": {
+    "optimization": {
+      "primary": ["optimizationVariables", "handleLockToggle", "Lock Variables", "optimize-retirement"],
+      "secondary": ["retirementAge", "socialSecurityAge", "assetAllocation", "monthlyContributions"],
+      "context": ["isLocked", "hasOptimized", "optimizedScore"]
+    },
+    "persistence": {
+      "primary": ["updateFinancialProfile", "financial_profiles", "optimization_variables"],
+      "secondary": ["PUT /api/financial-profile", "storage.ts", "jsonb"],
+      "context": ["lockedAt", "savedVariables", "fetchProfileData"]
+    },
+    "monteCarloFlow": {
+      "primary": ["runRightCapitalStyleMonteCarloSimulation", "calculateMonteCarloWithdrawalSequence"],
+      "secondary": ["profileToRetirementParams", "applyOptimizationVariables"],
+      "context": ["successProbability", "monteCarloParams", "ITERATIONS"]
+    }
+  },
+  "filePatterns": {
+    "frontend": ["client/src/**/*.{ts,tsx}", "client/src/pages/retirement-*.tsx"],
+    "backend": ["server/**/*.ts", "server/routes.ts", "server/storage.ts"],
+    "database": ["migrations/**/*.sql", "shared/schema.ts"],
+    "tests": ["server/test-*.ts", "**/*.test.{ts,tsx}"]
+  },
+  "searchDepth": {
+    "shallow": {"before": 5, "after": 5},
+    "medium": {"before": 10, "after": 20},
+    "deep": {"before": 20, "after": 50}
+  }
+}

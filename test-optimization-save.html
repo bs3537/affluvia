@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Optimization Variables Save</title>
+</head>
+<body>
+    <h1>Test Optimization Variables Save</h1>
+    <button onclick="testSave()">Test Save</button>
+    <button onclick="testLoad()">Test Load</button>
+    <pre id="result"></pre>
+
+    <script>
+        async function testSave() {
+            const testData = {
+                optimizationVariables: {
+                    retirementAge: 67,
+                    spouseRetirementAge: 67,
+                    socialSecurityAge: 70,
+                    spouseSocialSecurityAge: 70,
+                    assetAllocation: "7",
+                    monthlyContributions: 3000,
+                    monthlyExpenses: 7000,
+                    partTimeIncome: 2000,
+                    spousePartTimeIncome: 1500,
+                    lockedAt: new Date().toISOString()
+                }
+            };
+
+            try {
+                const response = await fetch('http://localhost:3000/api/financial-profile', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify(testData)
+                });
+
+                const result = await response.text();
+                document.getElementById('result').textContent = 
+                    `Status: ${response.status}\nResponse: ${result}`;
+            } catch (error) {
+                document.getElementById('result').textContent = 
+                    `Error: ${error.message}`;
+            }
+        }
+
+        async function testLoad() {
+            try {
+                const response = await fetch('http://localhost:3000/api/financial-profile', {
+                    credentials: 'include'
+                });
+
+                const data = await response.json();
+                document.getElementById('result').textContent = 
+                    `Status: ${response.status}\nOptimization Variables: ${
+                        JSON.stringify(data.optimizationVariables, null, 2)
+                    }`;
+            } catch (error) {
+                document.getElementById('result').textContent = 
+                    `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>

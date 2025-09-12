@@ -1,0 +1,1 @@
+ALTER TABLE "financial_profiles" ADD COLUMN "tax_recommendations" jsonb;

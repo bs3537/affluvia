@@ -1,0 +1,6 @@
+{
+  "preferred_engine": "zoekt",
+  "index_dir": "~/.zoekt",
+  "notes": "Helper scripts: scripts/zoekt-index.sh, scripts/zoekt-search.sh"
+}
+

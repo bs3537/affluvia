@@ -1,0 +1,9 @@
+{
+  "policy": {
+    "auto_git_commit": false,
+    "auto_git_push": false,
+    "require_user_approval_for_git": true,
+    "notes": "Set by user: Do not commit or push to GitHub unless explicitly requested. Saved on 2025-09-08."
+  }
+}
+
