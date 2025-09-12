@@ -71,9 +71,17 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
     const longevityAge = 93;
     const colaRate = 0.025; // 2.5% annual COLA
     
-    // Get baseline claiming ages from intake form (claim at retirement)
-    const baselineUserClaimAge = profile.desiredRetirementAge || 65;
-    const baselineSpouseClaimAge = profile.spouseDesiredRetirementAge || 65;
+    // Get baseline claiming ages from optimized plan first (Optimization tab), then profile.optimizationVariables, then intake form
+    const baselineUserClaimAge = (
+      variables?.retirementAge ??
+      profile?.optimizationVariables?.retirementAge ??
+      profile.desiredRetirementAge ?? 65
+    );
+    const baselineSpouseClaimAge = (
+      variables?.spouseRetirementAge ??
+      profile?.optimizationVariables?.spouseRetirementAge ??
+      profile.spouseDesiredRetirementAge ?? 65
+    );
     
     // Get optimized claiming ages (from optimization form variables)
     const optimizedUserClaimAge = variables?.socialSecurityAge || optData.combined.optimalUserAge;

@@ -65,9 +65,17 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
     const longevityAge = 93;
     const colaRate = 0.025; // 2.5% annual COLA
     
-    // Get baseline claiming ages (from intake form - claim at retirement)
-    const baselineUserClaimAge = profile.desiredRetirementAge || 65;
-    const baselineSpouseClaimAge = profile.spouseDesiredRetirementAge || 65;
+    // Get baseline claiming ages from optimized plan first (Optimization tab), then profile.optimizationVariables, then intake form
+    const baselineUserClaimAge = (
+      variables?.retirementAge ??
+      profile?.optimizationVariables?.retirementAge ??
+      profile.desiredRetirementAge ?? 65
+    );
+    const baselineSpouseClaimAge = (
+      variables?.spouseRetirementAge ??
+      profile?.optimizationVariables?.spouseRetirementAge ??
+      profile.spouseDesiredRetirementAge ?? 65
+    );
     
     // Get optimized claiming ages (from optimization form variables)
     const optimizedUserClaimAge = variables?.socialSecurityAge || optData.combined.optimalUserAge;
@@ -209,8 +217,16 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
     : 0;
 
   // Get claiming ages for display
-  const baselineUserAge = profile.desiredRetirementAge || 65;
-  const baselineSpouseAge = profile.spouseDesiredRetirementAge || 65;
+  const baselineUserAge = (
+    variables?.retirementAge ??
+    profile?.optimizationVariables?.retirementAge ??
+    profile.desiredRetirementAge ?? 65
+  );
+  const baselineSpouseAge = (
+    variables?.spouseRetirementAge ??
+    profile?.optimizationVariables?.spouseRetirementAge ??
+    profile.spouseDesiredRetirementAge ?? 65
+  );
   const earliestBaselineAge = Math.min(baselineUserAge, baselineSpouseAge);
   const optimizedUserAge = variables?.socialSecurityAge || optimizationData?.combined.optimalUserAge;
   const optimizedSpouseAge = variables?.spouseSocialSecurityAge || optimizationData?.combined.optimalSpouseAge;

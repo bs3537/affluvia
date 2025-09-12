@@ -56,7 +56,6 @@ import { useMonteCarloWorker } from '@/hooks/useMonteCarloWorker';
 import { buildMonteCarloParams, calculateAge } from '@/lib/montecarlo-params';
 import { calculateAIME, calculatePrimaryInsuranceAmount, calculateBenefitAtAge } from '@/utils/socialSecurityOptimizer';
 import { RetirementMonteCarloWidget } from '@/components/retirement-monte-carlo-widget';
-import { SocialSecurityOptimizer } from '@/components/retirement/SocialSecurityOptimizer';
 import { StressTestContent } from '@/components/retirement/stress-test-content';
 import SocialSecurityAnalysis from '@/components/retirement/SocialSecurityAnalysis';
 import { RetirementInsights } from '@/components/retirement/retirement-insights';
@@ -1317,6 +1316,7 @@ function RetirementPlanningInner() {
   const [isLocked, setIsLocked] = useState<boolean>(false);
   const [isLocking, setIsLocking] = useState<boolean>(false);
   const [lockingTime, setLockingTime] = useState<number>(0);
+  const [isSaved, setIsSaved] = useState<boolean>(false);
   const { toast } = useToast();
   const { retirementScore, lastFetchTime } = useRetirementScore();
   
@@ -1403,6 +1403,11 @@ function RetirementPlanningInner() {
       }
     }
   };
+
+  // Reset the saved indicator when variables change
+  useEffect(() => {
+    setIsSaved(false);
+  }, [variables]);
 
 
   // Fetch profile data on mount
@@ -2190,6 +2195,7 @@ function RetirementPlanningInner() {
     try {
       setIsLocking(true);
       setLockingTime(0);
+      const startTs = Date.now();
       const t = setInterval(() => setLockingTime((s) => s + 1), 1000);
 
       // Persist lock state and variables
@@ -2219,108 +2225,20 @@ function RetirementPlanningInner() {
             optimizedAt: nowIso,
             optimizedScore: optimizedScore || null,
             optimizedRetirementSuccessProbability: optimizedScore?.probabilityOfSuccess ?? null
+          },
+          // Persist UI preference: collapse optimization strategy guide on save
+          retirementPlanningUIPreferences: {
+            optimizationGuideCollapsed: true
           }
         })
       });
-
-      // Ensure baseline bands are available (generate if needed)
-      let baselineBands: any | null = null;
-      try {
-        const baselineRes = await fetch('/api/retirement-bands', { credentials: 'include' });
-        if (baselineRes.ok) {
-          const saved = await baselineRes.json();
-          if (!saved.needsCalculation) baselineBands = saved;
-        }
-      } catch {}
-      if (!baselineBands) {
-        const genRes = await fetch('/api/calculate-retirement-bands', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ skipCache: true })
-        });
-        if (genRes.ok) baselineBands = await genRes.json();
-      }
-
-      // Generate optimized bands using same Piscina worker pool as optimization
-      const optRes = await fetch('/api/calculate-retirement-bands-optimization', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validatedVariables)
-      });
-      if (!optRes.ok) {
-        try {
-          const err = await optRes.json();
-          throw new Error(err?.error || 'Failed to calculate optimized projections');
-        } catch (e: any) {
-          throw new Error(e?.message || 'Failed to calculate optimized projections');
-        }
-      }
-      const optimizedBands = await optRes.json();
-
-      // Save optimized bands snapshot to profile (cache)
-      try {
-        await fetch('/api/financial-profile', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ optimizationVariables: { optimizedRetirementBands: optimizedBands } })
-        });
-      } catch {}
-
-      // Compute impact-on-portfolio-balance data and cache it
-      try {
-        if (baselineBands && optimizedBands) {
-          const baselineAges = baselineBands.ages || [];
-          const optimizedAges = optimizedBands.ages || [];
-          const baselineMedian = baselineBands.percentiles?.p50 || [];
-          const optimizedMedian = optimizedBands.percentiles?.p50 || [];
-          const minLen = Math.min(baselineAges.length, optimizedAges.length, baselineMedian.length, optimizedMedian.length);
-          const projectionData = [] as Array<{ age: number; baseline: number; optimized: number; difference: number }>;
-          for (let i = 0; i < minLen; i++) {
-            const age = baselineAges[i] || optimizedAges[i];
-            const b = Math.round(baselineMedian[i] || 0);
-            const o = Math.round(optimizedMedian[i] || 0);
-            projectionData.push({ age, baseline: b, optimized: o, difference: o - b });
-          }
-          const last = projectionData[projectionData.length - 1];
-          const comparison = last ? {
-            finalBaseline: last.baseline,
-            finalOptimized: last.optimized,
-            finalDifference: last.difference,
-            percentageImprovement: last.baseline > 0 ? Math.round(((last.optimized - last.baseline) / last.baseline) * 100) : 0
-          } : null;
-
-          if (projectionData.length > 0) {
-            await fetch('/api/retirement/impact-on-portfolio-balance-cache', {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ projectionData, comparison })
-            });
-          }
-        }
-      } catch (e) {
-        console.warn('Failed to cache impact-on-portfolio-balance data', e);
-      }
-
-      // Refresh profile and broadcast update so widgets render instantly
-      try {
-        const profileResponse = await fetch('/api/financial-profile');
-        if (profileResponse.ok) {
-          const updatedProfile = await profileResponse.json();
-          setProfile(updatedProfile);
-        }
-      } catch {}
-      window.dispatchEvent(new CustomEvent('retirementOptimizationUpdated', {
-        detail: { optimizedAt: nowIso, variables: validatedVariables }
-      }));
-
+      // Update local UI: collapse strategy guide now
+      setShowSuggestions(false);
       setIsLocked(true);
+      setIsSaved(true);
       toast({
-        title: '🔒 Locked & Generated',
-        description: 'Optimized projections and impact analysis are ready.',
+        title: 'Saved',
+        description: 'Optimization variables and score saved.',
       });
 
       clearInterval(t);
@@ -2455,35 +2373,35 @@ function RetirementPlanningInner() {
           <TabsList className="bg-gray-900/60 border border-gray-800/80 rounded-xl p-4 grid grid-cols-8 w-full gap-6 shadow-inner backdrop-blur-sm">
             <TabsTrigger 
               value="optimize-score" 
-              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
+              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:text-white data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
             >
               <Calculator className="w-5 h-5 mr-2" />
               Optimization
             </TabsTrigger>
             <TabsTrigger 
               value="portfolio-projections" 
-              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
+              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:text-white data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
             >
               <BarChart3 className="w-5 h-5 mr-2" />
               Portfolio projections
             </TabsTrigger>
             <TabsTrigger 
               value="portfolio-impact" 
-              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
+              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:text-white data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
             >
               <TrendingUp className="w-5 h-5 mr-2" />
               Portfolio impact
             </TabsTrigger>
             <TabsTrigger 
               value="stress-tests" 
-              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
+              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:text-white data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
             >
               <Shield className="w-5 h-5 mr-2" />
               Stress Tests
             </TabsTrigger>
             <TabsTrigger 
               value="mc-withdrawals" 
-              className={`h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4 ${!hasOptimizedOnce ? 'opacity-60' : ''}`}
+              className={`h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:text-white data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4 ${!hasOptimizedOnce ? 'opacity-60' : ''}`}
             >
               <BarChart3 className="w-5 h-5 mr-2" />
               Income
@@ -2491,21 +2409,21 @@ function RetirementPlanningInner() {
             </TabsTrigger>
             <TabsTrigger 
               value="cash-flow" 
-              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
+              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:text-white data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
             >
               <DollarSign className="w-5 h-5 mr-2" />
               Cash Flow
             </TabsTrigger>
             <TabsTrigger 
               value="social-security" 
-              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
+              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:text-white data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
             >
               <Users className="w-5 h-5 mr-2" />
               Social Security
             </TabsTrigger>
             <TabsTrigger 
               value="insights" 
-              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
+              className="h-11 w-full justify-center rounded-xl border border-gray-800/70 bg-gray-800/20 hover:bg-gray-800/40 hover:border-gray-700 data-[state=active]:bg-purple-600/90 data-[state=active]:border-purple-500/60 data-[state=active]:text-white data-[state=active]:shadow-md text-white transition-all text-sm font-medium px-4"
             >
               <Sparkles className="w-5 h-5 mr-2" />
               Insights
@@ -2710,8 +2628,7 @@ function RetirementPlanningInner() {
               </AnimatePresence>
             </Card>
 
-            {/* Social Security Optimizer */}
-            <SocialSecurityOptimizer profile={profile} />
+            {/* Social Security Optimizer removed per new design; placeholder reserved for future component */}
 
             {/* Optimization Variables Form */}
             <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700 overflow-hidden">
@@ -3619,12 +3536,12 @@ function RetirementPlanningInner() {
                     {isLocking ? (
                       <>
                         <Lock className="w-4 h-4 mr-2" />
-                        Locking & Generating... {lockingTime}s
+                        Saving... {lockingTime}s
                       </>
                     ) : (
                       <>
                         <Lock className="w-4 h-4 mr-2" />
-                        Save Only
+                        {isSaved ? 'Saved' : 'Save'}
                       </>
                     )}
                   </Button>
@@ -3651,15 +3568,15 @@ function RetirementPlanningInner() {
 
             {/* Moved "Portfolio projections" and "Portfolio impact" to their own tabs */}
 
-            {/* Navigation to Stress Tests */}
+            {/* Navigation to Optimized Plan: Portfolio Projections */}
             <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">
               <CardContent className="p-6">
                 <Button
-                  onClick={() => setActiveTab('stress-tests')}
+                  onClick={() => setActiveTab('portfolio-projections')}
                   className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
                   size="lg"
                 >
-                  Continue to Stress Tests
+                  Continue to Optimized Plan: Retirement Portfolio Projections
                   <ArrowRight className="w-5 h-5" />
                 </Button>
               </CardContent>

@@ -130,15 +130,26 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
     const scenarios: ClaimingScenario[] = [];
     const { ageAnalysis, combined } = optimizationData;
     
-    // Get retirement ages from profile for baseline strategy
-    const baselineUserRetirementAge = profile.desiredRetirementAge || 65;
-    const baselineSpouseRetirementAge = profile.spouseDesiredRetirementAge || 65;
+    // Determine marital status
+    const isMarried = profile.maritalStatus === 'married' || profile.maritalStatus === 'partnered';
+    
+    // Get baseline retirement ages for comparison from optimized plan first (Optimization tab),
+    // then fall back to saved optimizationVariables, then intake form values
+    const baselineUserRetirementAge = (
+      variables?.retirementAge ??
+      profile?.optimizationVariables?.retirementAge ??
+      profile.desiredRetirementAge ?? 65
+    );
+    const baselineSpouseRetirementAge = isMarried ? (
+      variables?.spouseRetirementAge ??
+      profile?.optimizationVariables?.spouseRetirementAge ??
+      profile.spouseDesiredRetirementAge ?? 65
+    ) : baselineUserRetirementAge;
     
     // Get optimized retirement ages from variables (if available)
     const optimizedUserRetirementAge = variables?.retirementAge;
     const optimizedSpouseRetirementAge = variables?.spouseRetirementAge;
     const earliestRetirementAge = Math.min(baselineUserRetirementAge, baselineSpouseRetirementAge);
-    const isMarried = profile.maritalStatus === 'married' || profile.maritalStatus === 'partnered';
 
     // Helper function to find scenario by age
     const findScenario = (targetUserAge: number, targetSpouseAge?: number) => {
@@ -221,21 +232,22 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
     // 4. Optimal Age - Removed from optimized plan tab
     // (The Optimal Age bar is not shown in the optimized plan tab)
 
-    // 5. Age 70 (Max claiming) - only if different from optimal
-    const shouldShowAge70 = combined.optimalUserAge !== 70 || 
-      (isMarried && combined.optimalSpouseAge !== 70);
-    
-    if (shouldShowAge70) {
+    // 5. Age 70 (Max claiming) — always include (important reference)
+    {
       const age70Scenario = findScenario(70, isMarried ? 70 : undefined);
       if (age70Scenario) {
-        scenarios.push({
-          label: 'Maximum Age (70)',
-          age: '70',
-          cumulative: age70Scenario.combinedCumulative || age70Scenario.userCumulative,
-          monthly: age70Scenario.combinedMonthly || age70Scenario.userMonthly,
-          description: 'Maximum delayed credits',
-          color: '#8B5CF6', // purple
-        });
+        // Avoid duplicate if a bar with same label already exists
+        const exists = scenarios.some(s => s.label === 'Maximum Age (70)');
+        if (!exists) {
+          scenarios.push({
+            label: 'Maximum Age (70)',
+            age: isMarried ? '70/70' : '70',
+            cumulative: age70Scenario.combinedCumulative || age70Scenario.userCumulative,
+            monthly: age70Scenario.combinedMonthly || age70Scenario.userMonthly,
+            description: 'Maximum delayed credits',
+            color: '#8B5CF6', // purple
+          });
+        }
       }
     }
 
