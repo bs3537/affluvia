@@ -7,16 +7,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Info, TrendingDown, TrendingUp, AlertTriangle, Download } from 'lucide-react';
 import { exportAccountBalances } from '@/utils/excel-export';
 import {
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
   ResponsiveContainer,
-  ComposedChart,
-  Area,
-  ReferenceLine,
   BarChart,
   Bar
 } from 'recharts';
@@ -127,17 +123,7 @@ export function MonteCarloWithdrawalVisualization({
     }));
   }, [safeData]);
 
-  const confidenceBandsData = useMemo(() => {
-    return safeData.slice(0, 30).map(year => ({
-      year: year.year,
-      age: year.age,
-      p10: Math.round(year.portfolioBalance.p10),
-      p25: Math.round(year.portfolioBalance.p25),
-      p50: Math.round(year.portfolioBalance.p50),
-      p75: Math.round(year.portfolioBalance.p75),
-      p90: Math.round(year.portfolioBalance.p90)
-    }));
-  }, [safeData]);
+  // Portfolio confidence bands chart removed for this tab to avoid duplication
 
   // useEffect must also be before any returns
   useEffect(() => {
@@ -233,129 +219,7 @@ export function MonteCarloWithdrawalVisualization({
         </Card>
       </div>
 
-      {/* Portfolio Confidence Bands - Monte Carlo Enhancement */}
-      <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">
-        <CardHeader>
-          <CardTitle className="text-white">Portfolio Balance Projections (Monte Carlo)</CardTitle>
-          <p className="text-sm text-gray-400">Shows confidence intervals from 1,000+ market scenarios</p>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={400}>
-            <ComposedChart data={confidenceBandsData}>
-              <defs>
-                <linearGradient id="colorBand90" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#22c55e" stopOpacity={0.2}/>
-                  <stop offset="95%" stopColor="#22c55e" stopOpacity={0.05}/>
-                </linearGradient>
-                <linearGradient id="colorBand75" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.1}/>
-                </linearGradient>
-                <linearGradient id="colorBand25" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3}/>
-                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.1}/>
-                </linearGradient>
-                <linearGradient id="colorBand10" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
-                  <stop offset="95%" stopColor="#ef4444" stopOpacity={0.05}/>
-                </linearGradient>
-              </defs>
-              
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis 
-                dataKey="age"
-                stroke="#9CA3AF"
-                label={{ value: 'Age', position: 'insideBottomRight', offset: -10, fill: '#9CA3AF' }}
-              />
-              <YAxis 
-                stroke="#9CA3AF"
-                tickFormatter={(value) => `$${(value / 1000000).toFixed(1)}M`}
-                label={{ value: 'Portfolio Balance', angle: -90, position: 'insideLeft', fill: '#9CA3AF' }}
-              />
-              <Tooltip 
-                contentStyle={{
-                  backgroundColor: '#1F2937',
-                  border: '1px solid #374151',
-                  borderRadius: '8px',
-                  color: '#ffffff'
-                }}
-                labelStyle={{ color: '#ffffff' }}
-                itemStyle={{ color: '#ffffff' }}
-                formatter={(value: any, name: string) => [
-                  formatCurrency(value),
-                  name
-                ]}
-                labelFormatter={(label) => `Age ${label}`}
-              />
-              
-              {/* Confidence bands - layered from widest to narrowest */}
-              <Area
-                type="monotone"
-                dataKey="p90"
-                stroke="none"
-                fill="url(#colorBand90)"
-                name="90th Percentile"
-              />
-              <Area
-                type="monotone"
-                dataKey="p75"
-                stroke="none"
-                fill="url(#colorBand75)"
-                name="75th Percentile"
-              />
-              <Area
-                type="monotone"
-                dataKey="p25"
-                stroke="none"
-                fill="url(#colorBand25)"
-                name="25th Percentile"
-              />
-              <Area
-                type="monotone"
-                dataKey="p10"
-                stroke="none"
-                fill="url(#colorBand10)"
-                name="10th Percentile"
-              />
-              
-              {/* Median line */}
-              <Line
-                type="monotone"
-                dataKey="p50"
-                stroke="#3b82f6"
-                strokeWidth={3}
-                dot={false}
-                name="Median (50th)"
-              />
-              
-              {/* Reference lines */}
-              {retirementYear && (
-                <ReferenceLine 
-                  x={safeData.find(d => d.year === retirementYear)?.age || 65} 
-                  stroke="#B040FF" 
-                  strokeDasharray="5 5" 
-                  label={{ value: 'Retirement', position: 'top', fill: '#B040FF' }}
-                />
-              )}
-            </ComposedChart>
-          </ResponsiveContainer>
-
-          <div className="flex flex-wrap gap-4 text-sm mt-4">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-              <span className="text-gray-300">Median (50th percentile)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-green-500 opacity-50 rounded-full"></div>
-              <span className="text-gray-400">90th percentile (best case)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-red-500 opacity-50 rounded-full"></div>
-              <span className="text-gray-400">10th percentile (worst case)</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Portfolio Balance Projections chart intentionally removed from this tab */}
 
       {/* Income Sources Chart - Exact match to deterministic tab */}
       <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">

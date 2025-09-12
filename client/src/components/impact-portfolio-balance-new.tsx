@@ -93,6 +93,8 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
   const [baselineData, setBaselineData] = useState<BandsResponse | null>(null);
   const [optimizedData, setOptimizedData] = useState<BandsResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStart, setLoadingStart] = useState<number | null>(null);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [needsCalculation, setNeedsCalculation] = useState(true);
   const [savedProjectionData, setSavedProjectionData] = useState<ProjectionData[] | null>(null);
@@ -191,6 +193,7 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
     // No need to check isLocked anymore - just use variables if available
 
     setLoading(true);
+    setLoadingStart(Date.now());
     setError(null);
     
     try {
@@ -211,7 +214,7 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ skipCache: true })
+                body: JSON.stringify({ skipCache: false })
               });
               
               if (generateResp.ok) {
@@ -236,7 +239,7 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
                     method: 'POST',
                     credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ skipCache: true })
+                    body: JSON.stringify({ skipCache: false })
                   });
                   
                   if (generateResp.ok) {
@@ -254,7 +257,7 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
                   method: 'POST',
                   credentials: 'include',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ skipCache: true })
+                  body: JSON.stringify({ skipCache: false })
                 });
                 
                 if (generateResp.ok) {
@@ -270,7 +273,7 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ skipCache: true })
+                body: JSON.stringify({ skipCache: false })
               });
               
               if (generateResp.ok) {
@@ -311,6 +314,8 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
       setError(e.message || 'Failed to generate optimized projections');
     } finally {
       setLoading(false);
+      setLoadingStart(null);
+      setLoadingSeconds(0);
     }
   };
 
@@ -369,13 +374,14 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
     setNeedsCalculation(true);
 
     setLoading(true);
+    setLoadingStart(Date.now());
     setError(null);
     try {
       const baselineResponse = await fetch('/api/calculate-retirement-bands', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skipCache: true })
+        body: JSON.stringify({ skipCache: false })
       });
       if (!baselineResponse.ok) {
         if (baselineResponse.status === 401) throw new Error('Not signed in. Please log in to refresh projections.');
@@ -389,8 +395,23 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
       setError(e.message || 'Failed to refresh projections');
     } finally {
       setLoading(false);
+      setLoadingStart(null);
+      setLoadingSeconds(0);
     }
   };
+
+  // Loading timer
+  React.useEffect(() => {
+    let t: any;
+    if (loading && loadingStart) {
+      t = setInterval(() => {
+        setLoadingSeconds(Math.max(0, Math.round((Date.now() - loadingStart) / 1000)));
+      }, 1000);
+    }
+    return () => {
+      if (t) clearInterval(t);
+    };
+  }, [loading, loadingStart]);
 
   const { projectionData, comparison } = useMemo(() => {
     // Use saved data if available (from database persistence)
@@ -617,16 +638,7 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
               Compare median projections (50th percentile) using retirement bands algorithm
             </p>
           </div>
-          <Button
-            onClick={handleRefresh}
-            disabled={loading}
-            size="sm"
-            variant="outline"
-            className="bg-gray-800 border-gray-700 hover:bg-gray-700 text-white"
-            title="Recalculate impact"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
+          {/* Removed header refresh to avoid duplicate with LastCalculated */}
         </div>
       </CardHeader>
       <div className="px-6 -mt-2">
@@ -637,6 +649,11 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
         />
       </div>
       <CardContent className="space-y-6">
+        {loading && (
+          <div className="text-center text-sm text-gray-300">
+            Calculating portfolio impact analysis... {loadingSeconds}s
+          </div>
+        )}
         {/* Chart */}
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">

@@ -413,7 +413,7 @@ export const StressTestContent: React.FC<StressTestContentProps> = ({
         </Button>
         <Button
           onClick={() => setActiveTab("mc-withdrawals")}
-          className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
+          className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white"
         >
           Next: Income
           <ChevronRight className="w-4 h-4 ml-2" />

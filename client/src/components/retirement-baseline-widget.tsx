@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { AlertTriangle, Info, Shield } from 'lucide-react';
 import { Gauge } from './ui/gauge';
@@ -24,6 +24,8 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const controllerRef = useRef<AbortController | null>(null);
   const { data: snapshot } = useDashboardSnapshot();
 
   // Hydrate from snapshot instantly if available
@@ -35,9 +37,11 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
         const probability = typeof snap.probability === 'number' ? snap.probability : Math.round((snap.probabilityDecimal || 0) * 100);
         setMonteCarloResult({ probabilityOfSuccess: probability, medianEndingBalance: snap.medianEndingBalance || 0, message: snap.message });
         setHasLoaded(true);
+        if (controllerRef.current) controllerRef.current.abort();
+        if (isLoading) setIsLoading(false);
       }
     } catch {}
-  }, [snapshot, hasLoaded]);
+  }, [snapshot, hasLoaded, isLoading]);
 
   // Load baseline retirement success probability using same algorithm as dashboard
   const loadBaselineScore = async () => {
@@ -46,9 +50,12 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
     setIsLoading(true);
     setError(null);
     
+    const controller = new AbortController();
+    controllerRef.current = controller;
+
     try {
       // Check saved data only (no heavy auto-calc here)
-      const savedResponse = await fetch('/api/retirement-score', { credentials: 'include' });
+      const savedResponse = await fetch('/api/retirement-score', { credentials: 'include', signal: controller.signal });
 
       if (savedResponse.ok) {
         const savedData = await savedResponse.json();
@@ -74,7 +81,8 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
       }
 
       throw new Error(`API error: ${savedResponse.status}`);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.name === 'AbortError') return;
       console.error('Error loading baseline retirement score:', error);
       setError(`Failed to load baseline retirement score: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
@@ -82,10 +90,22 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
     }
   };
 
-  // Load on component mount
+  // Trigger fetch only if snapshot didn't hydrate us
   useEffect(() => {
-    loadBaselineScore();
-  }, []);
+    if (!hasLoaded && !isLoading) {
+      loadBaselineScore();
+    }
+  }, [snapshot, hasLoaded]);
+
+  // Seconds timer while loading
+  useEffect(() => {
+    let timer: NodeJS.Timeout | undefined;
+    if (isLoading) {
+      setLoadingSeconds(0);
+      timer = setInterval(() => setLoadingSeconds((s) => s + 1), 1000);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [isLoading]);
 
   // Clamp probability values to ensure they stay within 0-100 range
   const clampProbability = (probability: number | undefined): number => {
@@ -175,6 +195,7 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-400"></div>
             <p className="text-gray-400 mt-2 text-sm">Loading baseline score...</p>
             <p className="text-gray-500 mt-1 text-xs">Using saved dashboard result</p>
+            <p className="text-gray-500 mt-1 text-xs">{loadingSeconds > 0 && `${loadingSeconds}s`}</p>
           </div>
         ) : monteCarloResult ? (
           monteCarloResult.requiresIntakeForm ? (

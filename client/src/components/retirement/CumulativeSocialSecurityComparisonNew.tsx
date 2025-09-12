@@ -19,18 +19,31 @@ interface CumulativeData {
 export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Props) {
   const [cumulativeData, setCumulativeData] = useState<CumulativeData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStart, setLoadingStart] = useState<number | null>(null);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [optimizationData, setOptimizationData] = useState<any>(null);
   const [breakevenAge, setBreakevenAge] = useState<number | null>(null);
 
   useEffect(() => {
-    if (profile) {
-      fetchOptimizationAndCalculateComparison();
+    if (!profile) return;
+    // Try cached optimization result from profile for fast paint
+    const cached = profile?.optimizationVariables?.socialSecurityOptimization?.result;
+    if (cached) {
+      setOptimizationData(cached);
+      const comparison = calculateCumulativeComparison(cached, profile, variables);
+      setCumulativeData(comparison);
+      const breakeven = findBreakevenAge(comparison);
+      setBreakevenAge(breakeven);
+      setIsLoading(false);
+      return;
     }
+    fetchOptimizationAndCalculateComparison();
   }, [profile, variables]);
 
   const fetchOptimizationAndCalculateComparison = async () => {
     setIsLoading(true);
+    setLoadingStart(Date.now());
     try {
       // Fetch optimization data to get optimal ages
       const response = await fetch('/api/calculate-cumulative-ss-optimization', {
@@ -57,8 +70,19 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
       console.error('Error calculating comparison:', error);
     } finally {
       setIsLoading(false);
+      setLoadingStart(null);
+      setLoadingSeconds(0);
     }
   };
+
+  // Loading timer ticker
+  useEffect(() => {
+    if (!loadingStart) return;
+    const t = setInterval(() => {
+      setLoadingSeconds(Math.max(0, Math.round((Date.now() - loadingStart) / 1000)));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [loadingStart]);
 
   const calculateCumulativeComparison = (optData: any, profile: any, variables: any): CumulativeData[] => {
     const data: CumulativeData[] = [];
@@ -184,7 +208,7 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
               Baseline Strategy: {formatCurrency(data.baselineStrategy)}
             </p>
             <p className="text-emerald-400">
-              Optimized Strategy: {formatCurrency(data.optimizedStrategy)}
+              Max Lifetime SS Income: {formatCurrency(data.optimizedStrategy)}
             </p>
             {data.difference !== 0 && (
               <p className={`font-medium pt-1 border-t border-gray-700 ${data.difference > 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -203,7 +227,7 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
       <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">
         <CardContent className="p-6 text-center">
           <AlertCircle className="w-6 h-6 mx-auto text-amber-400" />
-          <p className="text-gray-400 mt-2">Loading cumulative benefit comparison...</p>
+          <p className="text-gray-400 mt-2">Loading comparison... {loadingSeconds}s</p>
         </CardContent>
       </Card>
     );
@@ -268,8 +292,8 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
               {isCollapsed 
                 ? `Optimized strategy provides +${formatCurrency(finalDifference)} (+${percentageGain.toFixed(1)}%) lifetime benefit`
                 : baselineUserAge !== baselineSpouseAge && profile.maritalStatus === 'married'
-                  ? `Comparing total benefits: Baseline strategy (Ages ${baselineUserAge}/${baselineSpouseAge}) vs. Optimized strategy (Ages ${optimizedUserAge}/${optimizedSpouseAge})`
-                  : `Comparing total benefits: Baseline strategy (Age ${earliestBaselineAge}) vs. Optimized strategy (Age ${optimizedUserAge})`
+                  ? `Comparing total benefits: Baseline strategy (Ages ${baselineUserAge}/${baselineSpouseAge}) vs. Max Lifetime SS Income (Ages ${optimizedUserAge}/${optimizedSpouseAge})`
+                  : `Comparing total benefits: Baseline strategy (Age ${earliestBaselineAge}) vs. Max Lifetime SS Income (Age ${optimizedUserAge})`
               }
             </p>
           </div>
@@ -334,7 +358,7 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
                       iconType="line"
                       formatter={(value) => {
                         if (value === 'baselineStrategy') return `Baseline Strategy (Age ${earliestBaselineAge})`;
-                        if (value === 'optimizedStrategy') return `Optimized Strategy (Age ${optimizedUserAge})`;
+                        if (value === 'optimizedStrategy') return `Max Lifetime SS Income (Age ${optimizedUserAge})`;
                         return value;
                       }}
                     />
@@ -350,7 +374,7 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
                       x={optimizedUserAge} 
                       stroke="#10B981" 
                       strokeDasharray="5 5"
-                      label={{ value: `Optimized Age ${optimizedUserAge}`, position: 'top', fill: '#10B981', fontSize: 11 }}
+                      label={{ value: `Max-Income Age ${optimizedUserAge}`, position: 'top', fill: '#10B981', fontSize: 11 }}
                     />
                     {breakevenAge && (
                       <ReferenceLine 
@@ -387,8 +411,8 @@ export function CumulativeSocialSecurityComparisonNew({ profile, variables }: Pr
                 <div className="text-xs text-blue-300">
                   <p>
                     This chart compares cumulative (non-discounted) Social Security benefits through age 93. 
-                    The baseline strategy uses your planned retirement ages from the intake form{profile.maritalStatus === 'married' && baselineUserAge !== baselineSpouseAge ? ' (each spouse claims at their individual retirement age)' : ''}, 
-                    while the optimized strategy uses claiming ages from your optimization settings.
+                    The baseline strategy uses your planned retirement ages from the optimization form{profile.maritalStatus === 'married' && baselineUserAge !== baselineSpouseAge ? ' (each spouse claims at their individual retirement age)' : ''}, 
+                    while the Max Lifetime SS Income strategy uses the claiming ages that maximize total Social Security income.
                   </p>
                 </div>
               </div>

@@ -78,6 +78,7 @@ export function RetirementConfidenceEnhancedBands() {
   const [needsCalculation, setNeedsCalculation] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { data: snapshot } = useDashboardSnapshot();
+  const [autoTriggered, setAutoTriggered] = useState(false);
   
   // First try snapshot/DB saved bands for instant paint; allow regenerate via button
   useEffect(() => {
@@ -100,10 +101,19 @@ export function RetirementConfidenceEnhancedBands() {
             setNeedsCalculation(false);
             return;
           }
+        } else if (res.status === 404 && !autoTriggered) {
+          // Try to parse response for needsCalculation hint
+          let info: any = {};
+          try { info = await res.json(); } catch {}
+          if (info?.needsCalculation) {
+            setAutoTriggered(true);
+            await generateBands();
+            return;
+          }
         }
       } catch {}
     })();
-  }, [snapshot]);
+  }, [snapshot, autoTriggered]);
 
   // Listen for profile updates or dashboard refresh to regenerate bands
   useEffect(() => {

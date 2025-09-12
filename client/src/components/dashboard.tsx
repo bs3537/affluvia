@@ -452,6 +452,7 @@ export function Dashboard() {
       window.dispatchEvent(new CustomEvent('refreshDashboard'));
       await queryClient.invalidateQueries({ queryKey: ['financial-profile'] });
       await queryClient.invalidateQueries({ queryKey: ['asset-projections'] });
+      await queryClient.invalidateQueries({ queryKey: ['api/dashboard-snapshot'] });
       toast({ title: 'Data refreshed', description: 'Dashboard metrics recalculated.' });
     } catch (e) {
       console.error('Refresh error:', e);
@@ -460,6 +461,16 @@ export function Dashboard() {
       setIsRefreshing(false);
     }
   };
+
+  useEffect(() => {
+    const onOptimizationUpdated = () => {
+      // Invalidate snapshot and refresh profile when returning from optimization
+      queryClient.invalidateQueries({ queryKey: ['api/dashboard-snapshot'] });
+      fetchProfile();
+    };
+    window.addEventListener('retirementOptimizationUpdated', onOptimizationUpdated as any);
+    return () => window.removeEventListener('retirementOptimizationUpdated', onOptimizationUpdated as any);
+  }, []);
 
   // Single source of truth for insurance score - prefer snapshot, then computed
   const insuranceScore = (typeof snapInsurance?.score === 'number')

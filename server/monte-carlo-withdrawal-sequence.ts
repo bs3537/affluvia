@@ -1,6 +1,6 @@
-import { runRightCapitalStyleMonteCarloSimulation } from './monte-carlo-enhanced';
 import { profileToRetirementParams } from './monte-carlo-base';
 import { aggregateAssetsByType } from './retirement-withdrawal';
+import { runMcBands, runMcScore } from './services/mc-runner';
 
 export interface MonteCarloWithdrawalData {
   year: number;
@@ -135,14 +135,32 @@ export async function calculateMonteCarloWithdrawalSequence(
   console.log('Tax rate:', monteCarloParams.taxRate);
   console.log('Has LTC insurance:', monteCarloParams.hasLongTermCareInsurance);
   
-  // FIXED: Use same Monte Carlo engine as dashboard retirement confidence score
-  console.log('\n=== RUNNING MONTE CARLO SIMULATION ===');
-  console.log('Engine: runRightCapitalStyleMonteCarloSimulation (same as dashboard)');
-  console.log('Iterations: 1000');
-  
-  const monteCarloResult = await runRightCapitalStyleMonteCarloSimulation(monteCarloParams, 1000);
-  
-  console.log('\n=== MONTE CARLO RESULT ===');
+  // Use the enhanced Monte Carlo engine via worker pool for parity with dashboard widgets
+  console.log('\n=== RUNNING MONTE CARLO SIMULATION (ENHANCED) ===');
+  const runs = 1000;
+
+  // Compute per-year portfolio bands and overall score in parallel
+  const [bands, score] = await Promise.all([
+    runMcBands(monteCarloParams, runs, 93),
+    runMcScore(monteCarloParams, runs)
+  ]);
+
+  // Convert band arrays to the yearlyPercentileData shape expected downstream
+  const yearlyPercentileData = buildYearlyPercentilesFromBands(bands);
+
+  // Synthesize result object compatible with summary extraction
+  const monteCarloResult = {
+    successProbability: (score.total ? score.successes / score.total : 0),
+    summary: {
+      successfulRuns: score.successes,
+      totalRuns: score.total,
+      medianFinalValue: score.medianEndingBalance,
+      percentile10: score.percentile10,
+      percentile90: score.percentile90
+    }
+  } as any;
+
+  console.log('\n=== MONTE CARLO RESULT (ENHANCED) ===');
   console.log('Success Probability:', (monteCarloResult.successProbability * 100).toFixed(1) + '%');
   console.log('Successful Runs:', monteCarloResult.summary?.successfulRuns);
   console.log('Total Runs:', monteCarloResult.summary?.totalRuns);
@@ -150,12 +168,13 @@ export async function calculateMonteCarloWithdrawalSequence(
   console.log('10th Percentile:', monteCarloResult.summary?.percentile10);
   console.log('90th Percentile:', monteCarloResult.summary?.percentile90);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  
+
   // Transform Monte Carlo results to withdrawal sequence format
   const withdrawalSequence = await transformMonteCarloResults(
     monteCarloResult,
     profileToUse,
-    monteCarloParams
+    monteCarloParams,
+    yearlyPercentileData
   );
   
   return withdrawalSequence;
@@ -164,11 +183,9 @@ export async function calculateMonteCarloWithdrawalSequence(
 async function transformMonteCarloResults(
   monteCarloResult: any,
   profile: any,
-  params: any
+  params: any,
+  yearlyPercentileData: any[]
 ): Promise<MonteCarloWithdrawalResult> {
-  
-  // Extract yearly percentiles from all simulation iterations
-  const yearlyPercentileData = calculateYearlyPercentilesFromRightCapitalResults(monteCarloResult);
   
   // Get current year and ages
   const currentYear = new Date().getFullYear();
@@ -501,6 +518,46 @@ function calculateSummaryStatistics(monteCarloResult: any, projections: MonteCar
     taxDeferredDepletionYear,
     totalLifetimeTax
   };
+}
+
+// Build per-year percentiles array from enhanced bands output
+function buildYearlyPercentilesFromBands(bands: any): any[] {
+  const ages: number[] = bands?.ages || [];
+  const p05: number[] = bands?.percentiles?.p05 || [];
+  const p25: number[] = bands?.percentiles?.p25 || [];
+  const p50: number[] = bands?.percentiles?.p50 || [];
+  const p75: number[] = bands?.percentiles?.p75 || [];
+  const p95: number[] = bands?.percentiles?.p95 || [];
+
+  const n = Math.min(ages.length, p05.length, p25.length, p50.length, p75.length, p95.length);
+  const out: any[] = [];
+  for (let i = 0; i < n; i++) {
+    const v05 = p05[i] ?? 0;
+    const v25 = p25[i] ?? 0;
+    const v50 = p50[i] ?? 0;
+    const v75 = p75[i] ?? 0;
+    const v95 = p95[i] ?? 0;
+
+    // Approximate per-year success probability from bands for display/failure flags
+    // Thresholds chosen to align with failureYear (< 50%) detection and intuitive ranges
+    let successProbability = 0;
+    if (v05 > 0) successProbability = 95;
+    else if (v25 > 0) successProbability = 75;
+    else if (v50 > 0) successProbability = 60;
+    else if (v75 > 0) successProbability = 35;
+    else if (v95 > 0) successProbability = 10;
+    else successProbability = 0;
+
+    out.push({
+      p5: v05, p25: v25, p50: v50, p75: v75, p95: v95,
+      // Back-compat fields (not used by UI)
+      p10: undefined, p90: undefined,
+      successProbability,
+      marketRegime: undefined,
+      portfolioReturn: undefined
+    });
+  }
+  return out;
 }
 
 function applyOptimizationVariables(profile: any, variables: any): any {

@@ -12,6 +12,8 @@ import { profileToRetirementParams } from '../monte-carlo-base';
 import { ProbabilityUtils } from '../monte-carlo-validation';
 // Widget cache manager for optimized performance
 import { widgetCacheManager } from '../services/widget-cache-manager';
+import { computeScenarioHash } from '../services/dashboard-snapshot';
+import { cacheService } from '../services/cache.service';
 import { withDatabaseRetry } from '../db-utils';
 // Piscina worker pool for parallel Monte Carlo
 import { mcPool } from '../services/mc-pool';
@@ -176,7 +178,8 @@ router.get('/api/retirement-score', async (req, res, next) => {
 router.get('/api/retirement-bands', async (req, res, next) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const userId = req.user!.id;
+    const actingAsClientId = (req.session as any)?.actingAsClientId as number | undefined;
+    const userId = actingAsClientId || req.user!.id;
     
     const profile = await storage.getFinancialProfile(userId);
     if (!profile) {
@@ -241,7 +244,8 @@ router.post('/api/calculate-retirement-score', async (req, res, next) => {
 
     // Check cache first if Redis is enabled (unless skipCache is true)
     if (!skipCache && widgetCacheManager.isEnabled()) {
-      const cached = await widgetCacheManager.getWidget(userId, 'retirement_confidence_score');
+      const scenarioHash = computeScenarioHash(profile);
+      const cached = await widgetCacheManager.getWidget(userId, 'retirement_confidence_score', scenarioHash);
       if (cached && cached.data) {
         console.log('📦 Returning cached retirement score');
         return res.json({
@@ -334,47 +338,8 @@ router.post('/api/calculate-retirement-score', async (req, res, next) => {
       message = 'High risk - urgent action needed.';
     }
     
-    // Save to database
-    await withDatabaseRetry(async () => {
-      await storage.updateFinancialProfile(userId, {
-        retirementReadinessScore: score,
-        monteCarloSimulation: {
-          retirementSimulation: {
-            calculatedAt: new Date().toISOString(),
-            parameters: params,
-            results: {
-              // STANDARDIZED: Store as 0-1 decimal internally
-              successProbability: probabilityDecimal,
-              probabilityOfSuccess: probabilityDecimal,
-              totalScenarios: 1000,
-              successfulScenarios: Math.round(probabilityDecimal * 1000),
-              medianFinalValue: result.medianEndingBalance || 0,
-              percentile10: result.confidenceIntervals?.percentile10 || 0,
-              percentile90: result.confidenceIntervals?.percentile90 || 0
-            }
-          },
-          // STANDARDIZED: Store as 0-1 decimal internally
-          probabilityOfSuccess: probabilityDecimal,
-          medianEndingBalance: result.medianEndingBalance || 0
-        }
-      });
-    });
-    
-    // Cache the result
-    await widgetCacheManager.cacheWidget(
-      userId,
-      'retirement_confidence_score',
-      `${userId}_${Date.now()}`,
-      {
-        score,
-        probability: probabilityPercentage,
-        probabilityDecimal,
-        message,
-        calculatedAt: new Date().toISOString()
-      }
-    );
-    
-    res.json({
+    // Respond first
+    const scorePayload = {
       score,
       // STANDARDIZED: Return percentage for display, but include both formats for compatibility
       probability: probabilityPercentage, // Display format (0-100)
@@ -383,6 +348,68 @@ router.post('/api/calculate-retirement-score', async (req, res, next) => {
       cached: false,
       calculatedAt: new Date().toISOString(),
       calculationTime: duration
+    };
+    console.log(`[SCORE] Responding to client in ${Date.now() - startTime}ms`);
+    res.json(scorePayload);
+
+    // Background persistence (non-blocking)
+    setImmediate(async () => {
+      try {
+        const bgStart = Date.now();
+        await withDatabaseRetry(async () => {
+          await storage.updateFinancialProfile(userId, {
+            retirementReadinessScore: score,
+            monteCarloSimulation: {
+              retirementSimulation: {
+                calculatedAt: new Date().toISOString(),
+                parameters: params,
+                results: {
+                  successProbability: probabilityDecimal,
+                  probabilityOfSuccess: probabilityDecimal,
+                  totalScenarios: 1000,
+                  successfulScenarios: Math.round(probabilityDecimal * 1000),
+                  medianFinalValue: result.medianEndingBalance || 0,
+                  percentile10: result.confidenceIntervals?.percentile10 || 0,
+                  percentile90: result.confidenceIntervals?.percentile90 || 0
+                }
+              },
+              probabilityOfSuccess: probabilityDecimal,
+              medianEndingBalance: result.medianEndingBalance || 0
+            }
+          });
+        }, 1, 500);
+        console.log(`[SCORE][BG] DB persisted in ${Date.now() - bgStart}ms`);
+      } catch (e: any) {
+        console.error('[SCORE][BG] DB persistence failed:', e?.message || e);
+      }
+
+      try {
+        const cacheStart = Date.now();
+        const scenarioHashForScore = computeScenarioHash(profile);
+        await widgetCacheManager.cacheWidget(
+          userId,
+          'retirement_confidence_score',
+          scenarioHashForScore,
+          {
+            score,
+            probability: probabilityPercentage,
+            probabilityDecimal,
+            message,
+            calculatedAt: new Date().toISOString()
+          }
+        );
+        console.log(`[SCORE][BG] Redis cached in ${Date.now() - cacheStart}ms`);
+      } catch (e: any) {
+        console.error('[SCORE][BG] Redis cache failed:', e?.message || e);
+      }
+
+      try {
+        const invStart = Date.now();
+        await cacheService.invalidateUser(userId);
+        console.log(`[SCORE][BG] Snapshot invalidated in ${Date.now() - invStart}ms`);
+      } catch (e: any) {
+        console.error('[SCORE][BG] Snapshot invalidation failed:', e?.message || e);
+      }
     });
     
   } catch (error) {
@@ -415,7 +442,8 @@ router.post('/api/calculate-retirement-bands', async (req, res, next) => {
 
     // Check cache first if Redis is enabled (unless skipCache is true)
     if (!skipCache && widgetCacheManager.isEnabled()) {
-      const cached = await widgetCacheManager.getWidget(userId, 'retirement_confidence_bands');
+      const scenarioHash = computeScenarioHash(profile);
+      const cached = await widgetCacheManager.getWidget(userId, 'retirement_confidence_bands', scenarioHash);
       if (cached && cached.data) {
         console.log('📦 Returning cached retirement bands');
         return res.json({
@@ -540,30 +568,56 @@ router.post('/api/calculate-retirement-bands', async (req, res, next) => {
       meta: bandsAll.meta,
     };
     
-    // Save bands data to database along with Monte Carlo results
-    await withDatabaseRetry(async () => {
-      const currentProfile = await storage.getFinancialProfile(userId);
-      const existingMonteCarlo = currentProfile?.monteCarloSimulation || {};
-      
-      await storage.updateFinancialProfile(userId, {
-        monteCarloSimulation: {
-          ...existingMonteCarlo,
-          // Persist slim data (p25/p50/p75 only) to reduce storage
-          retirementConfidenceBands: bandsData,
-          lastBandsCalculation: new Date().toISOString()
-        }
-      });
-    });
-    
-    // Cache the result
-    await widgetCacheManager.cacheWidget(userId, 'retirement_confidence_bands',
-      `${userId}_${Date.now()}`, bandsData
-    );
-    
-    res.json({
+    // Respond to client immediately with computed data
+    const respondPayload = {
       ...bandsData,
       cached: false,
       calculationTime: duration
+    };
+    console.log(`[BANDS] Responding to client in ${Date.now() - startTime}ms`);
+    res.json(respondPayload);
+
+    // Background persistence (non-blocking)
+    setImmediate(async () => {
+      try {
+        const bgStart = Date.now();
+        await withDatabaseRetry(async () => {
+          const currentProfile = await storage.getFinancialProfile(userId);
+          const existingMonteCarlo = currentProfile?.monteCarloSimulation || {};
+          await storage.updateFinancialProfile(userId, {
+            monteCarloSimulation: {
+              ...existingMonteCarlo,
+              retirementConfidenceBands: bandsData,
+              lastBandsCalculation: new Date().toISOString()
+            }
+          });
+        }, 1, 500);
+        console.log(`[BANDS][BG] DB persisted in ${Date.now() - bgStart}ms`);
+      } catch (e: any) {
+        console.error('[BANDS][BG] DB persistence failed:', e?.message || e);
+      }
+
+      try {
+        const cacheStart = Date.now();
+        const scenarioHashForBands = computeScenarioHash(profile);
+        await widgetCacheManager.cacheWidget(
+          userId,
+          'retirement_confidence_bands',
+          scenarioHashForBands,
+          bandsData
+        );
+        console.log(`[BANDS][BG] Redis cached in ${Date.now() - cacheStart}ms`);
+      } catch (e: any) {
+        console.error('[BANDS][BG] Redis cache failed:', e?.message || e);
+      }
+
+      try {
+        const invStart = Date.now();
+        await cacheService.invalidateUser(userId);
+        console.log(`[BANDS][BG] Snapshot invalidated in ${Date.now() - invStart}ms`);
+      } catch (e: any) {
+        console.error('[BANDS][BG] Snapshot invalidation failed:', e?.message || e);
+      }
     });
     
   } catch (error) {
@@ -829,6 +883,8 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
       ? body.optimizationVariables
       : body;
     const skipCache = Boolean(body?.skipCache);
+    const runsParam = Number(body?.runs);
+    const runs = Number.isFinite(runsParam) && runsParam > 0 ? runsParam : RUNS_DEFAULT;
     
     console.log('🎯 Optimization retirement score calculation requested for user', userId);
     
@@ -870,7 +926,7 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
       assetAllocation: optimizedProfile.expectedRealReturn
     });
     
-    console.log(`🎲 Running optimization Monte Carlo simulation (${RUNS_DEFAULT} scenarios across ${MAX_THREADS} workers)...`);
+    console.log(`🎲 Running optimization Monte Carlo simulation (${runs} scenarios across ${MAX_THREADS} workers)...`);
     const startTime = Date.now();
     
     // Convert optimized profile to Monte Carlo parameters
@@ -891,7 +947,7 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
     });
     
     // Run enhanced Monte Carlo simulation using worker pool splitting
-    const result = await runMcScore(params, RUNS_DEFAULT);
+    const result = await runMcScore(params, runs);
     
     const duration = Date.now() - startTime;
     console.log(`✅ Optimization Monte Carlo completed in ${duration}ms`);
@@ -935,7 +991,7 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
       
       // Keep compatibility fields; detailed yearly flows are not returned by runMcScore
       yearlyCashFlows: [],
-      scenarios: { successful: Math.round(probabilityDecimal * (result.total || RUNS_DEFAULT)), failed: Math.round((1 - probabilityDecimal) * (result.total || RUNS_DEFAULT)), total: result.total || RUNS_DEFAULT },
+      scenarios: { successful: Math.round(probabilityDecimal * (result.total || runs)), failed: Math.round((1 - probabilityDecimal) * (result.total || runs)), total: result.total || runs },
       confidenceIntervals: {
         percentile10: result.percentile10 || 0,
         percentile25: 0,

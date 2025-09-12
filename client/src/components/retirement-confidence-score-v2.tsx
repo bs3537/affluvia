@@ -5,9 +5,7 @@ import { TrendingUp, AlertTriangle, ChevronDown, BarChart3, Zap, Info, Shield, D
 import { Gauge } from './ui/gauge';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { useRetirementScore } from '@/contexts/retirement-score-context';
-import { useMonteCarloWorker } from '@/hooks/useMonteCarloWorker';
-import { seedFromParams } from '@/lib/seed';
-import { buildMonteCarloParams } from '@/lib/montecarlo-params';
+import { useDashboardSnapshot, pickWidget } from '@/hooks/useDashboardSnapshot';
 // Removed MonteCarloVisualization import - visualization moved to Retirement Planning section
 
 interface MonteCarloResult {
@@ -131,44 +129,43 @@ export function RetirementConfidenceScoreV2({
   
   // Debug logging removed for production
   
-  const { runSimulation } = useMonteCarloWorker();
+  const { data: snapshot } = useDashboardSnapshot();
 
-  // Client-first Monte Carlo, fallback to server
-  const calculateMonteCarlo = async () => {
+  // Server-first generation with cache + DB persistence
+  const generateScore = async () => {
     setIsLoading(true);
     setLoadingSeconds(0); // Reset timer
     setError(null); // Clear any previous error
     try {
-      let result: any | null = null;
-      try {
-        // Fetch profile and run in worker
-        const profileRes = await fetch('/api/financial-profile', { credentials: 'include' });
-        if (!profileRes.ok) throw new Error('Failed to fetch profile');
-        const profile = await profileRes.json();
-        const params = buildMonteCarloParams(profile);
-        result = await runSimulation(params, 1000);
-      } catch (clientError) {
-        // Fallback to server
-        const response = await fetch('/api/calculate-retirement-monte-carlo', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ skipCache: false, seed: seedFromParams(undefined, 'confidence-score') })
-        });
-        if (!response.ok) {
-          const errorData = await response.json();
-          if (errorData.requiresStep === 11) {
-            // User needs to complete retirement planning section
-            return {
-              probabilityOfSuccess: 0,
-              message: errorData.message || 'Please complete the retirement planning section in your intake form',
-              requiresIntakeForm: true,
-              missingFields: errorData.missingFields
-            };
-          }
-          throw new Error('Failed to calculate retirement confidence score.');
+      const response = await fetch('/api/calculate-retirement-score', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipCache: false })
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        if (errorData.requiresStep === 11) {
+          setMonteCarloResult({
+            probabilityOfSuccess: 0,
+            message: errorData.message || 'Please complete the retirement planning section in your intake form',
+            requiresIntakeForm: true,
+            scenarios: { successful: 0, failed: 0, total: 0 },
+            confidenceIntervals: { percentile10: 0, percentile25: 0, percentile50: 0, percentile75: 0, percentile90: 0 },
+            medianEndingBalance: 0,
+            percentile10EndingBalance: 0,
+            percentile90EndingBalance: 0,
+            yearsUntilDepletion: null,
+            safeWithdrawalRate: 0,
+            currentRetirementAssets: 0,
+            projectedRetirementPortfolio: 0,
+          } as any);
+          setHasCalculated(false);
+          return;
         }
-        result = await response.json();
+        throw new Error(errorData.error || 'Failed to calculate retirement confidence score');
       }
+      const result = await response.json();
       
       // Enhanced logging removed for production
       
@@ -218,23 +215,49 @@ export function RetirementConfidenceScoreV2({
       }
     } catch (error) {
       console.error('Error calculating Monte Carlo simulation:', error);
-      setError(error.message || 'An unexpected error occurred. Please try again.');
+      setError((error as any).message || 'An unexpected error occurred. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // V2: ALWAYS calculate fresh on mount, never use saved data
+  // Prefer snapshot/DB saved score for instant paint; allow regenerate via button
   useEffect(() => {
-    console.log('RetirementConfidenceScoreV2: Always calculating fresh Monte Carlo');
-    calculateMonteCarlo();
-  }, []); // Only run once on mount
+    if (snapshot && !monteCarloResult) {
+      const snap = pickWidget<any>(snapshot, 'retirement_success');
+      if (snap && (snap.probability || snap.probabilityDecimal)) {
+        const probability = typeof snap.probability === 'number' ? snap.probability : (snap.probabilityDecimal * 100);
+        setMonteCarloResult({
+          probabilityOfSuccess: probability,
+          medianEndingBalance: snap.medianEndingBalance || 0,
+          scenarios: snap.scenarios || { successful: 0, failed: 0, total: 0 },
+        } as any);
+        setHasCalculated(true);
+        return;
+      }
+    }
+    (async () => {
+      try {
+        const res = await fetch('/api/retirement-score', { credentials: 'include' });
+        if (res.ok) {
+          const saved = await res.json();
+          if (saved && (saved.probability || saved.probabilityDecimal)) {
+            const probability = typeof saved.probability === 'number' ? saved.probability : (saved.probabilityDecimal * 100);
+            setMonteCarloResult({
+              probabilityOfSuccess: probability,
+              medianEndingBalance: saved.medianEndingBalance || 0,
+              scenarios: saved.scenarios || { successful: 0, failed: 0, total: 0 },
+            } as any);
+            setHasCalculated(true);
+          }
+        }
+      } catch {}
+    })();
+  }, [snapshot]);
 
   // Recalculate when the dashboard requests a global refresh
   useEffect(() => {
-    const handler = () => {
-      calculateMonteCarlo();
-    };
+    const handler = () => { generateScore(); };
     window.addEventListener('refreshDashboard', handler);
     return () => window.removeEventListener('refreshDashboard', handler);
   }, []);
@@ -286,7 +309,7 @@ export function RetirementConfidenceScoreV2({
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <CardTitle className="text-lg font-semibold text-white">Retirement Confidence Score 2.0</CardTitle>
-            <span className="text-xs text-purple-400 ml-2">Always Fresh</span>
+            {hasCalculated && <span className="text-xs text-purple-400 ml-2">Cached or Snapshot</span>}
             {monteCarloResult && (
               <div className={`px-2 py-1 rounded-full text-xs font-medium ${
                 getSuccessColor(monteCarloResult.probabilityOfSuccess).bg
@@ -316,7 +339,7 @@ export function RetirementConfidenceScoreV2({
             <AlertTriangle className="w-12 h-12 mx-auto mb-4 text-red-400" />
             <p className="text-red-400 mb-4">{error}</p>
             <Button 
-              onClick={calculateMonteCarlo} 
+              onClick={generateScore} 
               className="bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white"
             >
               Retry Calculation
@@ -325,7 +348,7 @@ export function RetirementConfidenceScoreV2({
         ) : isLoading ? (
           <div className="flex flex-col items-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-            <p className="text-gray-400 mt-2 text-sm">Calculating fresh scenarios...</p>
+            <p className="text-gray-400 mt-2 text-sm">Calculating optimized score...</p>
             <p className="text-gray-500 mt-1 text-xs">
               {loadingSeconds > 0 && `${loadingSeconds}s`}
             </p>
@@ -669,7 +692,7 @@ export function RetirementConfidenceScoreV2({
             <BarChart3 className="w-12 h-12 text-purple-400 mx-auto mb-4" />
             <p className="text-gray-300 mb-4">Calculate your retirement confidence score</p>
             <Button 
-              onClick={calculateMonteCarlo} 
+              onClick={generateScore} 
               className="bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white"
             >
               Calculate Score

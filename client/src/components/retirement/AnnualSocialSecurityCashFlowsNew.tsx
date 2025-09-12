@@ -27,6 +27,8 @@ interface AnnualCashFlow {
 export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, variables }: Props) {
   const [cashFlows, setCashFlows] = useState<AnnualCashFlow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStart, setLoadingStart] = useState<number | null>(null);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
   // Check for persisted collapse state from UI preferences
   const shouldAutoCollapse = profile?.retirementPlanningUIPreferences?.annualSSCashFlowsCollapsed;
   // Default to open (false) unless user has explicitly collapsed it
@@ -34,13 +36,21 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
   const [optimizationData, setOptimizationData] = useState<any>(null);
 
   useEffect(() => {
-    if (profile) {
-      fetchOptimizationAndCalculateFlows();
+    if (!profile) return;
+    const cached = profile?.optimizationVariables?.socialSecurityOptimization?.result;
+    if (cached) {
+      setOptimizationData(cached);
+      const flows = calculateAnnualFlows(cached, profile, variables);
+      setCashFlows(flows);
+      setIsLoading(false);
+      return;
     }
+    fetchOptimizationAndCalculateFlows();
   }, [profile, variables]);
 
   const fetchOptimizationAndCalculateFlows = async () => {
     setIsLoading(true);
+    setLoadingStart(Date.now());
     try {
       // Fetch optimization data to get optimal ages
       const response = await fetch('/api/calculate-cumulative-ss-optimization', {
@@ -63,8 +73,19 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
       console.error('Error calculating cash flows:', error);
     } finally {
       setIsLoading(false);
+      setLoadingStart(null);
+      setLoadingSeconds(0);
     }
   };
+
+  // Loading timer ticker
+  useEffect(() => {
+    if (!loadingStart) return;
+    const t = setInterval(() => {
+      setLoadingSeconds(Math.max(0, Math.round((Date.now() - loadingStart) / 1000)));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [loadingStart]);
 
   const calculateAnnualFlows = (optData: any, profile: any, variables: any): AnnualCashFlow[] => {
     const flows: AnnualCashFlow[] = [];
@@ -194,10 +215,10 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
         <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-lg">
           <p className="text-white font-medium mb-2">Age {label} ({data.year})</p>
           <div className="space-y-2">
-            {/* Optimized Strategy */}
+            {/* Max Lifetime SS Income Strategy */}
             <div className="space-y-1">
               <p className="text-purple-400 font-medium">
-                Optimized Strategy: {formatCurrency(data.combinedBenefit)}
+                Max Lifetime SS Income: {formatCurrency(data.combinedBenefit)}
               </p>
               {(data.userBenefit > 0 || data.spouseBenefit > 0) && (
                 <div className="text-xs text-gray-400 pl-2">
@@ -223,7 +244,7 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
             {/* Difference */}
             {data.combinedBenefit > 0 && data.retirementCombinedBenefit > 0 && (
               <p className="text-xs text-emerald-400 pt-1 border-t border-gray-700">
-                Optimized Advantage: +{formatCurrency(data.combinedBenefit - data.retirementCombinedBenefit)}/year
+                Max-Income Advantage: +{formatCurrency(data.combinedBenefit - data.retirementCombinedBenefit)}/year
               </p>
             )}
           </div>
@@ -238,7 +259,7 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
       <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">
         <CardContent className="p-6 text-center">
           <AlertCircle className="w-6 h-6 mx-auto text-amber-400" />
-          <p className="text-gray-400 mt-2">Loading cash flow projections...</p>
+          <p className="text-gray-400 mt-2">Loading comparison... {loadingSeconds}s</p>
         </CardContent>
       </Card>
     );
@@ -335,7 +356,7 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
                       iconType="rect"
                       formatter={(value) => {
                         if (value === 'retirementCombinedBenefit') return 'Baseline Strategy';
-                        if (value === 'combinedBenefit') return 'Optimized Strategy';
+                        if (value === 'combinedBenefit') return 'Max Lifetime SS Income';
                         return value;
                       }}
                     />
@@ -360,7 +381,7 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
                         x={optimizedUserAge} 
                         stroke="#A78BFA" 
                         strokeDasharray="5 5"
-                        label={{ value: `Optimized claim at ${optimizedUserAge}`, position: 'top', fill: '#A78BFA', fontSize: 11 }}
+                        label={{ value: `Max-income claim at ${optimizedUserAge}`, position: 'top', fill: '#A78BFA', fontSize: 11 }}
                       />
                     )}
                     

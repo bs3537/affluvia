@@ -251,7 +251,7 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
       }
     }
 
-    // 6. Optimized Strategy (using optimization form variables)
+    // 6. Planned Claiming Ages (using optimization form variables)
     if (variables && (variables.socialSecurityAge || variables.spouseSocialSecurityAge)) {
       const optimizedUserAge = variables.socialSecurityAge || combined.optimalUserAge;
       const optimizedSpouseAge = variables.spouseSocialSecurityAge || combined.optimalSpouseAge;
@@ -261,8 +261,8 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
       
       if (optimizedScenario) {
         const optimizedLabel = isMarried && optimizedSpouseAge !== optimizedUserAge
-          ? `✨ Optimized Strategy (${optimizedUserAge}/${optimizedSpouseAge})`
-          : `✨ Optimized Strategy (${optimizedUserAge})`;
+          ? `✨ Planned Claiming Ages (${optimizedUserAge}/${optimizedSpouseAge})`
+          : `✨ Planned Claiming Ages (${optimizedUserAge})`;
         
         // Check if this is already in the list (as optimal)
         const isDuplicate = scenarios.some(s => 
@@ -279,7 +279,7 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
               : optimizedUserAge.toString(),
             cumulative: optimizedScenario.combinedCumulative || optimizedScenario.userCumulative,
             monthly: optimizedScenario.combinedMonthly || optimizedScenario.userMonthly,
-            description: 'Optimized with all variables',
+            description: 'Planned claiming ages from optimization form',
             isOptimal: true,
             color: '#A855F7', // purple-500 for optimized
           });

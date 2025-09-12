@@ -59,6 +59,8 @@ export const StressTestScenarios: React.FC<StressTestScenariosProps> = ({
     }))
   );
   const [isRunning, setIsRunning] = useState(false);
+  const [runningSeconds, setRunningSeconds] = useState(0);
+  const [currentScenarioIndex, setCurrentScenarioIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [runCombined, setRunCombined] = useState(true);
 
@@ -104,15 +106,27 @@ export const StressTestScenarios: React.FC<StressTestScenariosProps> = ({
     }
 
     setIsRunning(true);
+    setRunningSeconds(0);
+    setCurrentScenarioIndex(0);
     setError(null);
     
     try {
+      // Start a simple progress ticker cycling through enabled scenario names
+      const names = enabledScenarios.map(s => s.name);
+      const ticker = setInterval(() => {
+        setRunningSeconds(prev => prev + 1);
+        if (names.length > 0) {
+          setCurrentScenarioIndex(prev => (prev + 1) % names.length);
+        }
+      }, 1000);
       const response = await onRunStressTest(scenarios, runCombined);
       // Don't store results here, let the parent handle it
+      clearInterval(ticker);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to run stress test');
     } finally {
       setIsRunning(false);
+      setRunningSeconds(0);
     }
   };
 
@@ -177,6 +191,16 @@ export const StressTestScenarios: React.FC<StressTestScenariosProps> = ({
               {enabledCount > 0 && runCombined && enabledCount > 1 && (
                 <p className="text-xs text-gray-400">
                   Will run {enabledCount} individual + 1 combined test
+                </p>
+              )}
+              {isRunning && enabledCount > 0 && (
+                <p className="text-xs text-gray-300 mt-1">
+                  Analyzing impact of each stress test scenario... {runningSeconds}s
+                  {(() => {
+                    const names = scenarios.filter(s => s.enabled).map(s => s.name);
+                    const name = names.length ? names[currentScenarioIndex % names.length] : '';
+                    return name ? ` (running ${name})` : '';
+                  })()}
                 </p>
               )}
             </div>

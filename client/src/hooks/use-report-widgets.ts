@@ -9,7 +9,9 @@ export function useReportWidgets() {
       if (!res.ok) throw new Error('Failed to fetch profile');
       return res.json();
     },
-    staleTime: 10_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
   });
 
   // Compute ending portfolio impact from cached MC withdrawals (same as Optimization tab)

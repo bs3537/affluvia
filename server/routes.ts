@@ -910,8 +910,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const problematicKeys = Object.keys(req.body).filter(key => key.includes('-'));
       if (problematicKeys.length > 0) console.error('Found keys with hyphens:', problematicKeys);
 
-      // Skip heavy calculations for partial saves during form navigation
-      const skipCalculations = req.body.skipCalculations || req.body.isPartialSave;
+      // Skip heavy calculations for partial saves and optimization-only updates
+      const isOptimizationOnlyUpdate = Object.keys(req.body || {}).every((k) =>
+        k === 'optimizationVariables' ||
+        k === 'retirementPlanningUIPreferences' ||
+        k === 'skipCalculations' ||
+        k === 'isPartialSave' ||
+        k === 'currentStep'
+      );
+      const skipCalculations = req.body.skipCalculations || req.body.isPartialSave || isOptimizationOnlyUpdate;
       
       // Calculate comprehensive financial metrics only if not skipping
       let calculations;

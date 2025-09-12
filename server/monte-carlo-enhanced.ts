@@ -3514,6 +3514,18 @@ export function runEnhancedRetirementScenario(
       cashEquivalents: currentBuckets.cashEquivalents,
       totalAssets: currentBuckets.totalAssets
     };
+
+    // Apply a forced first-year market crash if specified by stress tests
+    if ((params as any).forceFirstYearCrash && distYear === 0) {
+      const crashPct = Number((params as any).forceFirstYearCrash) || 0; // e.g., -30 for a 30% drop
+      const dropFactor = 1 + (crashPct / 100);
+      currentBuckets.taxDeferred = Math.max(0, currentBuckets.taxDeferred * dropFactor);
+      currentBuckets.taxFree = Math.max(0, currentBuckets.taxFree * dropFactor);
+      currentBuckets.capitalGains = Math.max(0, currentBuckets.capitalGains * dropFactor);
+      currentBuckets.cashEquivalents = Math.max(0, currentBuckets.cashEquivalents * dropFactor);
+      currentBuckets.totalAssets = currentBuckets.taxDeferred + currentBuckets.taxFree + currentBuckets.capitalGains + currentBuckets.cashEquivalents;
+      portfolioBalance = currentBuckets.totalAssets;
+    }
     
     // Apply returns based on withdrawal timing
     if (withdrawalTiming === 'end') {

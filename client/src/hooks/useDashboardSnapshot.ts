@@ -24,7 +24,10 @@ export function useDashboardSnapshot() {
       if (!res.ok) return null;
       return res.json();
     },
-    staleTime: 30_000, // allow small SWR window
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: 'always',
   });
 }
 
@@ -33,4 +36,3 @@ export function pickWidget<T = any>(snapshot: DashboardSnapshot | null | undefin
   const w = snapshot.widgets.find(w => w.id === id);
   return (w && w.data) ? (w.data as T) : null;
 }
-

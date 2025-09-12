@@ -108,7 +108,7 @@ export function RetirementOptimizationWidget({
         credentials: 'include',
         body: JSON.stringify({
           optimizationVariables,
-          skipCache: true,
+          skipCache: false,
           runOptimization: true
         })
       });

@@ -296,18 +296,7 @@ export function RetirementPortfolioProjectionsOptimized({
             Portfolio projections using your optimized retirement variables
           </p>
         </div>
-        {hasCalculated && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={generateBands}
-            disabled={loading || !hasOptimizationData}
-            className="h-8 w-8 p-0 text-gray-400 hover:text-white"
-            title={!hasOptimizationData ? 'Save optimization variables first' : 'Refresh projections'}
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
-        )}
+        {/* Removed header refresh to avoid duplicate with LastCalculated */}
       </CardHeader>
       <div className="px-6 -mt-2">
         <LastCalculated timestamp={data?.meta?.calculatedAt} onRefresh={generateBands} refreshing={loading} />

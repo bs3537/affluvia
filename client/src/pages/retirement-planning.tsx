@@ -139,6 +139,8 @@ function CashFlowContent({
   setOptimizedCashFlowData: (data: CashFlowData[] | null) => void;
   }) {
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStart, setLoadingStart] = useState<number | null>(null);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
   const [dataFetched, setDataFetched] = useState(false);
   
   // Helper function to check if cash flow data has detailed withdrawal breakdown
@@ -154,6 +156,7 @@ function CashFlowContent({
   };
 
   // Fetch cash flow data when component mounts or when scores change
+  const isMarried = (profile?.maritalStatus === 'married' || profile?.maritalStatus === 'partnered');
   useEffect(() => {
     const abortController = new AbortController();
 
@@ -165,6 +168,7 @@ function CashFlowContent({
       // Only show spinner if we have no detailed data to display yet
       if (!hasDetailedBaseline && !hasDetailedOptimized) {
         setIsLoading(true);
+        setLoadingStart(Date.now());
       }
 
       try {
@@ -189,17 +193,18 @@ function CashFlowContent({
                 if (res.ok) {
                   const data = await res.json();
                   if (data?.projections?.length) {
+                    const baselineVars = {
+                      retirementAge: profile?.desiredRetirementAge || 65,
+                      spouseRetirementAge: profile?.spouseDesiredRetirementAge || 65,
+                      socialSecurityAge: profile?.socialSecurityClaimAge || 67,
+                      spouseSocialSecurityAge: profile?.spouseSocialSecurityClaimAge || 67,
+                      monthlyExpenses: profile?.expectedMonthlyExpensesRetirement ?? undefined,
+                      partTimeIncome: profile?.partTimeIncomeRetirement || 0,
+                      spousePartTimeIncome: profile?.spousePartTimeIncomeRetirement || 0
+                    };
                     const flows = transformMonteCarloToCashFlow(
                       data.projections,
-                      {
-                        retirementAge: profile?.desiredRetirementAge || variables?.retirementAge || 67,
-                        spouseRetirementAge: profile?.spouseDesiredRetirementAge || variables?.spouseRetirementAge || 67,
-                        socialSecurityAge: profile?.socialSecurityClaimAge || variables?.socialSecurityAge || 67,
-                        spouseSocialSecurityAge: profile?.spouseSocialSecurityClaimAge || variables?.spouseSocialSecurityAge || 67,
-                        monthlyExpenses: profile?.expectedMonthlyExpensesRetirement ?? variables?.monthlyExpenses ?? undefined,
-                        partTimeIncome: profile?.partTimeIncomeRetirement || variables?.partTimeIncome || 0,
-                        spousePartTimeIncome: profile?.spousePartTimeIncomeRetirement || variables?.spousePartTimeIncome || 0
-                      },
+                      baselineVars,
                       profile,
                       false
                     );
@@ -214,7 +219,16 @@ function CashFlowContent({
               }
               // Fallback to transforming currentScore if endpoint unavailable
               if (currentScore?.yearlyCashFlows?.length) {
-                const flows = transformMonteCarloToCashFlow(currentScore.yearlyCashFlows, variables, profile, false);
+                const baselineVars = {
+                  retirementAge: profile?.desiredRetirementAge || 65,
+                  spouseRetirementAge: profile?.spouseDesiredRetirementAge || 65,
+                  socialSecurityAge: profile?.socialSecurityClaimAge || 67,
+                  spouseSocialSecurityAge: profile?.spouseSocialSecurityClaimAge || 67,
+                  monthlyExpenses: profile?.expectedMonthlyExpensesRetirement ?? undefined,
+                  partTimeIncome: profile?.partTimeIncomeRetirement || 0,
+                  spousePartTimeIncome: profile?.spousePartTimeIncomeRetirement || 0
+                };
+                const flows = transformMonteCarloToCashFlow(currentScore.yearlyCashFlows, baselineVars, profile, false);
                 setCurrentCashFlowData(flows);
               }
             })()
@@ -278,6 +292,8 @@ function CashFlowContent({
         if (!abortController.signal.aborted) {
           setIsLoading(false);
           setDataFetched(true);
+          setLoadingStart(null);
+          setLoadingSeconds(0);
         }
       }
     };
@@ -291,6 +307,15 @@ function CashFlowContent({
   // Do not depend on currentCashFlowData/optimizedCashFlowData to avoid loops
   }, [variables, profile, currentScore, optimizedScore, dataFetched]);
   
+  // Loading timer ticker
+  useEffect(() => {
+    if (!loadingStart) return;
+    const t = setInterval(() => {
+      setLoadingSeconds(Math.max(0, Math.round((Date.now() - loadingStart) / 1000)));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [loadingStart]);
+  
   // Add state for selected plan - default to 'optimized'
   const [selectedPlan, setSelectedPlan] = useState<'baseline' | 'optimized'>('optimized');
   
@@ -299,13 +324,24 @@ function CashFlowContent({
   
   // Determine which data to display based on selected plan
   const displayData = selectedPlan === 'baseline' ? currentCashFlowData : optimizedCashFlowData;
+  // Show post-retirement years only in Cash Flow tab
+  const baselineRetAge = Math.min(
+    profile?.desiredRetirementAge || 65,
+    (profile?.spouseDesiredRetirementAge || (profile?.desiredRetirementAge || 65))
+  );
+  const optimizedRetAge = Math.min(
+    variables.retirementAge,
+    (variables.spouseRetirementAge || variables.retirementAge)
+  );
+  const minRetirementAge = selectedPlan === 'baseline' ? baselineRetAge : optimizedRetAge;
+  const postRetDisplayData = (displayData || []).filter(d => (d?.age ?? Infinity) >= minRetirementAge);
   
   const hasAnyData = !!(currentCashFlowData?.length || optimizedCashFlowData?.length);
   if (isLoading && !hasAnyData) {
     return (
       <div className="flex items-center justify-center p-8">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-400"></div>
-        <span className="ml-3 text-gray-400">Loading cash flow data...</span>
+        <span className="ml-3 text-gray-400">Loading cash flow data... {loadingSeconds}s</span>
       </div>
     );
   }
@@ -344,15 +380,19 @@ function CashFlowContent({
         <div className="space-y-4">
           {/* Cash Flow Visualization */}
           <RetirementCashFlowSankey
-            data={displayData}
-            retirementAge={Math.min(variables.retirementAge, variables.spouseRetirementAge || variables.retirementAge)}
+            data={postRetDisplayData}
+            retirementAge={minRetirementAge}
             currentAge={profile?.age || 50}
             isOptimized={selectedPlan === 'optimized'}
           />
         </div>
         ) : (
           <div className="text-center py-8 text-gray-400">
-            <p>No cash flow data available. Please run optimization first.</p>
+            {profile?.optimizationVariables?.hasOptimized || profile?.optimizationVariables?.optimizedScore ? (
+              <p>Calculating cash flow projections... {loadingStart ? `${loadingSeconds}s` : ''}</p>
+            ) : (
+              <p>No cash flow data available. Please run optimization first.</p>
+            )}
           </div>
         )}
         
@@ -367,7 +407,7 @@ function CashFlowContent({
           </Button>
           <Button
             onClick={() => setActiveTab("social-security")}
-            className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
+            className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white"
           >
             Next: Social Security
             <ChevronRight className="w-4 h-4 ml-2" />
@@ -1329,6 +1369,33 @@ function RetirementPlanningInner() {
   // Monte Carlo Withdrawals data states
   const [mcWithdrawalsData, setMcWithdrawalsData] = useState<any>(null);
 
+  // Persist MC Withdrawals (Income tab) to DB when computed
+  useEffect(() => {
+    if (!mcWithdrawalsData) return;
+    (async () => {
+      try {
+        await fetch('/api/financial-profile', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            optimizationVariables: {
+              mcWithdrawalsData: {
+                ...mcWithdrawalsData,
+                savedAt: new Date().toISOString()
+              }
+            },
+            // keep this lightweight and avoid recomputations
+            isPartialSave: true,
+            skipCalculations: true
+          })
+        });
+      } catch (e) {
+        console.warn('Failed to persist mcWithdrawalsData:', e);
+      }
+    })();
+  }, [mcWithdrawalsData]);
+
   // Social Security optimization states (simplified - no real-time optimization)
   const [showSSComparison, setShowSSComparison] = useState(false);
 
@@ -1598,9 +1665,18 @@ function RetirementPlanningInner() {
             const profileData = await profileResponse.json();
             setProfile(profileData);
             const profile = profileData;
+            const baselineVars = {
+              retirementAge: profile.desiredRetirementAge || 65,
+              spouseRetirementAge: profile.spouseDesiredRetirementAge || 65,
+              socialSecurityAge: profile.socialSecurityClaimAge || 67,
+              spouseSocialSecurityAge: profile.spouseSocialSecurityClaimAge || 67,
+              monthlyExpenses: profile.expectedMonthlyExpensesRetirement ?? undefined,
+              partTimeIncome: profile.partTimeIncomeRetirement || 0,
+              spousePartTimeIncome: profile.spousePartTimeIncomeRetirement || 0
+            };
             const currentFlows = transformMonteCarloToCashFlow(
               result.yearlyCashFlows,
-              variables,
+              baselineVars,
               profile,
               false
             );
@@ -2041,9 +2117,7 @@ function RetirementPlanningInner() {
                 optimizedRetirementSuccessProbability: formattedResult.probabilityOfSuccess,
                 hasOptimized: true,
                 isLocked: isLocked
-              },
-              // Save Monte Carlo result summary for reference; no projections yet
-              monteCarloSimulation: formattedResult
+              }
             })
           });
           if (!saveResponse.ok) {
@@ -2229,9 +2303,23 @@ function RetirementPlanningInner() {
           // Persist UI preference: collapse optimization strategy guide on save
           retirementPlanningUIPreferences: {
             optimizationGuideCollapsed: true
-          }
+          },
+          skipCalculations: true,
+          isPartialSave: true
         })
       });
+
+      // Immediately compute and persist optimized artifacts so other tabs hydrate on reload
+      try {
+        await fetch('/api/retirement/optimization-refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ persist: true, runs: 1000 })
+        });
+      } catch (_) {
+        // Non-fatal; UI continues with local state
+      }
       // Update local UI: collapse strategy guide now
       setShowSuggestions(false);
       setIsLocked(true);
@@ -3592,6 +3680,212 @@ function RetirementPlanningInner() {
               active={activeTab === 'portfolio-projections'}
               autoGenerateOnActive
             />
+
+            {/* Next-step button (same design as optimization tab), above variables card */}
+            <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">
+              <CardContent className="p-6">
+                <Button
+                  onClick={() => setActiveTab('portfolio-impact')}
+                  className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
+                  size="lg"
+                >
+                  Continue to Optimized Plan: Portfolio Impact
+                  <ArrowRight className="w-5 h-5" />
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Optimized Variables Table - Same as Income/Stress Tests */}
+            {variables && optimizedScore && (
+              <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-xl text-white flex items-center gap-2">
+                      <Settings className="w-5 h-5 text-purple-400" />
+                      Optimized Retirement Variables
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                      <div className="px-3 py-1 bg-green-900/30 border border-green-700/50 rounded-full">
+                        <span className="text-xs text-green-400 font-medium">✓ Locked & Saved</span>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Your optimized settings used for the Monte Carlo projections above
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Retirement Planning Column */}
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-lg">🎯</span>
+                        <h3 className="text-lg font-semibold text-white">Retirement Planning</h3>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                          <span className="text-sm text-gray-300">Your Retirement Age</span>
+                          <span className="text-sm text-white font-semibold">Age {variables.retirementAge}</span>
+                        </div>
+                        {profile?.maritalStatus === 'married' && variables.spouseRetirementAge && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">Spouse Retirement Age</span>
+                            <span className="text-sm text-white font-semibold">Age {variables.spouseRetirementAge}</span>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                          <span className="text-sm text-gray-300">Your Social Security Age</span>
+                          <span className="text-sm text-white font-semibold">Age {variables.socialSecurityAge}</span>
+                        </div>
+                        {profile?.maritalStatus === 'married' && variables.spouseSocialSecurityAge && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">Spouse Social Security Age</span>
+                            <span className="text-sm text-white font-semibold">Age {variables.spouseSocialSecurityAge}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Investment & Contributions Column */}
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-lg">💰</span>
+                        <h3 className="text-lg font-semibold text-white">Investment Strategy</h3>
+                      </div>
+                      <div className="space-y-3">
+                        {/* User Asset Allocation */}
+                        <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                          <span className="text-sm text-gray-300">Your Strategy</span>
+                          <span className="text-sm text-white font-semibold">
+                            {(() => {
+                              const allocation = variables.assetAllocation;
+                              if (allocation === '5') return 'Conservative';
+                              if (allocation === '5.6') return 'Moderately Conservative';
+                              if (allocation === '6.1') return 'Moderate';
+                              if (allocation === '6.6') return 'Moderately Aggressive';
+                              if (allocation === '7') return 'Aggressive';
+                              if (allocation === 'current-allocation') return 'Current Allocation';
+                              if (allocation === 'glide-path') return 'Age-Based Glide Path';
+                              return allocation || 'Current Allocation';
+                            })()}
+                          </span>
+                        </div>
+                        
+                        {/* Spouse Asset Allocation */}
+                        {profile?.maritalStatus === 'married' && variables.spouseAssetAllocation && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">Spouse Strategy</span>
+                            <span className="text-sm text-white font-semibold">
+                              {(() => {
+                                const allocation = variables.spouseAssetAllocation;
+                                if (allocation === '5') return 'Conservative';
+                                if (allocation === '5.6') return 'Moderately Conservative';
+                                if (allocation === '6.1') return 'Moderate';
+                                if (allocation === '6.6') return 'Moderately Aggressive';
+                                if (allocation === '7') return 'Aggressive';
+                                if (allocation === 'current-allocation') return 'Current Allocation';
+                                if (allocation === 'glide-path') return 'Age-Based Glide Path';
+                                return allocation || 'Current Allocation';
+                              })()}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {(variables.monthlyEmployee401k > 0 || variables.monthlyEmployer401k > 0) && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">401(k) Monthly</span>
+                            <span className="text-sm text-white font-semibold">
+                              ${((variables.monthlyEmployee401k || 0) + (variables.monthlyEmployer401k || 0)).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {(variables.annualTraditionalIRA > 0 || variables.annualRothIRA > 0) && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">IRA Annual</span>
+                            <span className="text-sm text-white font-semibold">
+                              ${((variables.annualTraditionalIRA || 0) + (variables.annualRothIRA || 0)).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                        
+                        <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                          <span className="text-sm text-gray-300">Monthly Expenses</span>
+                          <span className="text-sm text-white font-semibold">${variables.monthlyExpenses?.toLocaleString()}</span>
+                        </div>
+                        
+                        {variables.hasLongTermCareInsurance && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">Long-Term Care Insurance</span>
+                            <span className="text-sm text-white font-semibold">✓ Yes</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Summary metrics at the bottom */}
+                  <div className="mt-6 pt-4 border-t border-gray-700">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="bg-gradient-to-r from-purple-900/30 to-blue-900/30 p-4 rounded-lg border border-purple-700/30">
+                        <p className="text-xs text-gray-400 mb-1">Total Monthly Savings</p>
+                        <p className="text-lg font-bold text-white">
+                          ${(
+                            (variables.monthlyEmployee401k || 0) + 
+                            (variables.monthlyEmployer401k || 0) + 
+                            (variables.spouseMonthlyEmployee401k || 0) + 
+                            (variables.spouseMonthlyEmployer401k || 0) +
+                            ((variables.annualTraditionalIRA || 0) / 12) +
+                            ((variables.annualRothIRA || 0) / 12) +
+                            ((variables.spouseAnnualTraditionalIRA || 0) / 12) +
+                            ((variables.spouseAnnualRothIRA || 0) / 12)
+                          ).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                        </p>
+                      </div>
+                      
+                      <div className="bg-gradient-to-r from-green-900/30 to-emerald-900/30 p-4 rounded-lg border border-green-700/30">
+                        <p className="text-xs text-gray-400 mb-1">Years to Retirement</p>
+                        <p className="text-lg font-bold text-white">
+                          {(() => {
+                            if (!profile?.dateOfBirth || !variables.retirementAge) {
+                              return 'N/A';
+                            }
+                            try {
+                              const currentYear = new Date().getFullYear();
+                              const birthYear = new Date(profile.dateOfBirth).getFullYear();
+                              const currentAge = currentYear - birthYear;
+                              const yearsToRetirement = Math.max(0, variables.retirementAge - currentAge);
+                              return `${yearsToRetirement} years`;
+                            } catch (error) {
+                              return 'N/A';
+                            }
+                          })()}
+                        </p>
+                      </div>
+                      
+                      <div className="bg-gradient-to-r from-orange-900/30 to-red-900/30 p-4 rounded-lg border border-orange-700/30">
+                        <p className="text-xs text-gray-400 mb-1">Optimization Impact</p>
+                        <p className="text-lg font-bold text-white">
+                          +{Math.round(((optimizedScore?.probabilityOfSuccess || 0) - (currentScore?.probabilityOfSuccess || 0)))}%
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Action button to modify */}
+                  <div className="mt-6 flex justify-center">
+                    <Button
+                      onClick={() => setActiveTab("optimize-score")}
+                      variant="outline"
+                      className="bg-gray-800/50 hover:bg-gray-700/50 text-white border-gray-600 hover:border-gray-500"
+                    >
+                      <Settings className="w-4 h-4 mr-2" />
+                      Modify Variables
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           {/* Portfolio Impact Tab (new Tab #3) */}
@@ -3602,6 +3896,212 @@ function RetirementPlanningInner() {
               active={activeTab === 'portfolio-impact'}
               autoStartOnActive
             />
+
+            {/* Continue button to Stress Tests */}
+            <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">
+              <CardContent className="p-6">
+                <Button
+                  onClick={() => setActiveTab('stress-tests')}
+                  className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
+                  size="lg"
+                >
+                  Continue to Optimized Plan: Stress Tests
+                  <ArrowRight className="w-5 h-5" />
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Optimized Variables Table - Same as Income/Stress Tests */}
+            {variables && optimizedScore && (
+              <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-xl text-white flex items-center gap-2">
+                      <Settings className="w-5 h-5 text-purple-400" />
+                      Optimized Retirement Variables
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                      <div className="px-3 py-1 bg-green-900/30 border border-green-700/50 rounded-full">
+                        <span className="text-xs text-green-400 font-medium">✓ Locked & Saved</span>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Your optimized settings used for the Monte Carlo projections above
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Retirement Planning Column */}
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-lg">🎯</span>
+                        <h3 className="text-lg font-semibold text-white">Retirement Planning</h3>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                          <span className="text-sm text-gray-300">Your Retirement Age</span>
+                          <span className="text-sm text-white font-semibold">Age {variables.retirementAge}</span>
+                        </div>
+                        {profile?.maritalStatus === 'married' && variables.spouseRetirementAge && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">Spouse Retirement Age</span>
+                            <span className="text-sm text-white font-semibold">Age {variables.spouseRetirementAge}</span>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                          <span className="text-sm text-gray-300">Your Social Security Age</span>
+                          <span className="text-sm text-white font-semibold">Age {variables.socialSecurityAge}</span>
+                        </div>
+                        {profile?.maritalStatus === 'married' && variables.spouseSocialSecurityAge && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">Spouse Social Security Age</span>
+                            <span className="text-sm text-white font-semibold">Age {variables.spouseSocialSecurityAge}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Investment & Contributions Column */}
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-lg">💰</span>
+                        <h3 className="text-lg font-semibold text-white">Investment Strategy</h3>
+                      </div>
+                      <div className="space-y-3">
+                        {/* User Asset Allocation */}
+                        <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                          <span className="text-sm text-gray-300">Your Strategy</span>
+                          <span className="text-sm text-white font-semibold">
+                            {(() => {
+                              const allocation = variables.assetAllocation;
+                              if (allocation === '5') return 'Conservative';
+                              if (allocation === '5.6') return 'Moderately Conservative';
+                              if (allocation === '6.1') return 'Moderate';
+                              if (allocation === '6.6') return 'Moderately Aggressive';
+                              if (allocation === '7') return 'Aggressive';
+                              if (allocation === 'current-allocation') return 'Current Allocation';
+                              if (allocation === 'glide-path') return 'Age-Based Glide Path';
+                              return allocation || 'Current Allocation';
+                            })()}
+                          </span>
+                        </div>
+                        
+                        {/* Spouse Asset Allocation */}
+                        {profile?.maritalStatus === 'married' && variables.spouseAssetAllocation && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">Spouse Strategy</span>
+                            <span className="text-sm text-white font-semibold">
+                              {(() => {
+                                const allocation = variables.spouseAssetAllocation;
+                                if (allocation === '5') return 'Conservative';
+                                if (allocation === '5.6') return 'Moderately Conservative';
+                                if (allocation === '6.1') return 'Moderate';
+                                if (allocation === '6.6') return 'Moderately Aggressive';
+                                if (allocation === '7') return 'Aggressive';
+                                if (allocation === 'current-allocation') return 'Current Allocation';
+                                if (allocation === 'glide-path') return 'Age-Based Glide Path';
+                                return allocation || 'Current Allocation';
+                              })()}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {(variables.monthlyEmployee401k > 0 || variables.monthlyEmployer401k > 0) && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">401(k) Monthly</span>
+                            <span className="text-sm text-white font-semibold">
+                              ${((variables.monthlyEmployee401k || 0) + (variables.monthlyEmployer401k || 0)).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {(variables.annualTraditionalIRA > 0 || variables.annualRothIRA > 0) && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">IRA Annual</span>
+                            <span className="text-sm text-white font-semibold">
+                              ${((variables.annualTraditionalIRA || 0) + (variables.annualRothIRA || 0)).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                        
+                        <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                          <span className="text-sm text-gray-300">Monthly Expenses</span>
+                          <span className="text-sm text-white font-semibold">${variables.monthlyExpenses?.toLocaleString()}</span>
+                        </div>
+                        
+                        {variables.hasLongTermCareInsurance && (
+                          <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                            <span className="text-sm text-gray-300">Long-Term Care Insurance</span>
+                            <span className="text-sm text-white font-semibold">✓ Yes</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Summary metrics at the bottom */}
+                  <div className="mt-6 pt-4 border-t border-gray-700">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="bg-gradient-to-r from-purple-900/30 to-blue-900/30 p-4 rounded-lg border border-purple-700/30">
+                        <p className="text-xs text-gray-400 mb-1">Total Monthly Savings</p>
+                        <p className="text-lg font-bold text-white">
+                          ${(
+                            (variables.monthlyEmployee401k || 0) + 
+                            (variables.monthlyEmployer401k || 0) + 
+                            (variables.spouseMonthlyEmployee401k || 0) + 
+                            (variables.spouseMonthlyEmployer401k || 0) +
+                            ((variables.annualTraditionalIRA || 0) / 12) +
+                            ((variables.annualRothIRA || 0) / 12) +
+                            ((variables.spouseAnnualTraditionalIRA || 0) / 12) +
+                            ((variables.spouseAnnualRothIRA || 0) / 12)
+                          ).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                        </p>
+                      </div>
+                      
+                      <div className="bg-gradient-to-r from-green-900/30 to-emerald-900/30 p-4 rounded-lg border border-green-700/30">
+                        <p className="text-xs text-gray-400 mb-1">Years to Retirement</p>
+                        <p className="text-lg font-bold text-white">
+                          {(() => {
+                            if (!profile?.dateOfBirth || !variables.retirementAge) {
+                              return 'N/A';
+                            }
+                            try {
+                              const currentYear = new Date().getFullYear();
+                              const birthYear = new Date(profile.dateOfBirth).getFullYear();
+                              const currentAge = currentYear - birthYear;
+                              const yearsToRetirement = Math.max(0, variables.retirementAge - currentAge);
+                              return `${yearsToRetirement} years`;
+                            } catch (error) {
+                              return 'N/A';
+                            }
+                          })()}
+                        </p>
+                      </div>
+                      
+                      <div className="bg-gradient-to-r from-orange-900/30 to-red-900/30 p-4 rounded-lg border border-orange-700/30">
+                        <p className="text-xs text-gray-400 mb-1">Optimization Impact</p>
+                        <p className="text-lg font-bold text-white">
+                          +{Math.round(((optimizedScore?.probabilityOfSuccess || 0) - (currentScore?.probabilityOfSuccess || 0)))}%
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Action button to modify */}
+                  <div className="mt-6 flex justify-center">
+                    <Button
+                      onClick={() => setActiveTab("optimize-score")}
+                      variant="outline"
+                      className="bg-gray-800/50 hover:bg-gray-700/50 text-white border-gray-600 hover:border-gray-500"
+                    >
+                      <Settings className="w-4 h-4 mr-2" />
+                      Modify Variables
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           {/* Monte Carlo Withdrawals Tab */}

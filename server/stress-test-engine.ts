@@ -11,8 +11,9 @@ import {
   StressTestResult, 
   StressTestResponse 
 } from '../shared/stress-test-types';
+import { applyOptimizationVariables } from './services/apply-optimization-variables';
 
-// Import the optimization variables utility
+// Deprecated local helper retained for reference (no longer used)
 function applyOptimizationVariablesToProfile(profile: any, variables: any) {
     const optimized = { ...profile };
     // Ages
@@ -396,8 +397,8 @@ export async function runStressTests(
   // Create optimized parameters if optimization variables provided
   let optimizedParams = baseParams;
   if (optimizationVariables) {
-    // Use the shared utility function to apply optimization variables
-    const optimizedProfile = applyOptimizationVariablesToProfile(profile, optimizationVariables);
+    // Use the shared utility function to apply optimization variables for consistency
+    const optimizedProfile = applyOptimizationVariables(profile, optimizationVariables);
     optimizedParams = profileToRetirementParams(optimizedProfile);
     
     // CRITICAL FIX: Ensure assets are preserved from base params if they become 0 or negative
@@ -478,7 +479,8 @@ export async function runStressTests(
     
     // Calculate impact
     const successProb = stressedResult.fullResult?.successProbability || stressedResult.fullResult?.probabilityOfSuccess || 0;
-    const impactPercentage = ((successProb - baselineSuccessProbability) / baselineSuccessProbability) * 100;
+    // Report absolute percentage points delta to match UI labeling
+    const impactPercentage = (successProb - baselineSuccessProbability) * 100;
     
     individualResults.push({
       scenarioId: scenario.id,
@@ -486,7 +488,7 @@ export async function runStressTests(
       successProbability: successProb,
       baselineSuccessProbability,
       impactPercentage,
-      impactDescription: `${scenario.name} reduces success probability by ${Math.abs(impactPercentage).toFixed(1)}%`,
+      impactDescription: `${scenario.name} ${impactPercentage >= 0 ? 'increases' : 'reduces'} success probability by ${Math.abs(impactPercentage).toFixed(1)} pts`,
       details: {
         medianPortfolioValue: stressedResult.fullResult?.summary?.medianFinalValue || stressedResult.fullResult?.portfolioPercentiles?.[50],
         yearlyCashFlows: stressedResult.fullResult?.yearlyCashFlows
@@ -510,7 +512,7 @@ export async function runStressTests(
     const combinedStressedResult = await mcPool.run({ params: combinedStressedParams, simulationCount, type: 'score' });
     
     const combinedSuccessProb = combinedStressedResult.fullResult?.successProbability || combinedStressedResult.fullResult?.probabilityOfSuccess || 0;
-    const combinedImpact = ((combinedSuccessProb - baselineSuccessProbability) / baselineSuccessProbability) * 100;
+    const combinedImpact = (combinedSuccessProb - baselineSuccessProbability) * 100;
     
     combinedResult = {
       scenarioId: 'combined',
@@ -518,7 +520,7 @@ export async function runStressTests(
       successProbability: combinedSuccessProb,
       baselineSuccessProbability,
       impactPercentage: combinedImpact,
-      impactDescription: `Combined scenarios reduce success probability by ${Math.abs(combinedImpact).toFixed(1)}%`,
+      impactDescription: `Combined scenarios ${combinedImpact >= 0 ? 'increase' : 'reduce'} success probability by ${Math.abs(combinedImpact).toFixed(1)} pts`,
       details: {
         medianPortfolioValue: combinedStressedResult.fullResult?.summary?.medianFinalValue || combinedStressedResult.fullResult?.portfolioPercentiles?.[50],
         yearlyCashFlows: combinedStressedResult.fullResult?.yearlyCashFlows

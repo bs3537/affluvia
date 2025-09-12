@@ -39,7 +39,7 @@ const handleMessage = async (msg: Work): Promise<ScoreResult | BandsResult> => {
       const result = await runEnhancedMonteCarloSimulation(
         seededParams, 
         runs, 
-        true, // trackAllScenarios - needed for accurate percentiles
+        false, // verbose logging off for performance
         DEFAULT_RETURN_CONFIG,
         variance,
         false // useParallel - already parallelized at pool level
@@ -62,7 +62,7 @@ const handleMessage = async (msg: Work): Promise<ScoreResult | BandsResult> => {
       const result = await runEnhancedMonteCarloSimulation(
         seededParams,
         runs,
-        true, // trackAllScenarios - required for bands
+        false, // verbose logging off for performance
         DEFAULT_RETURN_CONFIG,
         variance,
         false // useParallel - already parallelized at pool level
