@@ -4279,14 +4279,21 @@ function RetirementPlanningInner() {
               isOptimized={hasOptimizedOnce}
             />
             
-            {/* Navigation Button */}
-            <div className="flex justify-start">
+            {/* Navigation Buttons */}
+            <div className="flex justify-between pt-4">
               <Button
                 onClick={() => setActiveTab("cash-flow")}
                 className="bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white"
               >
                 <ChevronLeft className="w-4 h-4 mr-2" />
                 Back to Cash Flow
+              </Button>
+              <Button
+                onClick={() => setActiveTab("insights")}
+                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
+              >
+                Next: Insights
+                <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
           </TabsContent>
