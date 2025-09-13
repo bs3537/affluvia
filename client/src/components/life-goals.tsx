@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Progress } from "@/components/ui/progress";
+import { Gauge } from "@/components/ui/gauge";
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import { GoalFormModal } from './education-goal-form';
@@ -186,6 +187,129 @@ const LifeGoalsComponent = () => {
   const [geminiRecommendations, setGeminiRecommendations] = useState<string[]>([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const queryClient = useQueryClient();
+
+  // Profile + retirement score for Retirement Readiness tile
+  const { data: profile } = useQuery({
+    queryKey: ['/api/financial-profile'],
+    queryFn: async () => {
+      const res = await fetch('/api/financial-profile', { credentials: 'include' });
+      if (!res.ok) return null;
+      return res.json();
+    }
+  });
+
+  const { data: retirementScore } = useQuery<{ probability?: number; probabilityDecimal?: number }>({
+    queryKey: ['/api/retirement-score'],
+    queryFn: async () => {
+      const res = await fetch('/api/retirement-score', { credentials: 'include' });
+      if (!res.ok) return {} as any;
+      return res.json();
+    }
+  });
+
+  // Helpers used by the retirement tile
+  const sumByType = (assets: any[], predicate: (t: string) => boolean) =>
+    (assets || []).reduce((sum, a) => {
+      const type = (a?.type || '').toString().toLowerCase();
+      const val = Number(a?.value || 0);
+      return predicate(type) ? sum + (Number.isFinite(val) ? val : 0) : sum;
+    }, 0);
+
+  const retirementAssetsTotal = (() => {
+    const assets = Array.isArray(profile?.assets) ? profile.assets : [];
+    const isRet = (t: string) => /401k|403b|ira|retirement|pension|457|tsp|sep|simple/.test(t) || /roth/.test(t);
+    return sumByType(assets, isRet);
+  })();
+
+  const cashLikeTotal = (() => {
+    const assets = Array.isArray(profile?.assets) ? profile.assets : [];
+    const isCash = (t: string) => /cash|savings|checking|money market|cd/.test(t);
+    return sumByType(assets, isCash);
+  })();
+
+  const baselineProb = (() => {
+    const p = retirementScore?.probabilityDecimal
+      ? (retirementScore?.probabilityDecimal || 0) * 100
+      : (retirementScore?.probability || 0);
+    return Math.max(0, Math.min(100, Math.round(p)));
+  })();
+
+  const readinessChip = (() => {
+    if (baselineProb >= 90) return { label: 'Confident', cls: 'bg-emerald-900/40 text-emerald-300 border-emerald-700/60' };
+    if (baselineProb >= 80) return { label: 'On track', cls: 'bg-blue-900/40 text-blue-300 border-blue-700/60' };
+    if (baselineProb >= 60) return { label: 'Caution', cls: 'bg-amber-900/40 text-amber-300 border-amber-700/60' };
+    return { label: 'Behind', cls: 'bg-red-900/40 text-red-300 border-red-700/60' };
+  })();
+
+  const optimizedProb = (() => {
+    const op = Number(profile?.optimizationVariables?.optimizedScore?.probabilityOfSuccess || 0);
+    return op > 1 ? Math.round(op) : Math.round(op * 100);
+  })();
+  const deltaPts = optimizedProb ? (optimizedProb - baselineProb) : 0;
+
+  const monthlyExp = Number(profile?.expectedMonthlyExpensesRetirement || 0);
+  const annualExpenses = monthlyExp * 12;
+  const annualGuaranteedIncome = (
+    Number(profile?.socialSecurityBenefit || 0) +
+    Number(profile?.spouseSocialSecurityBenefit || 0) +
+    Number(profile?.pensionBenefit || 0) +
+    Number(profile?.spousePensionBenefit || 0)
+  ) * 12;
+  const shortfall = Math.max(0, annualExpenses - annualGuaranteedIncome);
+  const swrFromProfile = (() => {
+    try {
+      const r = (profile?.monteCarloSimulation?.retirementSimulation?.results?.safeWithdrawalRate);
+      const v = Number(r);
+      return Number.isFinite(v) && v > 0 && v < 0.1 ? v : 0;
+    } catch { return 0; }
+  })();
+  const swr = swrFromProfile || 0.04;
+  const requiredCapital = swr > 0 ? (shortfall / swr) : Infinity;
+  const fundingProgress = requiredCapital > 0 && Number.isFinite(requiredCapital)
+    ? Math.max(0, Math.min(100, Math.round((retirementAssetsTotal / requiredCapital) * 100)))
+    : 0;
+
+  const yearsCash = annualExpenses > 0 ? (cashLikeTotal / annualExpenses) : 0;
+
+  const [gapCheck, setGapCheck] = useState<{ funded: boolean; first?: number; last?: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!profile) return;
+        const isMarried = profile.maritalStatus === 'married' || profile.maritalStatus === 'partnered';
+        const uRet = profile?.desiredRetirementAge || 65;
+        const sRet = isMarried ? (profile?.spouseDesiredRetirementAge || uRet) : undefined;
+        const bestUserSS = profile?.socialSecurityOptimization?.optimalSocialSecurityAge || profile?.socialSecurityClaimAge || 67;
+        const bestSpSS = isMarried ? (profile?.socialSecurityOptimization?.optimalSpouseSocialSecurityAge || profile?.spouseSocialSecurityClaimAge || bestUserSS) : undefined;
+        const payload: any = {
+          retirementAge: uRet,
+          ...(isMarried ? { spouseRetirementAge: sRet } : {}),
+          socialSecurityAge: bestUserSS,
+          ...(isMarried && bestSpSS ? { spouseSocialSecurityAge: bestSpSS } : {})
+        };
+        const res = await fetch('/api/calculate-optimized-withdrawal-sequence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(payload) });
+        if (!res.ok) { if (!cancelled) setGapCheck(null); return; }
+        const data = await res.json();
+        const rows: any[] = data?.projections || [];
+        let shortfallSum = 0; let first: number | undefined; let last: number | undefined;
+        for (const row of rows) {
+          const n = (v: any) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+          const gapU = row.age >= uRet && row.age < bestUserSS;
+          const gapS = isMarried && sRet !== undefined && bestSpSS !== undefined && row.spouseAge >= sRet && row.spouseAge < bestSpSS;
+          if (!gapU && !gapS) continue;
+          if (first === undefined) first = row.age; last = row.age;
+          const annualExp = n(row.monthlyExpenses) * 12;
+          const totalInc = n(row.totalIncome) || (n(row.workingIncome) + n(row.spouseWorkingIncome) + n(row.socialSecurity) + n(row.spouseSocialSecurity) + n(row.pension) + n(row.spousePension) + n(row.partTimeIncome) + n(row.spousePartTimeIncome));
+          const net = totalInc + n(row.totalWithdrawals) - n(row.withdrawalTax);
+          const deficit = Math.max(0, annualExp - net);
+          shortfallSum += deficit;
+        }
+        if (!cancelled) setGapCheck({ funded: shortfallSum <= 0, first, last });
+      } catch { if (!cancelled) setGapCheck(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [profile]);
 
   // Fetch life goals
   const { data: lifeGoals = [], isLoading: isLoadingLifeGoals } = useQuery({
@@ -787,7 +911,7 @@ const LifeGoalsComponent = () => {
                         <Icon className={`h-5 w-5 ${config.textColor}`} />
                       </div>
                       <div>
-                        <CardTitle className="text-lg text-white">{goal.goalName}</CardTitle>
+                        <CardTitle className="text-lg text-white">{goal.goalType === 'retirement' ? 'Retirement Readiness' : goal.goalName}</CardTitle>
                         <p className="text-sm text-gray-400">{config.description}</p>
                       </div>
                     </div>
@@ -803,8 +927,75 @@ const LifeGoalsComponent = () => {
                 </CardHeader>
                 
                 <CardContent className="space-y-4">
-                  {/* Progress Bar */}
-                  {(() => {
+                  {/* Retirement Readiness (specialized) */}
+                  {goal.goalType === 'retirement' && (
+                    <div className="space-y-4">
+                      {/* Primary metric: Success probability gauge */}
+                      <div className="flex items-center gap-3">
+                        <Gauge
+                          value={baselineProb}
+                          max={100}
+                          size="sm"
+                          showValue
+                          colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
+                          thresholds={{ medium: 60, high: 80 }}
+                        />
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-white font-semibold text-lg">{baselineProb}%</span>
+                            <span className={`text-[11px] px-2 py-0.5 rounded-full border ${readinessChip.cls}`}>{readinessChip.label}</span>
+                          </div>
+                          {deltaPts !== 0 && (
+                            <p className="text-xs text-gray-400">{deltaPts > 0 ? `+${deltaPts}` : `${deltaPts}`} pts with optimized plan</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Secondary metric: Funding progress */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs text-gray-400">Funding Progress</span>
+                          <span className="text-xs text-gray-300">{fundingProgress}%</span>
+                        </div>
+                        <div className="w-full bg-gray-700 rounded-full h-2">
+                          <div className={`h-2 rounded-full ${fundingProgress >= 100 ? 'bg-emerald-500' : fundingProgress >= 80 ? 'bg-blue-500' : fundingProgress >= 60 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${fundingProgress}%` }} />
+                        </div>
+                      </div>
+
+                      {/* Risk signals */}
+                      <div className="flex flex-wrap gap-2">
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full border ${gapCheck?.funded ? 'bg-emerald-900/30 text-emerald-300 border-emerald-700/50' : 'bg-amber-900/30 text-amber-300 border-amber-700/50'}`}>
+                          Gap years {gapCheck?.funded ? 'funded' : 'needs plan'}{gapCheck?.first && gapCheck?.last ? ` (${gapCheck.first}-${gapCheck.last})` : ''}
+                        </span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-blue-900/30 text-blue-200 border-blue-700/50">
+                          SS ages: You {profile?.socialSecurityClaimAge || '—'}{profile?.maritalStatus === 'married' && profile?.spouseSocialSecurityClaimAge ? ` / Sp ${profile.spouseSocialSecurityClaimAge}` : ''}
+                        </span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-purple-900/30 text-purple-200 border-purple-700/50">
+                          Cash buffer: {yearsCash.toFixed(1)} yrs
+                        </span>
+                      </div>
+
+                      {/* CTA row */}
+                      <div className="flex gap-2 pt-1">
+                        <Button onClick={() => navigateToPlanningCenter('retirement')} className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white" size="sm">
+                          Planning Center
+                        </Button>
+                        {(baselineProb < 80 || fundingProgress < 100) && (
+                          <Button onClick={() => navigateToPlanningCenter('retirement')} variant="outline" className="border-purple-500/40 text-purple-300 hover:bg-purple-900/20" size="sm">
+                            Optimize variables
+                          </Button>
+                        )}
+                        {gapCheck && !gapCheck.funded && (
+                          <Button onClick={() => navigateToPlanningCenter('retirement')} variant="outline" className="border-blue-500/40 text-blue-300 hover:bg-blue-900/20" size="sm">
+                            View Social Security timing
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Progress Bar (non-retirement generic) */}
+                  {goal.goalType !== 'retirement' && (() => {
                     const fundingPercent = calculateFundingPercentage(goal);
                     if (fundingPercent > 0 || goal.targetAmount) {
                       return (
@@ -827,7 +1018,8 @@ const LifeGoalsComponent = () => {
                     return null;
                   })()}
                   
-                  {/* Key Metrics */}
+                  {/* Key Metrics (non-retirement generic) */}
+                  {goal.goalType !== 'retirement' && (
                   <div className="grid grid-cols-2 gap-3">
                     {goal.targetAmount && (
                       <div className="bg-gray-700/30 p-2 rounded">
@@ -919,30 +1111,27 @@ const LifeGoalsComponent = () => {
                       </div>
                     )}
                   </div>
+                  )}
                   
-                  {/* Action Buttons */}
+                  {/* Action Buttons (non-retirement generic) */}
                   <div className="flex gap-2 pt-2">
-                    {goal.goalType === 'retirement' && (
+                    {goal.goalType === 'retirement' ? null : (
                       <>
                         <Button
                           size="sm"
                           variant="outline"
                           className="flex-1 bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-500"
                           onClick={() => {
-                            // Navigate to intake form
-                            window.dispatchEvent(new CustomEvent('navigateToIntake'));
+                            if (goal.goalType === 'education') handleEditGoal(goal);
+                            else {
+                              setSelectedGoal(goal);
+                              setSelectedGoalType(goal.goalType);
+                              setShowUniversalForm(true);
+                            }
                           }}
                         >
                           <Edit className="h-4 w-4 mr-1" />
                           Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => navigateToPlanningCenter('retirement')}
-                        >
-                          <Calculator className="h-4 w-4 mr-1" />
-                          Planning Center
                         </Button>
                       </>
                     )}
