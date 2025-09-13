@@ -92,35 +92,46 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
     const longevityAge = 93;
     const colaRate = 0.025; // 2.5% annual COLA
     
-    // Get baseline claiming ages from optimized plan first (Optimization tab), then profile.optimizationVariables, then intake form
+    // Planned claiming ages (baseline series) from optimized plan → then DB → intake
+    const isMarried = profile.maritalStatus === 'married' || profile.maritalStatus === 'partnered';
     const baselineUserClaimAge = (
-      variables?.retirementAge ??
-      profile?.optimizationVariables?.retirementAge ??
-      profile.desiredRetirementAge ?? 65
+      variables?.socialSecurityAge ??
+      profile?.optimizationVariables?.socialSecurityAge ??
+      profile.socialSecurityClaimAge ?? 67
     );
-    const baselineSpouseClaimAge = (
-      variables?.spouseRetirementAge ??
-      profile?.optimizationVariables?.spouseRetirementAge ??
-      profile.spouseDesiredRetirementAge ?? 65
-    );
+    const baselineSpouseClaimAge = isMarried ? (
+      variables?.spouseSocialSecurityAge ??
+      profile?.optimizationVariables?.spouseSocialSecurityAge ??
+      profile.spouseSocialSecurityClaimAge ?? baselineUserClaimAge
+    ) : baselineUserClaimAge;
     
-    // Get optimized claiming ages (from optimization form variables)
-    const optimizedUserClaimAge = variables?.socialSecurityAge || optData.combined.optimalUserAge;
-    const optimizedSpouseClaimAge = variables?.spouseSocialSecurityAge || optData.combined.optimalSpouseAge;
+    // Max lifetime SS income ages (optimized series)
+    const optimizedUserClaimAge = optData.combined.optimalUserAge || baselineUserClaimAge;
+    const optimizedSpouseClaimAge = isMarried ? (optData.combined.optimalSpouseAge || baselineSpouseClaimAge) : undefined;
     
-    // Get monthly benefits for baseline strategy (claiming at retirement)
-    const userMonthlyAtBaseline = optData.user.monthlyAtRetirement;
-    const spouseMonthlyAtBaseline = optData.spouse?.monthlyAtRetirement || 0;
+    // Monthly benefits for baseline (planned claiming ages)
+    let userMonthlyAtBaseline = 0;
+    let spouseMonthlyAtBaseline = 0;
+    if (optData.ageAnalysis) {
+      const baselineScenario = optData.ageAnalysis.find((s: any) =>
+        isMarried
+          ? (s.userAge === baselineUserClaimAge && s.spouseAge === baselineSpouseClaimAge)
+          : (s.userAge === baselineUserClaimAge)
+      );
+      if (baselineScenario) {
+        userMonthlyAtBaseline = baselineScenario.userMonthly;
+        spouseMonthlyAtBaseline = baselineScenario.spouseMonthly || 0;
+      }
+    }
     
-    // Get monthly benefits for optimized strategy
+    // Monthly benefits for optimized (max lifetime)
     let userMonthlyAtOptimized = 0;
     let spouseMonthlyAtOptimized = 0;
-    
-    // Find the monthly benefits for optimized claiming ages from ageAnalysis
     if (optData.ageAnalysis) {
-      const optimizedScenario = optData.ageAnalysis.find((s: any) => 
-        s.userAge === optimizedUserClaimAge && 
-        s.spouseAge === optimizedSpouseClaimAge
+      const optimizedScenario = optData.ageAnalysis.find((s: any) =>
+        isMarried
+          ? (s.userAge === optimizedUserClaimAge && s.spouseAge === (optimizedSpouseClaimAge ?? optimizedUserClaimAge))
+          : (s.userAge === optimizedUserClaimAge)
       );
       if (optimizedScenario) {
         userMonthlyAtOptimized = optimizedScenario.userMonthly;
@@ -228,10 +239,10 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
               )}
             </div>
             
-            {/* Baseline Strategy */}
+            {/* Planned Claiming Ages (Baseline) */}
             <div className="space-y-1 pt-1 border-t border-gray-700">
               <p className="text-gray-300 font-medium">
-                Baseline Strategy: {formatCurrency(data.retirementCombinedBenefit)}
+                Planned Claiming Ages: {formatCurrency(data.retirementCombinedBenefit)}
               </p>
               {(data.retirementUserBenefit > 0 || data.retirementSpouseBenefit > 0) && (
                 <div className="text-xs text-gray-400 pl-2">
@@ -269,10 +280,10 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
   const totalLifetimeBenefit = cashFlows[cashFlows.length - 1]?.cumulativeTotal || 0;
   const averageAnnualBenefit = totalLifetimeBenefit / cashFlows.length;
   const peakAnnualBenefit = Math.max(...cashFlows.map(f => f.combinedBenefit));
-  const baselineUserAge = profile?.desiredRetirementAge || 65;
-  const baselineSpouseAge = profile?.spouseDesiredRetirementAge || 65;
-  const optimizedUserAge = variables?.socialSecurityAge || optimizationData?.combined.optimalUserAge;
-  const optimizedSpouseAge = variables?.spouseSocialSecurityAge || optimizationData?.combined.optimalSpouseAge;
+  const baselineUserAge = variables?.socialSecurityAge || profile?.optimizationVariables?.socialSecurityAge || profile?.socialSecurityClaimAge || 67;
+  const baselineSpouseAge = variables?.spouseSocialSecurityAge || profile?.optimizationVariables?.spouseSocialSecurityAge || profile?.spouseSocialSecurityClaimAge || baselineUserAge;
+  const optimizedUserAge = optimizationData?.combined?.optimalUserAge || baselineUserAge;
+  const optimizedSpouseAge = optimizationData?.combined?.optimalSpouseAge || baselineSpouseAge;
 
   return (
     <Card className="bg-gradient-to-br from-gray-900 to-gray-800 border-gray-700 overflow-hidden">
@@ -355,7 +366,7 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
                       wrapperStyle={{ paddingTop: '20px' }}
                       iconType="rect"
                       formatter={(value) => {
-                        if (value === 'retirementCombinedBenefit') return 'Baseline Strategy';
+                        if (value === 'retirementCombinedBenefit') return 'Planned Claiming Ages';
                         if (value === 'combinedBenefit') return 'Max Lifetime SS Income';
                         return value;
                       }}
@@ -366,14 +377,14 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
                       x={baselineUserAge} 
                       stroke="#6B7280" 
                       strokeDasharray="5 5"
-                      label={{ value: `Baseline claim at ${baselineUserAge}`, position: 'top', fill: '#6B7280', fontSize: 11 }}
+                      label={{ value: `Planned claim at ${baselineUserAge}`, position: 'top', fill: '#6B7280', fontSize: 11 }}
                     />
                     {baselineSpouseAge && baselineSpouseAge !== baselineUserAge && (
                       <ReferenceLine 
                         x={baselineSpouseAge} 
                         stroke="#9CA3AF" 
                         strokeDasharray="5 5"
-                        label={{ value: `Spouse baseline at ${baselineSpouseAge}`, position: 'top', fill: '#9CA3AF', fontSize: 11 }}
+                        label={{ value: `Spouse planned at ${baselineSpouseAge}`, position: 'top', fill: '#9CA3AF', fontSize: 11 }}
                       />
                     )}
                     {optimizedUserAge !== baselineUserAge && (
@@ -407,8 +418,8 @@ export function AnnualSocialSecurityCashFlowsNew({ profile, isLocked = false, va
                 <Info className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
                 <div className="text-xs text-blue-300">
                   <p>
-                    This chart compares two claiming strategies: <span className="text-gray-300">Grey bars show baseline strategy (claiming at retirement)</span>, 
-                    while <span className="text-purple-300">purple bars show the optimized claiming strategy</span>. 
+                    This chart compares two claiming strategies: <span className="text-gray-300">Grey bars show planned claiming ages</span>, 
+                    while <span className="text-purple-300">purple bars show the Max Lifetime SS Income strategy</span>. 
                     Both include 2.5% annual COLA adjustments through age 93. 
                     {profile.maritalStatus === 'married' && (baselineUserAge !== baselineSpouseAge || optimizedUserAge !== optimizedSpouseAge) ? 
                     ' Each spouse\'s benefits begin at their individual claiming age based on the strategy.' : ''}

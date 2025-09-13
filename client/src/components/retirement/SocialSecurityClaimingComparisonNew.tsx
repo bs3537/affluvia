@@ -64,6 +64,21 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
   const [isLoading, setIsLoading] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(isLocked);
   const { toast } = useToast();
+  
+  // New: MC success impact (planned vs. best SS ages)
+  const [successImpact, setSuccessImpact] = useState<{ planned: number; best: number } | null>(null);
+  const [isSuccessLoading, setIsSuccessLoading] = useState(false);
+
+  // Gap-year funding
+  const [gapFunding, setGapFunding] = useState<{
+    isFunded: boolean;
+    shortfall: number;
+    gapYears: number;
+    firstGapAge?: number;
+    lastGapAge?: number;
+    totals: { taxable: number; taxDeferred: number; taxFree: number; hsa: number };
+  } | null>(null);
+  const [isGapLoading, setIsGapLoading] = useState(false);
 
   const fetchOptimization = async () => {
     setIsLoading(true);
@@ -105,6 +120,152 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
       setIsCollapsed(true);
     }
   }, [isLocked]);
+
+  // Helper to get MC success probability with overridden optimization variables
+  const getProbabilityWithVariables = async (ovars: any): Promise<number> => {
+    try {
+      const res = await fetch('/api/optimize-retirement-score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ optimizationVariables: ovars })
+      });
+      if (!res.ok) return 0;
+      const data = await res.json();
+      if (typeof data.probability === 'number') return data.probability;
+      if (typeof data.probabilityOfSuccess === 'number') return data.probabilityOfSuccess;
+      if (typeof data.probabilityDecimal === 'number') return data.probabilityDecimal * 100;
+      return 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  // Compute planned vs best SS-ages MC success and show delta
+  useEffect(() => {
+    if (!optimizationData) return;
+
+    const isMarried = profile.maritalStatus === 'married' || profile.maritalStatus === 'partnered';
+    const base: any = (variables && Object.keys(variables || {}).length ? variables : (profile?.optimizationVariables || {}));
+
+    const plannedUser = base?.socialSecurityAge ?? profile?.optimizationVariables?.socialSecurityAge ?? profile?.socialSecurityClaimAge ?? 67;
+    const plannedSpouse = isMarried
+      ? (base?.spouseSocialSecurityAge ?? profile?.optimizationVariables?.spouseSocialSecurityAge ?? profile?.spouseSocialSecurityClaimAge ?? plannedUser)
+      : undefined;
+
+    const plannedVars: any = {
+      ...base,
+      socialSecurityAge: plannedUser,
+      ...(isMarried ? { spouseSocialSecurityAge: plannedSpouse } : {})
+    };
+
+    const bestVars: any = {
+      ...plannedVars,
+      socialSecurityAge: optimizationData.combined.optimalUserAge,
+      ...(isMarried && optimizationData.combined.optimalSpouseAge
+        ? { spouseSocialSecurityAge: optimizationData.combined.optimalSpouseAge }
+        : {})
+    };
+
+    let cancelled = false;
+    setIsSuccessLoading(true);
+    Promise.all([getProbabilityWithVariables(plannedVars), getProbabilityWithVariables(bestVars)])
+      .then(([planned, best]) => { if (!cancelled) setSuccessImpact({ planned, best }); })
+      .catch(() => { if (!cancelled) setSuccessImpact(null); })
+      .finally(() => { if (!cancelled) setIsSuccessLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [optimizationData, variables]);
+
+  // Gap-year funding check for best SS ages (uses withdrawal sequence API)
+  useEffect(() => {
+    if (!optimizationData) return;
+
+    const isMarried = profile.maritalStatus === 'married' || profile.maritalStatus === 'partnered';
+
+    const userRetAge = variables?.retirementAge ?? profile?.optimizationVariables?.retirementAge ?? profile.desiredRetirementAge ?? 65;
+    const spouseRetAge = isMarried
+      ? (variables?.spouseRetirementAge ?? profile?.optimizationVariables?.spouseRetirementAge ?? profile.spouseDesiredRetirementAge ?? userRetAge)
+      : undefined;
+
+    const bestUserSS = optimizationData.combined.optimalUserAge;
+    const bestSpouseSS = isMarried ? optimizationData.combined.optimalSpouseAge : undefined;
+
+    const payload: any = {
+      retirementAge: userRetAge,
+      ...(isMarried ? { spouseRetirementAge: spouseRetAge } : {}),
+      socialSecurityAge: bestUserSS,
+      ...(isMarried && bestSpouseSS ? { spouseSocialSecurityAge: bestSpouseSS } : {})
+    };
+
+    let cancelled = false;
+    setIsGapLoading(true);
+    fetch('/api/calculate-optimized-withdrawal-sequence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload)
+    })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => {
+        if (cancelled) return;
+        const rows: any[] = data?.projections || [];
+        let shortfall = 0;
+        let gapYears = 0;
+        let firstGapAge: number | undefined;
+        let lastGapAge: number | undefined;
+        let taxable = 0, taxDeferred = 0, taxFree = 0, hsa = 0;
+
+        for (const row of rows) {
+          const gapUser = row.age >= userRetAge && row.age < bestUserSS;
+          const gapSpouse = isMarried && spouseRetAge !== undefined && bestSpouseSS !== undefined &&
+                            row.spouseAge >= spouseRetAge && row.spouseAge < bestSpouseSS;
+          if (!gapUser && !gapSpouse) continue;
+
+          gapYears++;
+          if (firstGapAge === undefined) firstGapAge = row.age;
+          lastGapAge = row.age;
+
+          const n = (v: any) => {
+            const x = Number(v);
+            return Number.isFinite(x) ? x : 0;
+          };
+
+          const annualExpenses = n(row.monthlyExpenses) * 12;
+
+          const guaranteedIncome =
+            n(row.workingIncome) + n(row.spouseWorkingIncome) +
+            n(row.socialSecurity) + n(row.spouseSocialSecurity) +
+            n(row.pension) + n(row.spousePension) +
+            n(row.partTimeIncome) + n(row.spousePartTimeIncome);
+
+          const totalIncome = n(row.totalIncome) || guaranteedIncome;
+          const netIncome = totalIncome + n(row.totalWithdrawals) - n(row.withdrawalTax);
+
+          const deficitRaw = annualExpenses - netIncome;
+          const deficit = Number.isFinite(deficitRaw) && deficitRaw > 0 ? deficitRaw : 0;
+          shortfall += deficit;
+
+          taxable += n(row.taxableWithdrawal);
+          taxDeferred += n(row.taxDeferredWithdrawal);
+          taxFree += n(row.taxFreeWithdrawal);
+          hsa += n(row.hsaWithdrawal);
+        }
+
+        setGapFunding({
+          isFunded: shortfall <= 0,
+          shortfall: Math.round(shortfall),
+          gapYears,
+          firstGapAge,
+          lastGapAge,
+          totals: { taxable: Math.round(taxable), taxDeferred: Math.round(taxDeferred), taxFree: Math.round(taxFree), hsa: Math.round(hsa) }
+        });
+      })
+      .catch(() => setGapFunding(null))
+      .finally(() => { if (!cancelled) setIsGapLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [optimizationData, variables, profile]);
 
   const formatCurrency = (value: number): string => {
     return new Intl.NumberFormat('en-US', {
@@ -398,7 +559,7 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
                 {/* Summary Stats - Moved above the chart */}
                 {scenarios.length > 1 && (
                   <div className="mt-4 p-4 bg-gray-900/50 rounded-lg border border-gray-700">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div>
                         <p className="text-xs text-gray-400 mb-1">Best Strategy</p>
                         <p className="text-lg font-bold text-green-400">
@@ -407,29 +568,92 @@ export function SocialSecurityClaimingComparisonNew({ profile, isLocked = false,
                         <p className="text-xs text-gray-500">{formatCurrency(scenarios[0].cumulative)} lifetime</p>
                       </div>
                       <div>
-                        <p className="text-xs text-gray-400 mb-1">vs. Baseline Strategy</p>
                         {(() => {
-                          // Find the baseline strategy scenario
-                          const userRetirementAge = profile.desiredRetirementAge || 65;
-                          const spouseRetirementAge = profile.spouseDesiredRetirementAge || 65;
-                          const isMarried = profile.maritalStatus === 'married' || profile.maritalStatus === 'partnered';
-                          
-                          // Look for baseline strategy in the list
-                          let baselineScenario = scenarios.find(s => 
+                          // Prefer comparing against planned (optimized) claiming ages if present, else baseline
+                          const plannedScenario = scenarios.find(
+                            (s) => s.label.startsWith('✨ Planned Claiming Ages') || s.isOptimal
+                          );
+                          const baselineScenario = scenarios.find((s) =>
                             s.label.includes('Baseline Strategy')
                           );
-                          
-                          const difference = baselineScenario ? scenarios[0].cumulative - baselineScenario.cumulative : 0;
-                          const percentIncrease = baselineScenario && baselineScenario.cumulative > 0 ? (difference / baselineScenario.cumulative * 100) : 0;
-                          
+                          const target = plannedScenario || baselineScenario;
+
+                          const label = plannedScenario ? 'Planned Claiming Ages' : 'Baseline Strategy';
+                          const difference = target ? scenarios[0].cumulative - target.cumulative : 0;
+                          const percentIncrease =
+                            target && target.cumulative > 0
+                              ? (difference / target.cumulative) * 100
+                              : 0;
+
                           return (
                             <>
+                              <p className="text-xs text-gray-400 mb-1">vs. {label}</p>
                               <p className="text-lg font-bold text-yellow-400">
-                                {difference > 0 ? '+' : ''}{formatCurrency(Math.abs(difference))}
+                                {difference > 0 ? '+' : ''}
+                                {formatCurrency(Math.abs(difference))}
                               </p>
                               <p className="text-xs text-gray-500">
-                                {difference !== 0 ? `${difference > 0 ? '+' : ''}${Math.abs(percentIncrease).toFixed(1)}% ${difference > 0 ? 'more' : 'less'} income` : 'Same as optimal'}
+                                {difference !== 0
+                                  ? `${difference > 0 ? '+' : ''}${Math.abs(percentIncrease).toFixed(1)}% ${
+                                      difference > 0 ? 'more' : 'less'
+                                    } income`
+                                  : `Same as ${plannedScenario ? 'planned' : 'baseline'}`}
                               </p>
+                            </>
+                          );
+                        })()}
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-400 mb-1">Impact on Retirement Success</p>
+                        {isSuccessLoading ? (
+                          <p className="text-xs text-gray-500">Calculating...</p>
+                        ) : successImpact ? (
+                          <>
+                            <p className={`text-lg font-bold ${(successImpact.best - successImpact.planned) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {(successImpact.best - successImpact.planned >= 0 ? '+' : '') + (successImpact.best - successImpact.planned).toFixed(1)} pts
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              ({Math.round(successImpact.best)}% if selected)
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-xs text-gray-500">—</p>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-400 mb-1">Funding Gap Check</p>
+                        {isGapLoading ? (
+                          <p className="text-xs text-gray-500">Checking...</p>
+                        ) : (() => {
+                          // Reuse the same difference calc for condition #1
+                          const planned = scenarios.find(s => s.label.startsWith('✨ Planned Claiming Ages') || s.isOptimal)
+                            || scenarios.find(s => s.label.includes('Baseline Strategy'));
+                          const gainPositive = planned ? (scenarios[0].cumulative - planned.cumulative) > 0 : true;
+                          const probOK = successImpact ? successImpact.best >= 80 : false;
+                          const funded = !!gapFunding?.isFunded;
+
+                          const go = gainPositive && probOK && funded;
+
+                          const mixTotals = gapFunding?.totals || { taxable: 0, taxDeferred: 0, taxFree: 0, hsa: 0 };
+                          const totalGapDraw = Math.max(1, mixTotals.taxable + mixTotals.taxDeferred + mixTotals.taxFree + mixTotals.hsa);
+                          const pct = (v: number) => Math.round((v / totalGapDraw) * 100);
+
+                          return (
+                            <>
+                              <p className={`text-lg font-bold ${go ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                {go ? 'Green signal' : 'Needs review'}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {successImpact ? `${Math.round(successImpact.best)}% if selected` : ''}{gapFunding?.gapYears ? ` • Gap ${gapFunding.firstGapAge}-${gapFunding.lastGapAge}` : ''}
+                              </p>
+                              {gapFunding && (
+                                <p className="text-[11px] text-gray-400 mt-1">
+                                  Funding mix (gap years): Taxable {pct(mixTotals.taxable)}%, Tax-deferred {pct(mixTotals.taxDeferred)}%, Roth {pct(mixTotals.taxFree)}%
+                                </p>
+                              )}
+                              {!funded && gapFunding && (
+                                <p className="text-[11px] text-red-400 mt-1">Shortfall: {formatCurrency(gapFunding.shortfall)}</p>
+                              )}
                             </>
                           );
                         })()}
