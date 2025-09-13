@@ -5821,7 +5821,7 @@ SOCIAL SECURITY OPTIMIZATION: Consider claiming age impacts on lifetime income a
 
       const prompt = `
 You are a CFP professional. Analyze the retirement planning data above and return 5-8 high-impact insights.
-
+Think hard.
 Rules:
 - Rank insights by priority: 1 (highest) to 3 (lower)
 - Each insight must include: title, action (specific next step), why (why it matters), and an estimated dollar impact (positive = savings/benefit)
