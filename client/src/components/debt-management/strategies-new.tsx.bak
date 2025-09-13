@@ -1,0 +1,719 @@
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Zap,
+  TrendingUp,
+  GraduationCap,
+  CreditCard,
+  ArrowRight,
+  Sparkles,
+  Target,
+  DollarSign,
+  Award,
+  ChevronRight,
+  Percent,
+  Calendar,
+  CheckCircle,
+  Info,
+  Brain,
+  TrendingDown,
+  X,
+  AlertTriangle,
+  ShieldCheck,
+  Clock,
+  Calculator
+} from "lucide-react";
+import { formatCurrency } from "@/lib/utils";
+import { useState } from "react";
+import { InAppBrowser } from "@/components/ui/in-app-browser";
+<<<<<<< Updated upstream
+import { DebtPayoffModal } from "./debt-payoff-modal";
+=======
+import { DebtPayoffTracker } from "./debt-payoff-tracker";
+>>>>>>> Stashed changes
+
+interface Debt {
+  id: number;
+  debtName: string;
+  debtType: string;
+  currentBalance: number | string;
+  annualInterestRate: number | string;
+  minimumPayment: number | string;
+  status: string;
+}
+
+interface StrategiesNewProps {
+  totalDebt?: number;
+  monthlyPayment?: number;
+  debts?: Debt[];
+}
+
+export function StrategiesNew({ totalDebt = 0, monthlyPayment = 0, debts = [] }: StrategiesNewProps) {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isStudentLoanModalOpen, setIsStudentLoanModalOpen] = useState(false);
+  const [isBrowserOpen, setIsBrowserOpen] = useState(false);
+  const [isStudentLoanBrowserOpen, setIsStudentLoanBrowserOpen] = useState(false);
+<<<<<<< Updated upstream
+  const [isPayoffModalOpen, setIsPayoffModalOpen] = useState(false);
+=======
+  const [isHybridWizardOpen, setIsHybridWizardOpen] = useState(false);
+>>>>>>> Stashed changes
+
+  // Calculate credit card debt and potential savings
+  const creditCardDebts = debts.filter(d => 
+    d.debtType === 'credit_card' && d.status === 'active'
+  );
+  
+  const totalCreditCardDebt = creditCardDebts.reduce((sum, debt) => {
+    const balance = typeof debt.currentBalance === 'string' 
+      ? parseFloat(debt.currentBalance) 
+      : debt.currentBalance;
+    return sum + balance;
+  }, 0);
+
+  const avgCreditCardRate = creditCardDebts.length > 0
+    ? creditCardDebts.reduce((sum, debt) => {
+        const rate = typeof debt.annualInterestRate === 'string'
+          ? parseFloat(debt.annualInterestRate)
+          : debt.annualInterestRate;
+        return sum + rate;
+      }, 0) / creditCardDebts.length
+    : 18; // Default to 18% if no credit cards
+
+  // Calculate realistic annual interest savings
+  // Annual interest on current credit card debt
+  const annualInterestOnCreditCards = totalCreditCardDebt * (avgCreditCardRate / 100);
+  // This is the annual savings if transferred to 0% APR card
+  const potentialSavings = annualInterestOnCreditCards;
+
+  // Check if user has federal student loans
+  const hasFederalStudentLoans = debts.some(d => 
+    d.debtType === 'federal_student_loan' && d.status === 'active'
+  );
+  return (
+    <div className="space-y-6">
+      {/* Header Section */}
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-white mb-2">
+          Smart Debt Elimination Strategies
+        </h2>
+        <p className="text-gray-400">
+          Discover personalized strategies to become debt-free faster and save thousands in interest
+        </p>
+      </div>
+
+      {/* Strategy Tiles Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* Recommended Payoff Strategy Tile */}
+        <Card className="bg-gray-900 border-gray-700 hover:border-purple-500/50 transition-all duration-300 hover:shadow-xl hover:shadow-purple-900/30 cursor-pointer group">
+          <CardHeader>
+            <div className="flex items-start justify-between mb-3">
+              <div className="p-3 bg-purple-600/20 rounded-lg group-hover:scale-110 transition-transform border border-purple-500/30">
+                <Brain className="w-6 h-6 text-purple-400" />
+              </div>
+              <Badge className="bg-green-900/50 text-green-400 border-green-500/50">
+                AI Recommended
+              </Badge>
+            </div>
+            <CardTitle className="text-white text-xl">
+              Recommended Payoff Strategy
+            </CardTitle>
+            <CardDescription className="text-gray-400 mt-2">
+              <span className="text-purple-400 font-semibold">Hybrid (Snowball + Avalanche)</span>
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle className="w-4 h-4 text-green-400" />
+                <span className="text-gray-300">Combines psychological wins with interest savings</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Target className="w-4 h-4 text-blue-400" />
+                <span className="text-gray-300">Pays off 2-3 small debts first for motivation</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <TrendingUp className="w-4 h-4 text-purple-400" />
+                <span className="text-gray-300">Then tackles high-interest debts</span>
+              </div>
+            </div>
+            
+            <div className="pt-3 border-t border-gray-700">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-gray-500">Potential Interest Savings</span>
+                <span className="text-sm font-bold text-green-400">
+                  {formatCurrency(totalDebt * 0.15)}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-gray-500">Time to Debt Freedom</span>
+                <span className="text-sm font-bold text-blue-400">
+                  {Math.round(totalDebt / (monthlyPayment * 12)) || 3} years faster
+                </span>
+              </div>
+            </div>
+
+            <Button 
+<<<<<<< Updated upstream
+              onClick={() => setIsPayoffModalOpen(true)}
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white group-hover:shadow-lg transition-all border border-purple-500/30"
+            >
+              View Personalized Plan
+=======
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white group-hover:shadow-lg transition-all border border-purple-500/30"
+              onClick={() => setIsHybridWizardOpen(true)}
+            >
+              View Management Strategy
+>>>>>>> Stashed changes
+              <ChevronRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Federal Student Loan Repayment Options Tile - Only show if user has federal student loans */}
+        {hasFederalStudentLoans && (
+          <Card className="bg-gray-900 border-gray-700 hover:border-blue-500/50 transition-all duration-300 hover:shadow-xl hover:shadow-blue-900/30 cursor-pointer group">
+          <CardHeader>
+            <div className="flex items-start justify-between mb-3">
+              <div className="p-3 bg-blue-600/20 rounded-lg group-hover:scale-110 transition-transform border border-blue-500/30">
+                <GraduationCap className="w-6 h-6 text-blue-400" />
+              </div>
+              <Badge className="bg-yellow-900/50 text-yellow-400 border-yellow-500/50">
+                Federal Programs
+              </Badge>
+            </div>
+            <CardTitle className="text-white text-xl flex items-center justify-between">
+              <span>Federal Student Loan Repayment Options</span>
+              <Dialog open={isStudentLoanModalOpen} onOpenChange={setIsStudentLoanModalOpen}>
+                <DialogTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-6 w-6 p-0 hover:bg-gray-800 rounded-full"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Info className="h-4 w-4 text-gray-400 hover:text-white" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-gray-900 border-gray-700 text-white max-w-2xl max-h-[90vh] overflow-hidden">
+                  <DialogHeader>
+                    <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                      <GraduationCap className="w-5 h-5 text-blue-400" />
+                      Federal Student Loan Repayment Strategies
+                    </DialogTitle>
+                    <DialogDescription className="text-gray-400">
+                      Understanding income-driven plans, forgiveness programs, and repayment strategies
+                    </DialogDescription>
+                  </DialogHeader>
+                  <ScrollArea className="h-[60vh] pr-4">
+                    <div className="space-y-6">
+                      {/* Income-Driven Repayment Plans */}
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-blue-400 flex items-center gap-2">
+                          <DollarSign className="w-5 h-5" />
+                          Income-Driven Repayment (IDR) Plans
+                        </h3>
+                        
+                        <div className="space-y-3">
+                          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <h4 className="font-semibold text-white mb-2 flex items-center gap-2">
+                              <Calculator className="w-4 h-4 text-green-400" />
+                              SAVE Plan (Formerly REPAYE)
+                            </h4>
+                            <p className="text-sm text-gray-300 mb-2">
+                              Newest and most generous plan. Payments are 5% of discretionary income for undergraduate loans, 10% for graduate loans.
+                            </p>
+                            <div className="mt-2 p-2 bg-gray-900 rounded">
+                              <p className="text-xs text-green-400">
+                                Key Benefit: No interest accrual if you make full monthly payments. Forgiveness after 10-25 years.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <h4 className="font-semibold text-white mb-2 flex items-center gap-2">
+                              <Percent className="w-4 h-4 text-blue-400" />
+                              Income-Based Repayment (IBR)
+                            </h4>
+                            <p className="text-sm text-gray-300">
+                              Payments are 10% of discretionary income (new borrowers) or 15% (older loans). Monthly payments won't exceed 10-year standard plan amount.
+                            </p>
+                            <p className="text-xs text-blue-400 mt-2">
+                              Forgiveness: After 20-25 years of qualifying payments
+                            </p>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <h4 className="font-semibold text-white mb-2 flex items-center gap-2">
+                              <TrendingDown className="w-4 h-4 text-purple-400" />
+                              Pay As You Earn (PAYE)
+                            </h4>
+                            <p className="text-sm text-gray-300">
+                              Payments are 10% of discretionary income, but never more than standard 10-year payment. Must demonstrate financial hardship.
+                            </p>
+                            <p className="text-xs text-purple-400 mt-2">
+                              Best for: Recent graduates with high debt relative to income
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Forgiveness Programs */}
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-green-400 flex items-center gap-2">
+                          <Award className="w-5 h-5" />
+                          Loan Forgiveness Programs
+                        </h3>
+                        
+                        <div className="space-y-3">
+                          <div className="bg-gradient-to-r from-green-900/20 to-emerald-900/20 rounded-lg p-4 border border-green-800/50">
+                            <h4 className="font-semibold text-white mb-2">Public Service Loan Forgiveness (PSLF)</h4>
+                            <p className="text-sm text-gray-300 mb-2">
+                              Complete forgiveness after 120 qualifying monthly payments (10 years) while working full-time for qualifying employers.
+                            </p>
+                            <ul className="text-xs text-gray-400 space-y-1 ml-4">
+                              <li>• Government organizations (federal, state, local)</li>
+                              <li>• 501(c)(3) nonprofits</li>
+                              <li>• Must be on IDR plan and have Direct Loans</li>
+                            </ul>
+                            <p className="text-xs text-green-400 mt-2 font-semibold">
+                              Tax-free forgiveness - huge benefit!
+                            </p>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <h4 className="font-semibold text-white mb-2">IDR Forgiveness</h4>
+                            <p className="text-sm text-gray-300">
+                              Remaining balance forgiven after 20-25 years of payments on income-driven plans. Currently taxable as income (may change).
+                            </p>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <h4 className="font-semibold text-white mb-2">Teacher Loan Forgiveness</h4>
+                            <p className="text-sm text-gray-300">
+                              Up to $17,500 forgiveness for teaching 5 years in low-income schools. Can't double-dip with PSLF for same years.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Strategy Tips */}
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-yellow-400 flex items-center gap-2">
+                          <Brain className="w-5 h-5" />
+                          Smart Repayment Strategies
+                        </h3>
+                        
+                        <div className="space-y-3">
+                          <div className="bg-gray-800 rounded-lg p-4 border border-yellow-900/50">
+                            <h4 className="font-semibold text-white mb-2">Annual Recertification</h4>
+                            <p className="text-sm text-gray-300">
+                              Update income annually for IDR plans. Missing deadlines can increase payments to standard amount.
+                            </p>
+                            <p className="text-xs text-yellow-400 mt-2">
+                              Pro tip: Recertify early if income decreased
+                            </p>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-yellow-900/50">
+                            <h4 className="font-semibold text-white mb-2">Tax Strategy for Forgiveness</h4>
+                            <p className="text-sm text-gray-300">
+                              IDR forgiveness may be taxable. Save ~25-35% of forgiven amount for taxes. PSLF is always tax-free.
+                            </p>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-yellow-900/50">
+                            <h4 className="font-semibold text-white mb-2">Married Filing Separately</h4>
+                            <p className="text-sm text-gray-300">
+                              Can lower IDR payments by excluding spouse's income, but lose other tax benefits. Calculate both ways.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Best Practices */}
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-cyan-400 flex items-center gap-2">
+                          <ShieldCheck className="w-5 h-5" />
+                          Action Steps
+                        </h3>
+                        
+                        <div className="bg-gradient-to-r from-cyan-900/20 to-blue-900/20 rounded-lg p-4 border border-cyan-800/50">
+                          <ul className="space-y-2">
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Use Federal Student Aid's Loan Simulator to compare plans</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Consolidate if needed for PSLF eligibility</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Submit PSLF forms annually to track progress</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Keep payment records and employment certification</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Set calendar reminders for annual recertification</span>
+                            </li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </DialogContent>
+              </Dialog>
+            </CardTitle>
+            <CardDescription className="text-gray-400 mt-2">
+              Explore income-driven plans & forgiveness programs
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm">
+                <DollarSign className="w-4 h-4 text-green-400" />
+                <span className="text-gray-300">Income-Based Repayment (IBR)</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Calendar className="w-4 h-4 text-blue-400" />
+                <span className="text-gray-300">Pay As You Earn (PAYE)</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Award className="w-4 h-4 text-purple-400" />
+                <span className="text-gray-300">Public Service Loan Forgiveness</span>
+              </div>
+            </div>
+            
+            <div className="pt-3 border-t border-gray-700">
+              <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div className="flex items-start gap-2">
+                  <Info className="w-4 h-4 text-blue-400 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-gray-300">
+                      Could reduce monthly payments by up to <span className="text-blue-400 font-semibold">60%</span>
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Some plans offer forgiveness after 20-25 years
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <Button 
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsStudentLoanBrowserOpen(true);
+              }}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white group-hover:shadow-lg transition-all border border-blue-500/30"
+            >
+              Compare Plans
+              <ChevronRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+            </Button>
+          </CardContent>
+          </Card>
+        )}
+
+        {/* Best Balance Transfer Credit Cards Tile */}
+        <Card className="bg-gray-900 border-gray-700 hover:border-green-500/50 transition-all duration-300 hover:shadow-xl hover:shadow-green-900/30 cursor-pointer group">
+          <CardHeader>
+            <div className="flex items-start justify-between mb-3">
+              <div className="p-3 bg-green-600/20 rounded-lg group-hover:scale-110 transition-transform border border-green-500/30">
+                <CreditCard className="w-6 h-6 text-green-400" />
+              </div>
+              <Badge className="bg-red-900/50 text-red-400 border-red-500/50">
+                0% APR Offers
+              </Badge>
+            </div>
+            <CardTitle className="text-white text-xl flex items-center justify-between">
+              <span>Best Balance Transfer Credit Cards</span>
+              <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+                <DialogTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-6 w-6 p-0 hover:bg-gray-800 rounded-full"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Info className="h-4 w-4 text-gray-400 hover:text-white" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-gray-900 border-gray-700 text-white max-w-2xl max-h-[90vh] overflow-hidden">
+                  <DialogHeader>
+                    <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                      <CreditCard className="w-5 h-5 text-green-400" />
+                      Why Balance Transfers?
+                    </DialogTitle>
+                    <DialogDescription className="text-gray-400">
+                      Learn how 0% balance transfer cards can help you eliminate debt faster
+                    </DialogDescription>
+                  </DialogHeader>
+                  <ScrollArea className="h-[60vh] pr-4">
+                    <div className="space-y-6">
+                      {/* Benefits Section */}
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-green-400 flex items-center gap-2">
+                          <CheckCircle className="w-5 h-5" />
+                          Key Benefits
+                        </h3>
+                        
+                        <div className="space-y-3">
+                          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <h4 className="font-semibold text-white mb-2 flex items-center gap-2">
+                              <DollarSign className="w-4 h-4 text-green-400" />
+                              Eliminate Interest Charges
+                            </h4>
+                            <p className="text-sm text-gray-300">
+                              Transfer high-interest balances (avg 20%+ APR) to a 0% card. Every payment goes directly to principal, not interest.
+                            </p>
+                            <div className="mt-2 p-2 bg-gray-900 rounded">
+                              <p className="text-xs text-green-400">
+                                Example: $6,369 balance at 22.8% APR = $1,211 in interest over 18 months. With 0% APR = $0 interest.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <h4 className="font-semibold text-white mb-2 flex items-center gap-2">
+                              <Clock className="w-4 h-4 text-blue-400" />
+                              Pay Off Debt Faster
+                            </h4>
+                            <p className="text-sm text-gray-300">
+                              Without interest accumulating, you can pay off the same debt 3-6 months faster with the same monthly payment.
+                            </p>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <h4 className="font-semibold text-white mb-2 flex items-center gap-2">
+                              <Target className="w-4 h-4 text-purple-400" />
+                              Simplify Multiple Payments
+                            </h4>
+                            <p className="text-sm text-gray-300">
+                              Consolidate multiple credit card balances into one payment. Easier to manage and reduces risk of missed payments.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Important Considerations */}
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-yellow-400 flex items-center gap-2">
+                          <AlertTriangle className="w-5 h-5" />
+                          Important Considerations
+                        </h3>
+                        
+                        <div className="space-y-3">
+                          <div className="bg-gray-800 rounded-lg p-4 border border-yellow-900/50">
+                            <h4 className="font-semibold text-white mb-2">Balance Transfer Fees</h4>
+                            <p className="text-sm text-gray-300">
+                              Most cards charge 3-5% of the transferred amount. Compare this fee against your interest savings.
+                            </p>
+                            <p className="text-xs text-yellow-400 mt-2">
+                              Tip: Look for cards with no balance transfer fee during the first 60 days.
+                            </p>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-yellow-900/50">
+                            <h4 className="font-semibold text-white mb-2">Time Limits</h4>
+                            <p className="text-sm text-gray-300">
+                              0% APR periods typically last 12-21 months. Plan to pay off your balance before the promotional period ends.
+                            </p>
+                          </div>
+
+                          <div className="bg-gray-800 rounded-lg p-4 border border-yellow-900/50">
+                            <h4 className="font-semibold text-white mb-2">Don't Add New Debt</h4>
+                            <p className="text-sm text-gray-300">
+                              Keep old cards open but unused. Adding new charges while paying off transferred balances defeats the purpose.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* How to Use Correctly */}
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-blue-400 flex items-center gap-2">
+                          <ShieldCheck className="w-5 h-5" />
+                          Best Practices
+                        </h3>
+                        
+                        <div className="bg-gradient-to-r from-blue-900/20 to-cyan-900/20 rounded-lg p-4 border border-blue-800/50">
+                          <ul className="space-y-2">
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Calculate if savings exceed fees before transferring</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Create a payment plan to eliminate debt within 0% period</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Set up automatic payments to avoid missing due dates</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Keep old cards open but stop using them</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5" />
+                              <span className="text-sm text-gray-300">Don't make new purchases on the balance transfer card</span>
+                            </li>
+                          </ul>
+                        </div>
+                      </div>
+
+                      {/* Quick Calculator */}
+                      <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-purple-400 flex items-center gap-2">
+                          <Calculator className="w-5 h-5" />
+                          Quick Math
+                        </h3>
+                        
+                        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                          <p className="text-sm text-gray-300 mb-3">
+                            To pay off your balance during the 0% period:
+                          </p>
+                          <div className="bg-gray-900 rounded p-3">
+                            <p className="text-center text-green-400 font-mono">
+                              Monthly Payment = Balance ÷ Months in 0% Period
+                            </p>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-3">
+                            Example: $5,000 balance with 15-month 0% period = $334/month
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </ScrollArea>
+                  <div className="mt-4 pt-4 border-t border-gray-700">
+                    <Button 
+                      onClick={() => setIsModalOpen(false)}
+                      className="w-full bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      Got It!
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </CardTitle>
+            <CardDescription className="text-gray-400 mt-2">
+              Save on interest with 0% APR balance transfer cards
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm">
+                <Percent className="w-4 h-4 text-red-400" />
+                <span className="text-gray-300">0% APR for up to 21 months</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Sparkles className="w-4 h-4 text-yellow-400" />
+                <span className="text-gray-300">No annual fee options available</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <TrendingDown className="w-4 h-4 text-green-400" />
+                <span className="text-gray-300">Consolidate multiple high-interest debts</span>
+              </div>
+            </div>
+            
+            <div className="pt-3 border-t border-gray-700">
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-500">Potential Interest Savings</span>
+                  <span className="text-sm font-bold text-green-400">
+                    {totalCreditCardDebt > 0 
+                      ? formatCurrency(potentialSavings) + '/year'
+                      : '$0/year'}
+                  </span>
+                </div>
+                <div className="bg-gray-800 rounded-lg p-2 border border-gray-700">
+                  <p className="text-xs text-center text-green-400">
+                    Pre-qualified offers with no credit impact
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <Button 
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsBrowserOpen(true);
+              }}
+              className="w-full bg-green-600 hover:bg-green-700 text-white group-hover:shadow-lg transition-all border border-green-500/30"
+            >
+              Find Best Cards
+              <ChevronRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Bottom Info Section */}
+      <div className="mt-8 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-primary/20 rounded-lg">
+            <Zap className="w-5 h-5 text-primary" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-white">
+              Personalized recommendations based on your financial profile
+            </p>
+            <p className="text-xs text-gray-400 mt-1">
+              Click on any strategy to explore detailed plans and see how much you could save
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* In-App Browser for Balance Transfer Cards */}
+      <InAppBrowser
+        isOpen={isBrowserOpen}
+        onClose={() => setIsBrowserOpen(false)}
+        url="https://money.usnews.com/credit-cards/balance-transfer"
+        title="Best Balance Transfer Credit Cards - US News"
+      />
+
+      {/* In-App Browser for Student Loan Repayment Options */}
+      <InAppBrowser
+        isOpen={isStudentLoanBrowserOpen}
+        onClose={() => setIsStudentLoanBrowserOpen(false)}
+        url="https://studentaid.gov/manage-loans/repayment/plans#income-driven"
+        title="Federal Student Loan Repayment Plans - StudentAid.gov"
+      />
+
+<<<<<<< Updated upstream
+      {/* Debt Payoff Modal */}
+      <DebtPayoffModal
+        isOpen={isPayoffModalOpen}
+        onClose={() => setIsPayoffModalOpen(false)}
+        debts={debts}
+=======
+      {/* Debt Payoff Tracker Modal */}
+      <DebtPayoffTracker
+        isOpen={isHybridWizardOpen}
+        onClose={() => setIsHybridWizardOpen(false)}
+        debts={debts}
+        onDebtsUpdate={() => {
+          // Refresh debts data if needed
+          window.location.reload();
+        }}
+>>>>>>> Stashed changes
+      />
+    </div>
+  );
+}

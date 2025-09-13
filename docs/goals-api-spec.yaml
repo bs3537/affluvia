@@ -1,0 +1,463 @@
+openapi: 3.0.0
+info:
+  title: Affluvia Goals API
+  description: REST API for Goals-Based Planning Center
+  version: 1.0.0
+  
+servers:
+  - url: https://app.affluvia.com/api
+    description: Production server
+  - url: http://localhost:3000/api
+    description: Development server
+
+security:
+  - cookieAuth: []
+
+paths:
+  /goals:
+    get:
+      summary: Get all goals for authenticated user
+      tags:
+        - Goals
+      responses:
+        '200':
+          description: List of goals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    
+    post:
+      summary: Create a new goal
+      tags:
+        - Goals
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGoal'
+      responses:
+        '201':
+          description: Goal created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /goals/{goalId}:
+    get:
+      summary: Get a specific goal
+      tags:
+        - Goals
+      parameters:
+        - $ref: '#/components/parameters/goalId'
+      responses:
+        '200':
+          description: Goal details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    patch:
+      summary: Update a goal
+      tags:
+        - Goals
+      parameters:
+        - $ref: '#/components/parameters/goalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGoal'
+      responses:
+        '200':
+          description: Goal updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    delete:
+      summary: Delete a goal
+      tags:
+        - Goals
+      parameters:
+        - $ref: '#/components/parameters/goalId'
+      responses:
+        '204':
+          description: Goal deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /goals/probability:
+    get:
+      summary: Calculate probabilities for all goals
+      tags:
+        - Goals
+      responses:
+        '200':
+          description: Goal probabilities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    goalId:
+                      type: integer
+                    probabilityPct:
+                      type: number
+                      minimum: 0
+                      maximum: 100
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /goals/{goalId}/tasks:
+    get:
+      summary: Get tasks for a goal
+      tags:
+        - Tasks
+      parameters:
+        - $ref: '#/components/parameters/goalId'
+      responses:
+        '200':
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GoalTask'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    post:
+      summary: Create a task for a goal
+      tags:
+        - Tasks
+      parameters:
+        - $ref: '#/components/parameters/goalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTask'
+      responses:
+        '201':
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalTask'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tasks/{taskId}:
+    patch:
+      summary: Update a task
+      tags:
+        - Tasks
+      parameters:
+        - $ref: '#/components/parameters/taskId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTask'
+      responses:
+        '200':
+          description: Task updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalTask'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    delete:
+      summary: Delete a task
+      tags:
+        - Tasks
+      parameters:
+        - $ref: '#/components/parameters/taskId'
+      responses:
+        '204':
+          description: Task deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: connect.sid
+  
+  parameters:
+    goalId:
+      name: goalId
+      in: path
+      required: true
+      schema:
+        type: integer
+    
+    taskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: integer
+  
+  schemas:
+    Goal:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        type:
+          type: string
+          enum: [retirement, college, home, travel, healthcare, custom]
+        description:
+          type: string
+        targetAmountToday:
+          type: string
+        targetDate:
+          type: string
+          format: date-time
+        inflationAssumptionPct:
+          type: string
+        priority:
+          type: integer
+        fundingSourceAccountIds:
+          type: array
+          items:
+            type: string
+        currentSavings:
+          type: string
+        riskPreference:
+          type: string
+          enum: [conservative, moderate, aggressive]
+        successThresholdPct:
+          type: string
+        notes:
+          type: string
+        probabilityOfSuccess:
+          type: string
+        lastCalculatedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    
+    CreateGoal:
+      type: object
+      required:
+        - type
+        - description
+        - targetAmountToday
+        - targetDate
+      properties:
+        type:
+          type: string
+          enum: [retirement, college, home, travel, healthcare, custom]
+        description:
+          type: string
+        targetAmountToday:
+          type: string
+        targetDate:
+          type: string
+          format: date-time
+        inflationAssumptionPct:
+          type: string
+          default: "2.5"
+        priority:
+          type: integer
+          default: 1
+        fundingSourceAccountIds:
+          type: array
+          items:
+            type: string
+        currentSavings:
+          type: string
+          default: "0"
+        riskPreference:
+          type: string
+          enum: [conservative, moderate, aggressive]
+          default: moderate
+        successThresholdPct:
+          type: string
+          default: "70"
+        notes:
+          type: string
+    
+    UpdateGoal:
+      type: object
+      properties:
+        type:
+          type: string
+        description:
+          type: string
+        targetAmountToday:
+          type: string
+        targetDate:
+          type: string
+          format: date-time
+        inflationAssumptionPct:
+          type: string
+        priority:
+          type: integer
+        fundingSourceAccountIds:
+          type: array
+          items:
+            type: string
+        currentSavings:
+          type: string
+        riskPreference:
+          type: string
+        successThresholdPct:
+          type: string
+        notes:
+          type: string
+    
+    GoalTask:
+      type: object
+      properties:
+        id:
+          type: integer
+        goalId:
+          type: integer
+        userId:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        assignee:
+          type: string
+        dueDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [pending, in_progress, completed, cancelled]
+        completedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    
+    CreateTask:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        assignee:
+          type: string
+        dueDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [pending, in_progress, completed, cancelled]
+          default: pending
+    
+    UpdateTask:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        assignee:
+          type: string
+        dueDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [pending, in_progress, completed, cancelled]
+  
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+    
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: Unauthorized
+    
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: Not found

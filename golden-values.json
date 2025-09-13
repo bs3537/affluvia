@@ -1,0 +1,78 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2025-09-01",
+  "description": "Golden values for Monte Carlo simulation regression testing",
+  "tests": {
+    "determinism": {
+      "seed": 42,
+      "expectedBalance": 22999879.14,
+      "expectedSuccess": true
+    },
+    "zeroVolatility": {
+      "seed": 123,
+      "expectedBalance": 8855200,
+      "expectedPositive": true
+    },
+    "successRate": {
+      "iterations": 100,
+      "expectedRate": 74.9,
+      "tolerance": 5.0
+    },
+    "performance": {
+      "minIterationsPerSecond": 50,
+      "targetIterationsPerSecond": 500
+    },
+    "irmaaThresholds": {
+      "tiers": [
+        { "magi": 100000, "expectedSurcharge": 0 },
+        { "magi": 110000, "expectedSurcharge": 875 },
+        { "magi": 140000, "expectedSurcharge": 2187 },
+        { "magi": 180000, "expectedSurcharge": 3499 },
+        { "magi": 250000, "expectedSurcharge": 4811 },
+        { "magi": 600000, "expectedSurcharge": 5435 }
+      ]
+    },
+    "standardScenarios": [
+      {
+        "name": "baseline_retirement",
+        "seed": 12345,
+        "params": {
+          "currentAge": 50,
+          "retirementAge": 65,
+          "lifeExpectancy": 85,
+          "currentRetirementAssets": 1000000,
+          "annualRetirementExpenses": 60000,
+          "annualGuaranteedIncome": 30000,
+          "expectedReturn": 0.07,
+          "returnVolatility": 0.12
+        },
+        "expectedEndingBalance": 28443067.81,
+        "expectedSuccess": true
+      },
+      {
+        "name": "conservative_portfolio",
+        "seed": 67890,
+        "params": {
+          "currentAge": 50,
+          "retirementAge": 65,
+          "lifeExpectancy": 85,
+          "currentRetirementAssets": 1000000,
+          "annualRetirementExpenses": 60000,
+          "annualGuaranteedIncome": 20000,
+          "expectedReturn": 0.04,
+          "returnVolatility": 0.08
+        },
+        "expectedEndingBalance": 410881546.91,
+        "expectedSuccess": true
+      }
+    ]
+  },
+  "notes": {
+    "implementation": "Phase 1-5 fixes completed including RNG determinism, tax calculations, Guyton-Klinger PMR, IRMAA 2-year lookback, SECURE 2.0 RMD, pension survivorship",
+    "knownIssues": [
+      "Tax calculation at 24% bracket boundary needs refinement",
+      "Zero assets with guaranteed income edge case",
+      "Success rate baseline may need adjustment based on market conditions"
+    ]
+  }
+}

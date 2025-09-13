@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Optimization Persistence</title>
+</head>
+<body>
+    <h1>Test Optimization Persistence</h1>
+    <button onclick="checkSavedData()">Check Saved Optimization Data</button>
+    <button onclick="clearData()">Clear Optimization Data</button>
+    <pre id="result"></pre>
+
+    <script>
+        async function checkSavedData() {
+            try {
+                const response = await fetch('http://localhost:3000/api/financial-profile', {
+                    credentials: 'include'
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const result = document.getElementById('result');
+                    
+                    if (data.optimizationVariables) {
+                        result.textContent = `Optimization Variables Found:\n${JSON.stringify(data.optimizationVariables, null, 2)}`;
+                        
+                        if (data.optimizationVariables.optimizedScore) {
+                            result.textContent += `\n\nOptimized Score: ${data.optimizationVariables.optimizedScore.probabilityOfSuccess}%`;
+                        } else {
+                            result.textContent += '\n\n⚠️ No optimized score saved!';
+                        }
+                    } else {
+                        result.textContent = 'No optimization variables saved.';
+                    }
+                } else {
+                    document.getElementById('result').textContent = 'Error: ' + response.statusText;
+                }
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function clearData() {
+            try {
+                const response = await fetch('http://localhost:3000/api/financial-profile', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ optimizationVariables: null })
+                });
+
+                if (response.ok) {
+                    document.getElementById('result').textContent = 'Optimization data cleared successfully.';
+                } else {
+                    document.getElementById('result').textContent = 'Error clearing data: ' + response.statusText;
+                }
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
