@@ -195,7 +195,10 @@ const LifeGoalsComponent = () => {
       const res = await fetch('/api/financial-profile', { credentials: 'include' });
       if (!res.ok) return null;
       return res.json();
-    }
+    },
+    staleTime: 30000,
+    cacheTime: 60000,
+    retry: 1
   });
 
   const { data: retirementScore } = useQuery<{ probability?: number; probabilityDecimal?: number }>({
@@ -335,18 +338,7 @@ const LifeGoalsComponent = () => {
     cacheTime: 60000
   });
 
-  // Fetch user profile for retirement data
-  const { data: profile } = useQuery({
-    queryKey: ['/api/financial-profile'],
-    queryFn: async () => {
-      const response = await fetch('/api/financial-profile');
-      if (!response.ok) return null;
-      return response.json();
-    },
-    staleTime: 30000,
-    cacheTime: 60000,
-    retry: 1 // Only retry once for profile
-  });
+  // (removed duplicate profile query; using single definition above)
 
   // Create/Update life goal mutation
   const createLifeGoalMutation = useMutation({
@@ -1324,8 +1316,8 @@ const LifeGoalsComponent = () => {
               userProfile={profile}
               onClose={() => setShowAnalysisModal(false)}
               onUpdate={(updatedGoal) => {
-                // Update the goal in the list
-                refetch();
+                // Refresh the goals list and update local modal state
+                queryClient.invalidateQueries({ queryKey: ['/api/life-goals'] });
                 setAnalysisGoal(updatedGoal);
               }}
             />
