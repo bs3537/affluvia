@@ -1142,7 +1142,7 @@ function IntakeFormContent({ onSubmissionStart }: { onSubmissionStart?: () => vo
     try {
       setIsAutoSaving(true);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       // Add flags for partial save to skip calculations
       const saveData = {
@@ -1152,13 +1152,20 @@ function IntakeFormContent({ onSubmissionStart }: { onSubmissionStart?: () => vo
         currentStep: currentStep
       };
 
-      const response = await fetch('/api/financial-profile', {
+      const doSave = () => fetch('/api/financial-profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(saveData),
         signal: controller.signal
       });
+
+      let response = await doSave();
+      if (!response.ok) {
+        // brief single retry
+        await new Promise(r => setTimeout(r, 750));
+        response = await doSave();
+      }
 
       clearTimeout(timeoutId);
 
@@ -1214,15 +1221,35 @@ function IntakeFormContent({ onSubmissionStart }: { onSubmissionStart?: () => vo
         if (data && Object.keys(data).length > 0) {
           // Convert server data to form data format
           const convertedData = convertServerDataToFormData(data);
+
+          // Merge from session draft if DB arrays empty; never drop user input
+          let mergedFromDraft = false;
+          let draft: any = null;
+          try { draft = JSON.parse(sessionStorage.getItem('intake-form-draft') || 'null'); } catch {}
+          const draftData = draft?.data;
+          if (draftData) {
+            if ((!Array.isArray(convertedData.assets) || convertedData.assets.length === 0) &&
+                Array.isArray(draftData.assets) && draftData.assets.length > 0) {
+              (convertedData as any).assets = draftData.assets;
+              mergedFromDraft = true;
+            }
+            if ((!Array.isArray(convertedData.liabilities) || convertedData.liabilities.length === 0) &&
+                Array.isArray(draftData.liabilities) && draftData.liabilities.length > 0) {
+              (convertedData as any).liabilities = draftData.liabilities;
+              mergedFromDraft = true;
+            }
+          }
+
           setFormData(convertedData);
-          
-          // Reset entire form with fetched data
+          // Reset entire form with fetched/merged data
           reset(convertedData);
-          // Clear any stale draft once DB data is applied
-          try {
-            sessionStorage.removeItem('intake-form-draft');
-            localStorage.removeItem('intake-form-data');
-          } catch {}
+          // Clear draft only if not relied upon
+          if (!mergedFromDraft) {
+            try {
+              sessionStorage.removeItem('intake-form-draft');
+              localStorage.removeItem('intake-form-data');
+            } catch {}
+          }
           
           setEditMode('edit'); // Set to edit mode since user has existing data
         }
@@ -1764,9 +1791,9 @@ function IntakeFormContent({ onSubmissionStart }: { onSubmissionStart?: () => vo
             
             // Create AbortController for timeout
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-            
-            const response = await fetch('/api/financial-profile', {
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
+            const doSave = () => fetch('/api/financial-profile', {
               method: 'PUT',
               headers: {
                 'Content-Type': 'application/json',
@@ -1780,6 +1807,11 @@ function IntakeFormContent({ onSubmissionStart }: { onSubmissionStart?: () => vo
               }),
               signal: controller.signal
             });
+            let response = await doSave();
+            if (!response.ok) {
+              await new Promise(r => setTimeout(r, 750));
+              response = await doSave();
+            }
             
             clearTimeout(timeoutId);
 

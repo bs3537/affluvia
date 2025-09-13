@@ -23,6 +23,7 @@
     "db:fix-missing-errors": "tsx server/fix-missing-db-errors.ts",
     "db:fix-now": "tsx server/fix-all-database-issues-now.ts",
     "db:guard": "npm run db:validate && npm run db:push && npm run db:validate",
+    "db:apply-sql": "tsx server/run-sql-file.ts",
     "health:all": "tsx server/health-check.ts",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",

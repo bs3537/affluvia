@@ -396,6 +396,50 @@ export class DatabaseStorage implements IStorage {
       }
     });
 
+    // Guardrails for oversized JSON payloads to prevent timeouts/TOAST bloat
+    const ensureSafe = (obj: any, maxBytes = 2_000_000) => {
+      try {
+        const s = JSON.stringify(obj);
+        if (Buffer.byteLength(s, 'utf8') > maxBytes) return { truncated: true } as any;
+        return obj;
+      } catch {
+        return { truncated: true } as any;
+      }
+    };
+
+    // Proactively trim/shape large Monte Carlo/optimization trees
+    if ((preparedData as any).monteCarloSimulation) {
+      const m: any = (preparedData as any).monteCarloSimulation;
+      // Drop large arrays if present
+      if (m.yearlyCashFlows) delete m.yearlyCashFlows;
+      if (m.withdrawalRates) delete m.withdrawalRates;
+      if (m.successByYear) delete m.successByYear;
+      if (m.retirementSimulation?.results) {
+        // For cached results, avoid embedding mega arrays
+        const r = m.retirementSimulation.results;
+        if (r.yearlyCashFlows) r.yearlyCashFlows = [];
+        if (Array.isArray(r.percentileData) && r.percentileData.length > 1000) {
+          r.percentileData = { truncated: true };
+        }
+      }
+      // Keep percentileData compact if present
+      if (m.percentileData) m.percentileData = ensureSafe(m.percentileData);
+      (preparedData as any).monteCarloSimulation = ensureSafe(m);
+    }
+
+    if ((preparedData as any).optimizationVariables) {
+      const ov: any = (preparedData as any).optimizationVariables;
+      if (ov.optimizedScore) {
+        const { probabilityOfSuccess, medianEndingBalance, percentileData } = ov.optimizedScore || {};
+        ov.optimizedScore = {
+          probabilityOfSuccess,
+          medianEndingBalance,
+          percentileData: ensureSafe(percentileData)
+        };
+      }
+      (preparedData as any).optimizationVariables = ensureSafe(ov);
+    }
+
     // Special handling for UI preferences - merge instead of replace
     if (preparedData.retirementPlanningUIPreferences) {
       const existingProfile = await this.getFinancialProfile(userId);

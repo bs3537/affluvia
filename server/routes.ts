@@ -1089,7 +1089,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let profile;
       try {
         profile = await storage.updateFinancialProfile(
-          req.user!.id,
+          targetUserId,
           profileData,
         );
 
@@ -3342,22 +3342,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
           optimizationVariables: {
             ...variables,
             lockedAt: new Date().toISOString(),
-            optimizedScore: optimizedResult,
+            // Store only compact summary for score
+            optimizedScore: {
+              probabilityOfSuccess: optimizedResult?.successProbability,
+              medianEndingBalance: optimizedResult?.medianEndingBalance,
+              percentileData: {
+                p05: optimizedResult?.percentileData?.p05,
+                p10: optimizedResult?.percentileData?.p10,
+                p25: optimizedResult?.percentileData?.p25,
+                p50: optimizedResult?.percentileData?.p50,
+                p75: optimizedResult?.percentileData?.p75,
+                p90: optimizedResult?.percentileData?.p90,
+                p95: optimizedResult?.percentileData?.p95,
+              },
+            },
             savedAt: new Date().toISOString()
           },
           
           // Also save Monte Carlo results separately
           monteCarloSimulation: {
             calculatedAt: new Date().toISOString(),
-            probabilityOfSuccess: optimizedResult.successProbability,
-            medianEndingBalance: optimizedResult.medianEndingBalance,
-            percentileData: optimizedResult.percentileData,
-            yearlyCashFlows: optimizedResult.yearlyCashFlows,
-            successByYear: optimizedResult.successByYear,
-            withdrawalRates: optimizedResult.withdrawalRates,
+            probabilityOfSuccess: optimizedResult?.successProbability,
+            medianEndingBalance: optimizedResult?.medianEndingBalance,
+            percentileData: {
+              p05: optimizedResult?.percentileData?.p05,
+              p10: optimizedResult?.percentileData?.p10,
+              p25: optimizedResult?.percentileData?.p25,
+              p50: optimizedResult?.percentileData?.p50,
+              p75: optimizedResult?.percentileData?.p75,
+              p90: optimizedResult?.percentileData?.p90,
+              p95: optimizedResult?.percentileData?.p95,
+            },
+            // Do NOT persist large arrays here; they can be cached or stored separately
             sensitivityAnalysis,
-            // Include transformed cash flow data for Sankey visualization
-            cashFlowProjections: cashFlowData
+            // Avoid embedding large cash flow projections in the profile row
+            cashFlowProjections: undefined
           },
           
           // Save retirement planning data (merge to preserve other cached subtrees like impactOnPortfolioBalance)
@@ -3365,7 +3384,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ...existingRP,
             lastOptimizedAt: new Date().toISOString(),
             optimizationVariables: variables,
-            optimizedScore: optimizedResult.successProbability,
+            optimizedScore: optimizedResult?.successProbability,
             baselineScore: sensitivityAnalysis?.baselineSuccess,
             improvement: sensitivityAnalysis?.absoluteChange
           }

@@ -2500,7 +2500,7 @@ export function Dashboard() {
             {/* Retirement Prep Center Teaser */}
             <ValueTeaserCard
               title="Retirement Optimization"
-              value="12-15%"
+              value="10-40%"
               description="Average improvement in retirement success probability through our proven optimization strategies."
               linkTo="/retirement-prep"
               linkText="Boost Your Retirement Score"
