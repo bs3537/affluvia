@@ -400,14 +400,14 @@ function CashFlowContent({
         <div className="flex justify-between pt-4">
           <Button
             onClick={() => setActiveTab("mc-withdrawals")}
-            className="bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white"
+            className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
           >
             <ChevronRight className="w-4 h-4 mr-2 rotate-180" />
             Back to Income
           </Button>
           <Button
             onClick={() => setActiveTab("social-security")}
-            className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white"
+            className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
           >
             Next: Social Security
             <ChevronRight className="w-4 h-4 ml-2" />
@@ -873,7 +873,7 @@ function MonteCarloWithdrawalContent({
       <div className="flex justify-between">
         <Button
           onClick={() => setActiveTab("stress-tests")}
-          className="bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white"
+          className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
         >
           <ChevronRight className="w-4 h-4 mr-2 rotate-180" />
           Back to Stress Tests
@@ -3619,7 +3619,7 @@ function RetirementPlanningInner() {
                   <Button
                     onClick={handleLockAndContinue}
                     disabled={isLocking || isOptimizing}
-                    className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-medium transition-all"
+                    className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium transition-all"
                   >
                     {isLocking ? (
                       <>
@@ -3661,7 +3661,7 @@ function RetirementPlanningInner() {
               <CardContent className="p-6">
                 <Button
                   onClick={() => setActiveTab('portfolio-projections')}
-                  className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
+                  className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
                   size="lg"
                 >
                   Continue to Optimized Plan: Retirement Portfolio Projections
@@ -3686,7 +3686,7 @@ function RetirementPlanningInner() {
               <CardContent className="p-6">
                 <Button
                   onClick={() => setActiveTab('portfolio-impact')}
-                  className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
+                  className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
                   size="lg"
                 >
                   Continue to Optimized Plan: Portfolio Impact
@@ -3902,7 +3902,7 @@ function RetirementPlanningInner() {
               <CardContent className="p-6">
                 <Button
                   onClick={() => setActiveTab('stress-tests')}
-                  className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
+                  className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2"
                   size="lg"
                 >
                   Continue to Optimized Plan: Stress Tests
@@ -4244,7 +4244,7 @@ function RetirementPlanningInner() {
                 <div className="flex justify-between pt-4">
                   <Button
                     onClick={() => setActiveTab("cash-flow")}
-                    className="bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white"
+                    className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
                   >
                     <ChevronRight className="w-4 h-4 mr-2 rotate-180" />
                     Back to Cash Flow
@@ -4283,7 +4283,7 @@ function RetirementPlanningInner() {
             <div className="flex justify-between pt-4">
               <Button
                 onClick={() => setActiveTab("cash-flow")}
-                className="bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white"
+                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
               >
                 <ChevronLeft className="w-4 h-4 mr-2" />
                 Back to Cash Flow
