@@ -399,11 +399,11 @@ function CashFlowContent({
         {/* Navigation */}
         <div className="flex justify-between pt-4">
           <Button
-            onClick={() => setActiveTab("cash-flow")}
+            onClick={() => setActiveTab("mc-withdrawals")}
             className="bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white"
           >
             <ChevronRight className="w-4 h-4 mr-2 rotate-180" />
-            Back to Cash Flow
+            Back to Income
           </Button>
           <Button
             onClick={() => setActiveTab("social-security")}
