@@ -5727,6 +5727,7 @@ Return ONLY valid JSON:
       const mc = (profile.monteCarloSimulation as any) || {};
       const netWorth = planning.netWorthProjections || variables.netWorthProjections;
       const cashFlows = planning.cashFlowProjections || variables.cashFlowData || mc.yearlyCashFlows;
+      const ssOpt = profile.socialSecurityOptimization || variables.socialSecurityOptimization || null;
 
       const formatCurrency = (n: any) => (n || n === 0) ? `$${Number(n).toLocaleString()}` : 'N/A';
       const toPct = (n: any) => (typeof n === 'number') ? `${n.toFixed(1)}%` : (n ? `${Number(n).toFixed?.(1) ?? n}%` : 'N/A');
@@ -5755,6 +5756,22 @@ Return ONLY valid JSON:
       const sufficientFromBalance = typeof mc.medianEndingBalance === 'number' && mc.medianEndingBalance > 0;
       const isSufficient = !!(sufficientFromMC || sufficientFromBalance || totalInvestable > 0);
 
+      // Derive quick gap-year signal from retirement vs SS ages
+      const userRetAge = variables.retirementAge || profile.desiredRetirementAge;
+      const spouseRetAge = variables.spouseRetirementAge || profile.spouseDesiredRetirementAge;
+      const userSSAge = variables.socialSecurityAge || profile.socialSecurityClaimAge;
+      const spouseSSAge = variables.spouseSocialSecurityAge || profile.spouseSocialSecurityClaimAge;
+      const hasSpouse = profile.maritalStatus === 'married' || profile.maritalStatus === 'partnered';
+      const minRet = Math.min(
+        Number.isFinite(Number(userRetAge)) ? Number(userRetAge) : 65,
+        hasSpouse && Number.isFinite(Number(spouseRetAge)) ? Number(spouseRetAge) : (Number(userRetAge) || 65)
+      );
+      const minSS = Math.min(
+        Number.isFinite(Number(userSSAge)) ? Number(userSSAge) : 67,
+        hasSpouse && Number.isFinite(Number(spouseSSAge)) ? Number(spouseSSAge) : (Number(userSSAge) || 67)
+      );
+      const potentialGapYears = Math.max(0, Math.round(minSS - minRet));
+
       const context = `
 RETIREMENT PLANNING SUMMARY (persisted from user activity):
 
@@ -5763,7 +5780,7 @@ CONFIDENCE SCORES:
 - Optimized Success Probability: ${toPct(planning.optimizedScore)}
 - Improvement: ${planning.improvement ? toPct(planning.improvement) : 'N/A'}
 
-KEY VARIABLES:
+KEY VARIABLES (Selected Plan):
 - Retirement Age (User): ${variables.retirementAge || profile.desiredRetirementAge || 'Not set'}
 - Retirement Age (Spouse): ${variables.spouseRetirementAge || profile.spouseDesiredRetirementAge || 'Not set'}
 - Social Security Age (User): ${variables.socialSecurityAge || profile.socialSecurityClaimAge || 'Not set'}
@@ -5776,6 +5793,16 @@ MONTE CARLO HIGHLIGHTS:
 - Current Effective Tax Rate (if available): ${mc.effectiveTaxRate ?? 'N/A'}
 - Median Ending Balance: ${formatCurrency(mc.medianEndingBalance)}
 - Cash Flow Records: ${Array.isArray(cashFlows) ? cashFlows.length : 0}
+
+SOCIAL SECURITY OPTIMIZATION:
+${ssOpt ? `- Optimal SS Ages: User ${ssOpt.user?.optimalAge ?? variables.socialSecurityAge ?? profile.socialSecurityClaimAge}${hasSpouse && (ssOpt.spouse?.optimalAge || variables.spouseSocialSecurityAge || profile.spouseSocialSecurityClaimAge) ? ", Spouse " + (ssOpt.spouse?.optimalAge ?? variables.spouseSocialSecurityAge ?? profile.spouseSocialSecurityClaimAge) : ''}
+- Lifetime Benefit Gain (Nominal): ${formatCurrency((ssOpt.user?.nominalDifference || 0) + (ssOpt.spouse?.nominalDifference || 0))}
+- Sustainable Annual Spending (if calculated): ${formatCurrency(ssOpt.sustainableAnnualSpending)}
+- Confidence: ${toPct((ssOpt.confidence || 0) * 100)}
+` : '- Optimal SS ages calculated in app; consider timing impacts'}
+
+GAP YEARS (pre-SS):
+- Potential gap-years between earliest retirement age and SS start: ~${potentialGapYears} years (estimate based on selected ages)
 
 NET WORTH PROJECTIONS:
 - Years: ${Array.isArray(netWorth?.years) ? netWorth.years.slice(0,3).join(', ') + (netWorth.years.length>3?'...':'') : 'N/A'}
@@ -5793,11 +5820,11 @@ SOCIAL SECURITY OPTIMIZATION: Consider claiming age impacts on lifetime income a
 `;
 
       const prompt = `
-You are a CFP professional. Analyze the retirement planning data above and return 3-5 high-impact insights.
+You are a CFP professional. Analyze the retirement planning data above and return 5-8 high-impact insights.
 
 Rules:
 - Rank insights by priority: 1 (highest) to 3 (lower)
-- Each insight must include a clear title, an explanation, and an estimated dollar impact (positive = savings/benefit)
+- Each insight must include: title, action (specific next step), why (why it matters), and an estimated dollar impact (positive = savings/benefit)
 - Focus areas: success probability drivers, cash-flow risks, sequence-of-returns risk, Social Security timing impact, expense optimization, portfolio longevity, and net worth trajectory.
 - Use conservative, practical, compliance-friendly language.
 
@@ -5819,7 +5846,7 @@ Estimation guidance (if exact figures are not available):
 Return ONLY valid JSON like:
 {
   "insights": [
-    { "id": "string", "priority": 1|2|3, "title": "...", "explanation": "...", "estimatedImpact": number }
+    { "id": "string", "priority": 1|2|3, "title": "...", "action": "...", "why": "...", "estimatedImpact": number }
   ],
   "lastUpdated": "${new Date().toISOString()}"
 }
@@ -5839,7 +5866,7 @@ Return ONLY valid JSON like:
             )
           );
         }
-        // Ensure non-zero, conservative estimatedImpact using available magnitudes
+        // Ensure non-zero, conservative estimatedImpact using available magnitudes and map optional fields
         if (Array.isArray(parsed.insights)) {
           parsed.insights = parsed.insights.map((i: any, idx: number) => {
             let impact = Number(i?.estimatedImpact);
@@ -5850,7 +5877,14 @@ Return ONLY valid JSON like:
               const fallback = Math.max(500, Math.round((baseFromAssets || 0) + (baseFromBudget || 0)));
               impact = fallback;
             }
-            return { ...i, estimatedImpact: Math.round(impact) };
+            return {
+              id: i.id || `ri-${idx + 1}`,
+              priority: (i.priority === 1 || i.priority === 2) ? i.priority : 3,
+              title: i.title || 'Personalized Recommendation',
+              action: i.action || i.nextStep || i.recommendation || 'Follow the outlined step to capture the benefit.',
+              why: i.why || i.explanation || i.rationale || 'Improves retirement readiness and tax efficiency.',
+              estimatedImpact: Math.round(impact)
+            };
           });
         }
         return parsed;
@@ -5861,9 +5895,11 @@ Return ONLY valid JSON like:
       // Fallback example insights
       return {
         insights: [
-          { id: 'ss-timing', priority: 1, title: 'Optimize Social Security Timing', explanation: 'Delaying benefits increases lifetime income and survivor protection.', estimatedImpact: 25000 },
-          { id: 'expense-smoothing', priority: 2, title: 'Smooth Early Retirement Withdrawals', explanation: 'Reduce sequence-of-returns risk by funding first 3-5 years from cash/short-duration assets.', estimatedImpact: 12000 },
-          { id: 'budget-tune', priority: 3, title: 'Tune Retirement Budget by $200/mo', explanation: 'Small expense reductions can add years of portfolio longevity and raise success odds.', estimatedImpact: 2400 }
+          { id: 'ss-timing', priority: 1, title: 'Optimize Social Security Timing', action: 'Set claiming ages to the optimal plan in the Social Security tab.', why: 'Delaying appropriately can raise lifetime benefits and survivor protection.', estimatedImpact: 25000 },
+          { id: 'gap-funding', priority: 1, title: 'Pre-fund Gap Years (Cash Bucket)', action: 'Hold 3–5 years of withdrawals in cash/short-duration until SS starts.', why: 'Reduces sequence‑of‑returns risk while bridging pre‑SS income needs.', estimatedImpact: 12000 },
+          { id: 'roth-window', priority: 2, title: 'Use Roth Conversion Windows', action: 'Convert in low-bracket years before RMDs/SS to smooth taxes.', why: 'Lowers lifetime taxes and improves net after‑tax longevity.', estimatedImpact: 10000 },
+          { id: 'asset-location', priority: 2, title: 'Improve Asset Location', action: 'Place tax‑inefficient assets in tax‑advantaged accounts where feasible.', why: 'Cuts annual tax drag; improves compounding of taxable account.', estimatedImpact: 5000 },
+          { id: 'irmaa-planning', priority: 3, title: 'Plan Around IRMAA', action: 'Keep MAGI below IRMAA thresholds in key years (use QCDs, timing).', why: 'Avoiding one bracket for two years can save material premiums.', estimatedImpact: 3000 }
         ],
         lastUpdated: new Date().toISOString()
       };

@@ -11,7 +11,9 @@ interface RetirementInsight {
   id: string;
   priority: 1 | 2 | 3;
   title: string;
-  explanation: string;
+  explanation?: string; // legacy support
+  action?: string;
+  why?: string;
   estimatedImpact: number; // dollars
 }
 
@@ -160,7 +162,12 @@ export function RetirementInsights() {
                         Priority {insight.priority}
                       </Badge>
                     </div>
-                    <p className="text-gray-300 text-sm mb-3">{insight.explanation}</p>
+                    {insight.action && (
+                      <p className="text-gray-200 text-sm mb-1"><span className="font-medium text-gray-100">Action:</span> {insight.action}</p>
+                    )}
+                    <p className="text-gray-300 text-sm mb-3">
+                      <span className="font-medium text-gray-200">Why it matters:</span> {insight.why || insight.explanation}
+                    </p>
                     <div className="flex items-center gap-2">
                       <DollarSign className="w-4 h-4 text-green-400" />
                       <span className="text-sm text-green-400 font-semibold">Estimated Impact: {formatCurrency(insight.estimatedImpact)}</span>
