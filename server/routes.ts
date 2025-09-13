@@ -5860,11 +5860,11 @@ Return ONLY valid JSON like:
         // Post-process to remove misaligned recommendations when plan is sufficient
         if (isSufficient && Array.isArray(parsed.insights)) {
           const banned = /(work longer|delay retirement|take a side job|side\s*income|increase savings|increase contributions|cut spending|reduce expenses|downsize|sell home)/i;
-          parsed.insights = parsed.insights.filter((i: any) =>
-            i && typeof i.title === 'string' && typeof i.explanation === 'string' && !(
-              banned.test(i.title) || banned.test(i.explanation)
-            )
-          );
+          parsed.insights = parsed.insights.filter((i: any) => {
+            if (!i || typeof i.title !== 'string') return false;
+            const txt = `${i.title} ${i.explanation || ''} ${i.why || ''} ${i.action || ''}`;
+            return !banned.test(txt);
+          });
         }
         // Ensure non-zero, conservative estimatedImpact using available magnitudes and map optional fields
         if (Array.isArray(parsed.insights)) {
