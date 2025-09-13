@@ -973,7 +973,11 @@ const LifeGoalsComponent = () => {
                           Planning Center
                         </Button>
                         {(baselineProb < 80 || fundingProgress < 100) && (
-                          <Button onClick={() => navigateToPlanningCenter('retirement')} variant="outline" className="border-purple-500/40 text-purple-300 hover:bg-purple-900/20" size="sm">
+                          <Button
+                            onClick={() => navigateToPlanningCenter('retirement')}
+                            className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
+                            size="sm"
+                          >
                             Optimize variables
                           </Button>
                         )}

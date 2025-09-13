@@ -371,24 +371,7 @@ export function UniversalGoalFormEnhanced({
               </div>
             </div>
 
-            {/* Funding Coverage Preview */}
-            <Card className="bg-gray-800 border-gray-700">
-              <CardContent className="pt-6">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm text-gray-400">Funding Coverage</span>
-                  <span className="text-lg font-semibold text-white">
-                    {fundingCoverage.toFixed(1)}%
-                  </span>
-                </div>
-                <Progress value={fundingCoverage} className="h-2" />
-                <p className="text-xs text-gray-400 mt-2">
-                  {fundingCoverage >= 100 ? 'Goal is fully funded!' :
-                   fundingCoverage >= 80 ? 'On track to meet goal' :
-                   fundingCoverage >= 50 ? 'Additional funding needed' :
-                   'Significant funding gap'}
-                </p>
-              </CardContent>
-            </Card>
+            {/* Removed Funding Coverage Preview - moved to Funding Sources tab only */}
           </TabsContent>
 
           <TabsContent value="funding" className="space-y-4 mt-4">
