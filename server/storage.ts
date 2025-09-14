@@ -1430,40 +1430,65 @@ export class DatabaseStorage implements IStorage {
       return fieldName === 'fundingSources' ? '[]' : '{}';
     };
 
-    const fundingSourcesStr = safeStringify(goal.fundingSources, 'fundingSources');
-    const metadataStr = safeStringify(goal.metadata, 'metadata');
+    const fundingSourcesVal = ((): any => {
+      if (goal.fundingSources === null || goal.fundingSources === undefined) return [];
+      if (typeof goal.fundingSources === 'string') {
+        try { return JSON.parse(goal.fundingSources); } catch { return []; }
+      }
+      return goal.fundingSources;
+    })();
+    const metadataVal = ((): any => {
+      if (goal.metadata === null || goal.metadata === undefined) return {};
+      if (typeof goal.metadata === 'string') {
+        try { return JSON.parse(goal.metadata); } catch { return {}; }
+      }
+      return goal.metadata;
+    })();
     
-    console.log('Final fundingSources string:', fundingSourcesStr);
-    console.log('Final metadata string:', metadataStr);
+    // Log normalized values (avoid referencing undefined vars)
+    console.log("Final fundingSources value:", fundingSourcesVal);
+    console.log("Final metadata value:", metadataVal);
 
     const [created] = await db
       .insert(lifeGoalsTable)
       .values({
         ...goal,
         userId,
-        fundingSources: fundingSourcesStr,
-        metadata: metadataStr
+        // Store as JSONB in DB
+        fundingSources: fundingSourcesVal,
+        metadata: metadataVal
       })
       .returning();
     
+    // Safely handle both string and object return types from PG driver
+    const parsedFundingSources = typeof (created as any).fundingSources === 'string'
+      ? JSON.parse((created as any).fundingSources as any)
+      : (created as any).fundingSources;
+    const parsedMetadata = typeof (created as any).metadata === 'string'
+      ? JSON.parse((created as any).metadata as any)
+      : (created as any).metadata;
+
     return {
       ...created,
-      fundingSources: JSON.parse(created.fundingSources as string),
-      metadata: JSON.parse(created.metadata as string)
+      fundingSources: parsedFundingSources,
+      metadata: parsedMetadata,
     };
   }
 
   async updateLifeGoal(userId: number, goalId: number, data: any): Promise<any> {
     const updateData: any = { ...data };
-    
+
+    // Normalize jsonb fields to objects (not JSON strings) for insertion
     if (data.fundingSources !== undefined) {
-      updateData.fundingSources = typeof data.fundingSources === 'string' ? 
-        data.fundingSources : JSON.stringify(data.fundingSources);
+      updateData.fundingSources = typeof data.fundingSources === 'string'
+        ? (() => { try { return JSON.parse(data.fundingSources); } catch { return []; } })()
+        : (data.fundingSources ?? []);
     }
-    
+
     if (data.metadata !== undefined) {
-      updateData.metadata = typeof data.metadata === 'string' ? 
-        data.metadata : JSON.stringify(data.metadata);
+      updateData.metadata = typeof data.metadata === 'string'
+        ? (() => { try { return JSON.parse(data.metadata); } catch { return {}; } })()
+        : (data.metadata ?? {});
     }
     
     const [updated] = await db
