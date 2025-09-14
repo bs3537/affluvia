@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerFooter,
+} from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,7 +40,8 @@ import {
   Plus,
   Trash2,
   Wallet,
-  Banknote
+  Banknote,
+  X
 } from "lucide-react";
 
 interface FundingSource {
@@ -251,6 +253,12 @@ export function UniversalGoalFormEnhanced({
       return;
     }
 
+    if (!fundingSources || fundingSources.length === 0) {
+      toast.error('Please add at least one funding source');
+      setActiveTab('funding');
+      return;
+    }
+
     const goalData: GoalData = {
       id: initialGoal?.id,
       goalType,
@@ -286,95 +294,119 @@ export function UniversalGoalFormEnhanced({
   const Icon = getGoalIcon();
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl bg-gray-900 border-gray-800 text-white max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-3 text-xl">
-            <Icon className="h-6 w-6 text-primary" />
-            {initialGoal ? 'Edit Goal' : 'Create New Goal'}
-          </DialogTitle>
-        </DialogHeader>
+    <Drawer open={isOpen} onOpenChange={(open) => { if (!open) return; }}>
+      <DrawerContent className="bg-gray-900 border-gray-800 text-white h-[90vh] mt-0 left-0 sm:left-16 md:left-64 right-0 overflow-y-auto">
+        <DrawerHeader className="px-6 pt-6 pb-0">
+          <div className="flex items-center justify-between">
+            <DrawerTitle className="flex items-center gap-3 text-xl">
+              <Icon className="h-6 w-6 text-primary" />
+              {initialGoal ? 'Edit Goal' : 'Create New Goal'}
+            </DrawerTitle>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onClose}
+              className="rounded-full text-gray-400 hover:text-white hover:bg-gray-800"
+              aria-label="Cancel"
+              title="Cancel"
+            >
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
+        </DrawerHeader>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4">
-          <TabsList className="grid w-full grid-cols-2 bg-gray-800">
-            <TabsTrigger value="details" className="text-white data-[state=active]:bg-primary data-[state=active]:text-white">
-              Goal Details
-            </TabsTrigger>
-            <TabsTrigger value="funding" className="text-white data-[state=active]:bg-primary data-[state=active]:text-white">
-              Funding Sources
-            </TabsTrigger>
-          </TabsList>
+        <div className="px-6 pb-6">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4">
+            <TabsList className="grid w-full grid-cols-2 bg-gray-800">
+              <TabsTrigger value="details" className="text-white data-[state=active]:bg-primary data-[state=active]:text-white">
+                Goal Details
+              </TabsTrigger>
+              <TabsTrigger value="funding" className="text-white data-[state=active]:bg-primary data-[state=active]:text-white">
+                Funding Sources
+              </TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="details" className="space-y-4 mt-4">
-            <div className="grid grid-cols-2 gap-4">
+            <TabsContent value="details" className="space-y-6 mt-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="goalName" className="text-white">Goal Name *</Label>
+                  <Input
+                    id="goalName"
+                    value={goalName}
+                    onChange={(e) => setGoalName(e.target.value)}
+                    className="bg-gray-800 border-gray-700 text-white"
+                    placeholder="e.g., Dream Home Purchase"
+                  />
+                </div>
+                
+                <div>
+                  <Label htmlFor="priority" className="text-white">Priority</Label>
+                  <Select value={priority} onValueChange={(v) => setPriority(v as any)}>
+                    <SelectTrigger className="bg-gray-800 border-gray-700 text-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-gray-800 border-gray-700">
+                      <SelectItem value="high" className="text-white">High</SelectItem>
+                      <SelectItem value="medium" className="text-white">Medium</SelectItem>
+                      <SelectItem value="low" className="text-white">Low</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
               <div>
-                <Label htmlFor="goalName" className="text-white">Goal Name *</Label>
-                <Input
-                  id="goalName"
-                  value={goalName}
-                  onChange={(e) => setGoalName(e.target.value)}
+                <Label htmlFor="description" className="text-white">Description</Label>
+                <Textarea
+                  id="description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
                   className="bg-gray-800 border-gray-700 text-white"
-                  placeholder="e.g., Dream Home Purchase"
+                  placeholder="Describe your goal..."
+                  rows={3}
                 />
               </div>
-              
-              <div>
-                <Label htmlFor="priority" className="text-white">Priority</Label>
-                <Select value={priority} onValueChange={(v) => setPriority(v as any)}>
-                  <SelectTrigger className="bg-gray-800 border-gray-700 text-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-gray-800 border-gray-700">
-                    <SelectItem value="high" className="text-white">High</SelectItem>
-                    <SelectItem value="medium" className="text-white">Medium</SelectItem>
-                    <SelectItem value="low" className="text-white">Low</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
 
-            <div>
-              <Label htmlFor="description" className="text-white">Description</Label>
-              <Textarea
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="bg-gray-800 border-gray-700 text-white"
-                placeholder="Describe your goal..."
-                rows={3}
-              />
-            </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="targetDate" className="text-white">Target Date *</Label>
+                  <Input
+                    id="targetDate"
+                    type="date"
+                    value={targetDate}
+                    onChange={(e) => setTargetDate(e.target.value)}
+                    className="bg-gray-800 border-gray-700 text-white"
+                    min={new Date().toISOString().split('T')[0]}
+                  />
+                </div>
+                
+                <div>
+                  <Label htmlFor="targetAmount" className="text-white">Target Amount ($) *</Label>
+                  <Input
+                    id="targetAmount"
+                    type="number"
+                    value={targetAmount}
+                    onChange={(e) => setTargetAmount(e.target.value)}
+                    className="bg-gray-800 border-gray-700 text-white"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="targetDate" className="text-white">Target Date *</Label>
-                <Input
-                  id="targetDate"
-                  type="date"
-                  value={targetDate}
-                  onChange={(e) => setTargetDate(e.target.value)}
-                  className="bg-gray-800 border-gray-700 text-white"
-                  min={new Date().toISOString().split('T')[0]}
-                />
+              {/* Next Button for Goal Details Tab */}
+              <div className="flex justify-end pt-4">
+                <Button
+                  onClick={() => setActiveTab('funding')}
+                  className="bg-primary hover:bg-primary/90"
+                  disabled={!goalName || !targetDate || !targetAmount}
+                >
+                  Next
+                </Button>
               </div>
-              
-              <div>
-                <Label htmlFor="targetAmount" className="text-white">Target Amount ($) *</Label>
-                <Input
-                  id="targetAmount"
-                  type="number"
-                  value={targetAmount}
-                  onChange={(e) => setTargetAmount(e.target.value)}
-                  className="bg-gray-800 border-gray-700 text-white"
-                  placeholder="0"
-                />
-              </div>
-            </div>
 
             {/* Removed Funding Coverage Preview - moved to Funding Sources tab only */}
-          </TabsContent>
+            </TabsContent>
 
-          <TabsContent value="funding" className="space-y-4 mt-4">
+          <TabsContent value="funding" className="space-y-6 mt-6">
             <Alert className="bg-blue-900/20 border-blue-800">
               <Info className="h-4 w-4 text-blue-400" />
               <AlertDescription className="text-gray-300">
@@ -541,69 +573,29 @@ export function UniversalGoalFormEnhanced({
                 Add Monthly Savings
               </Button>
             </div>
-
-            {/* Funding Summary */}
-            {targetAmount && (
-              <Card className="bg-gray-800 border-gray-700">
-                <CardContent className="pt-4">
-                  <h4 className="text-sm font-medium text-white mb-3">Funding Summary</h4>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Target Amount:</span>
-                      <span className="text-white">${Number(targetAmount).toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Total Funding:</span>
-                      <span className="text-white">
-                        ${fundingSources.reduce((total, source) => {
-                          if (source.type === 'monthly_savings' && targetDate) {
-                            const months = Math.max(0, 
-                              (new Date(targetDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24 * 30)
-                            );
-                            return total + ((source.monthlyAmount || 0) * months);
-                          }
-                          return total + (source.amount || 0);
-                        }, 0).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between font-medium">
-                      <span className="text-gray-400">Funding Gap:</span>
-                      <span className={fundingCoverage >= 100 ? 'text-green-400' : 'text-red-400'}>
-                        ${Math.max(0, Number(targetAmount) - fundingSources.reduce((total, source) => {
-                          if (source.type === 'monthly_savings' && targetDate) {
-                            const months = Math.max(0, 
-                              (new Date(targetDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24 * 30)
-                            );
-                            return total + ((source.monthlyAmount || 0) * months);
-                          }
-                          return total + (source.amount || 0);
-                        }, 0)).toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </TabsContent>
-        </Tabs>
-
-        <div className="flex justify-center gap-3 mt-6 pb-4">
-          <Button
-            variant="outline"
-            onClick={onClose}
-            className="bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={handleSave}
-            disabled={saveGoalMutation.isPending}
-            className="bg-primary hover:bg-primary/90"
-          >
-            {saveGoalMutation.isPending ? 'Saving...' : 'Save Goal'}
-          </Button>
+            {/* Save Goal Button - Only on Funding Sources Tab */}
+            <div className="flex justify-between pt-4">
+              <Button
+                onClick={() => setActiveTab('details')}
+                variant="outline"
+                className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700"
+              >
+                Back
+              </Button>
+              <Button
+                onClick={handleSave}
+                disabled={saveGoalMutation.isPending}
+                className="bg-primary hover:bg-primary/90"
+              >
+                {saveGoalMutation.isPending ? 'Saving...' : 'Save Goal'}
+              </Button>
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
-      </DialogContent>
-    </Dialog>
+
+        {/* DrawerFooter removed; save handled within Funding tab */}
+      </DrawerContent>
+    </Drawer>
   );
 }

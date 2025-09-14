@@ -326,8 +326,8 @@ const LifeGoalsComponent = () => {
     cacheTime: 60000  // Keep in cache for 1 minute
   });
 
-  // Fetch education goals
-  const { data: educationGoals = [], isLoading: isLoadingEducation } = useQuery({
+  // Fetch education goals (API returns an object: { goals: [...], plaid529Accounts: [...] })
+  const { data: educationData, isLoading: isLoadingEducation } = useQuery({
     queryKey: ['/api/education/goals'],
     queryFn: async () => {
       const response = await fetch('/api/education/goals');
@@ -337,6 +337,13 @@ const LifeGoalsComponent = () => {
     staleTime: 30000,
     cacheTime: 60000
   });
+
+  // Normalize to an array for downstream logic
+  const educationGoals = React.useMemo(() => {
+    if (!educationData) return [] as any[];
+    // Some environments might still return an array; prefer .goals if present
+    return Array.isArray(educationData) ? educationData : (educationData.goals ?? []);
+  }, [educationData]);
 
   // (removed duplicate profile query; using single definition above)
 
