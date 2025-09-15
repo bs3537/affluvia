@@ -40,7 +40,6 @@ import {
   Brain,
   PiggyBank,
   AlertCircle,
-  ChevronRight,
   Wallet,
   Banknote,
   ArrowUpRight,
@@ -115,7 +114,7 @@ export function LifeGoalDetailView({
   onUpdate,
   userProfile
 }: LifeGoalDetailViewProps) {
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState('analysis');
   const [whatIfScenario, setWhatIfScenario] = useState<WhatIfScenario>({
     monthlySavings: 500,
     loanAmount: 0,
@@ -152,7 +151,7 @@ export function LifeGoalDetailView({
     }
   });
 
-  // Calculate funding breakdown
+  // Calculate funding breakdown (funded portions only)
   const fundingBreakdown = React.useMemo(() => {
     let assetTotal = 0;
     let loanTotal = 0;
@@ -182,6 +181,17 @@ export function LifeGoalDetailView({
       { name: 'Savings', value: savingsTotal, color: '#3b82f6' }
     ].filter(item => item.value > 0);
   }, [goal]);
+
+  // Build chart breakdown that includes shortfall so the pie equals target amount
+  const chartBreakdown = React.useMemo(() => {
+    const totalFunded = fundingBreakdown.reduce((sum, item) => sum + item.value, 0);
+    const shortfall = Math.max(0, Number(goal.targetAmount || 0) - totalFunded);
+    const data = [...fundingBreakdown];
+    if (shortfall > 0) {
+      data.push({ name: 'Funding Gap', value: shortfall, color: '#ef4444' });
+    }
+    return data;
+  }, [fundingBreakdown, goal.targetAmount]);
 
   // Calculate time to goal
   const monthsToGoal = React.useMemo(() => {
@@ -315,7 +325,7 @@ export function LifeGoalDetailView({
                 <p className={`text-2xl font-bold ${
                   (goal.fundingPercentage || 0) >= 100 ? 'text-green-400' : 'text-red-400'
                 }`}>
-                  ${Math.max(0, goal.targetAmount - 
+                  ${Math.max(0, Number(goal.targetAmount || 0) -
                     fundingBreakdown.reduce((sum, item) => sum + item.value, 0)
                   ).toLocaleString()}
                 </p>
@@ -326,16 +336,16 @@ export function LifeGoalDetailView({
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid w-full grid-cols-2 bg-gray-800 mb-6">
-              <TabsTrigger value="overview" className="text-white data-[state=active]:bg-primary data-[state=active]:text-white">
-                Overview
+              <TabsTrigger value="analysis" className="text-white data-[state=active]:bg-primary data-[state=active]:text-white">
+                Analysis
               </TabsTrigger>
               <TabsTrigger value="insights" className="text-white data-[state=active]:bg-primary data-[state=active]:text-white">
                 Insights
               </TabsTrigger>
             </TabsList>
 
-            {/* Overview Tab */}
-            <TabsContent value="overview" className="space-y-6">
+            {/* Analysis Tab */}
+            <TabsContent value="analysis" className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Funding Breakdown Pie Chart */}
                 <Card className="bg-gray-800 border-gray-700">
@@ -346,7 +356,7 @@ export function LifeGoalDetailView({
                     <ResponsiveContainer width="100%" height={250}>
                       <PieChart>
                         <Pie
-                          data={fundingBreakdown}
+                          data={chartBreakdown}
                           dataKey="value"
                           nameKey="name"
                           cx="50%"
@@ -354,7 +364,7 @@ export function LifeGoalDetailView({
                           outerRadius={80}
                           label={({ value }) => `$${value.toLocaleString()}`}
                         >
-                          {fundingBreakdown.map((entry, index) => (
+                          {chartBreakdown.map((entry, index) => (
                             <Cell key={index} fill={entry.color} />
                           ))}
                         </Pie>
@@ -536,23 +546,14 @@ export function LifeGoalDetailView({
                                       {insight.estimatedImpact && (
                                         <div className="bg-gray-700/30 px-2 py-1 rounded col-span-2 md:col-span-1">
                                           <p className="text-xs text-gray-400">Impact</p>
-                                          <p className="text-sm font-medium text-primary">
+                                          <p className="text-sm font-medium text-white">
                                             {insight.estimatedImpact}
                                           </p>
                                         </div>
                                       )}
                                     </div>
                                     
-                                    {insight.actionable && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="bg-gray-700 border-gray-600 text-white hover:bg-gray-600"
-                                      >
-                                        Implement Strategy
-                                        <ChevronRight className="h-3 w-3 ml-1" />
-                                      </Button>
-                                    )}
+                                    {/* Implement Strategy button intentionally removed per request */}
                                   </div>
                                 </div>
                               </CardContent>

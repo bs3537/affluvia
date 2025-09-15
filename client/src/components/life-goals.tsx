@@ -1,13 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,10 +37,11 @@ import { Progress } from "@/components/ui/progress";
 import { Gauge } from "@/components/ui/gauge";
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
+import DebouncedInvalidation from '@/utils/debounced-invalidation';
 import { GoalFormModal } from './education-goal-form';
 import { UniversalGoalFormModal } from './universal-goal-form';
 import { UniversalGoalFormEnhanced } from './universal-goal-form-enhanced';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerClose } from "@/components/ui/drawer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { LifeGoalDetailView } from './life-goal-detail-view';
@@ -184,9 +179,12 @@ const LifeGoalsComponent = () => {
   const [detailViewGoal, setDetailViewGoal] = useState<LifeGoal | null>(null);
   const [showAnalysisModal, setShowAnalysisModal] = useState(false);
   const [analysisGoal, setAnalysisGoal] = useState<LifeGoal | null>(null);
-  const [geminiRecommendations, setGeminiRecommendations] = useState<string[]>([]);
-  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const [showAddGoalDrawer, setShowAddGoalDrawer] = useState(false);
+  // Removed legacy Gemini fetch flags; insights are fetched inside LifeGoalDetailView
   const queryClient = useQueryClient();
+
+  // Create debounced invalidation instance
+  const debouncedInvalidation = useMemo(() => new DebouncedInvalidation(queryClient), [queryClient]);
 
   // Profile + retirement score for Retirement Readiness tile
   const { data: profile } = useQuery({
@@ -314,7 +312,7 @@ const LifeGoalsComponent = () => {
     return () => { cancelled = true; };
   }, [profile]);
 
-  // Fetch life goals
+  // Fetch life goals with optimized caching
   const { data: lifeGoals = [], isLoading: isLoadingLifeGoals } = useQuery({
     queryKey: ['/api/life-goals'],
     queryFn: async () => {
@@ -322,11 +320,13 @@ const LifeGoalsComponent = () => {
       if (!response.ok) throw new Error('Failed to fetch life goals');
       return response.json();
     },
-    staleTime: 30000, // Consider data fresh for 30 seconds
-    cacheTime: 60000  // Keep in cache for 1 minute
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000,   // 10 minutes (replaces cacheTime)
+    refetchOnWindowFocus: false,
+    refetchOnMount: false
   });
 
-  // Fetch education goals (API returns an object: { goals: [...], plaid529Accounts: [...] })
+  // Fetch education goals with optimized caching
   const { data: educationData, isLoading: isLoadingEducation } = useQuery({
     queryKey: ['/api/education/goals'],
     queryFn: async () => {
@@ -334,8 +334,10 @@ const LifeGoalsComponent = () => {
       if (!response.ok) throw new Error('Failed to fetch education goals');
       return response.json();
     },
-    staleTime: 30000,
-    cacheTime: 60000
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000,   // 10 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false
   });
 
   // Normalize to an array for downstream logic
@@ -374,7 +376,8 @@ const LifeGoalsComponent = () => {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/life-goals'] });
+      // Use debounced invalidation to prevent UI freezing
+      debouncedInvalidation.invalidateQueries(['/api/life-goals'], 500);
       toast.success('Goal saved successfully');
     },
     onError: () => {
@@ -395,7 +398,8 @@ const LifeGoalsComponent = () => {
       if (!response.ok) throw new Error('Failed to delete goal');
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/life-goals'] });
+      // Use debounced invalidation to prevent UI freezing
+      debouncedInvalidation.invalidateQueries(['/api/life-goals'], 300);
       toast.success('Goal deleted successfully');
     },
     onError: () => {
@@ -412,7 +416,8 @@ const LifeGoalsComponent = () => {
       if (!response.ok) throw new Error('Failed to delete education goal');
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/education/goals'] });
+      // Use debounced invalidation for education goals
+      debouncedInvalidation.invalidateQueries(['/api/education/goals'], 300);
       toast.success('Education goal deleted successfully');
     },
     onError: () => {
@@ -420,8 +425,13 @@ const LifeGoalsComponent = () => {
     },
   });
 
-  // Combine all goals
+  // Combine all goals with optimized processing
   const allGoals = React.useMemo(() => {
+    // Early return if data is still loading to prevent blocking operations
+    if (isLoadingLifeGoals || isLoadingEducation) {
+      return [];
+    }
+
     const goals: LifeGoal[] = [...lifeGoals];
     
     // Add retirement goal if available
@@ -560,7 +570,17 @@ const LifeGoalsComponent = () => {
     });
     
     return goals;
-  }, [lifeGoals, educationGoals, profile]);
+  }, [
+    lifeGoals,
+    educationGoals,
+    profile?.calculations?.retirementScore,
+    profile?.dateOfBirth,
+    profile?.spouseDateOfBirth,
+    profile?.retirementAge,
+    profile?.age,
+    isLoadingLifeGoals,
+    isLoadingEducation
+  ]);
 
   const handleAddGoal = (goalType: string) => {
     console.log('handleAddGoal called with goalType:', goalType);
@@ -625,101 +645,6 @@ const LifeGoalsComponent = () => {
   const handleViewAnalysis = async (goal: LifeGoal) => {
     setAnalysisGoal(goal);
     setShowAnalysisModal(true);
-    setLoadingRecommendations(true);
-    setGeminiRecommendations([]);
-
-    try {
-      // Fetch user's financial profile to pass to Gemini
-      const profileResponse = await fetch('/api/financial-profile');
-      const userProfile = profileResponse.ok ? await profileResponse.json() : null;
-
-      // Calculate shortfall
-      const fundingPercentage = calculateFundingPercentage(goal);
-      const currentFunding = goal.targetAmount ? goal.targetAmount * (fundingPercentage / 100) : 0;
-      const shortfall = Math.max(0, (goal.targetAmount || 0) - currentFunding);
-
-      // Prepare context for Gemini
-      const prompt = `
-        I need personalized recommendations for achieving a financial goal. This is NOT a retirement goal - the user needs 100% funding to purchase this asset/achieve this goal. Focus on the FUNDING SHORTFALL and provide specific, actionable recommendations to close the gap.
-
-        Goal Details:
-        - Goal Type: ${goal.goalType}
-        - Goal Name: ${goal.goalName}
-        - Target Amount: $${goal.targetAmount?.toLocaleString() || 0}
-        - Current Funding: $${currentFunding.toLocaleString()}
-        - FUNDING SHORTFALL: $${shortfall.toLocaleString()} (THIS IS THE KEY METRIC - USER NEEDS THIS AMOUNT)
-        - Target Date: ${goal.targetDate ? new Date(goal.targetDate).toLocaleDateString() : 'Not set'}
-        - Months to Goal: ${goal.targetDate ? Math.max(0, Math.round((new Date(goal.targetDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24 * 30))) : 'Unknown'}
-        - Current Monthly Contribution: $${goal.monthlyContribution?.toLocaleString() || 0}
-        - Funding Sources: ${JSON.stringify(goal.metadata?.fundingSources || [])}
-
-        User Financial Context:
-        - Monthly Cash Flow: $${userProfile?.calculations?.monthlyCashFlow?.toLocaleString() || 'Unknown'}
-        - Total Assets: $${userProfile?.calculations?.totalAssets?.toLocaleString() || 'Unknown'}
-        - Total Liquid Assets: $${userProfile?.calculations?.totalLiquidAssets?.toLocaleString() || 'Unknown'}
-        - Home Value: $${userProfile?.homeValue?.toLocaleString() || 0}
-        - Mortgage Balance: $${userProfile?.mortgageBalance?.toLocaleString() || 0}
-        - Home Equity Available: $${((userProfile?.homeValue || 0) - (userProfile?.mortgageBalance || 0)).toLocaleString()}
-        - 401k Balance: $${userProfile?.retirement401k?.toLocaleString() || 0}
-        - Spouse 401k Balance: $${userProfile?.spouseRetirement401k?.toLocaleString() || 0}
-        - Taxable Brokerage: $${userProfile?.taxableBrokerage?.toLocaleString() || 0}
-        - Emergency Fund: $${userProfile?.emergencyFund?.toLocaleString() || 0}
-        - Monthly Income: $${((userProfile?.annualIncome || 0) / 12).toLocaleString()}
-        - Spouse Monthly Income: $${((userProfile?.spouseAnnualIncome || 0) / 12).toLocaleString()}
-
-        CRITICAL: The user has a $${shortfall.toLocaleString()} SHORTFALL that needs to be funded. 
-        ${shortfall > 0 ? `
-        This is NOT a retirement goal where 80-90% funding might be acceptable. The user NEEDS the full $${goal.targetAmount?.toLocaleString()} to ${goal.goalType === 'investment-property' ? 'purchase the investment property' : goal.goalType === 'home-purchase' ? 'buy their home' : goal.goalType === 'business' ? 'start their business' : 'achieve this goal'}.
-        
-        Provide 3-5 SPECIFIC recommendations to fund the $${shortfall.toLocaleString()} shortfall. Consider these funding sources in order of preference:
-        
-        1. Monthly Cash Flow: If user has positive monthly cash flow, calculate exactly how much extra they could contribute monthly to close the gap by the target date
-        2. Taxable Brokerage/Investment Accounts: Suggest reallocating from taxable accounts if available
-        3. Home Equity Line of Credit (HELOC): If user has home equity > $100k, suggest HELOC for the shortfall amount
-        4. 401(k) Loan: If user/spouse has 401k balance > 2x shortfall, suggest 401k loan (max $50k or 50% of balance)
-        5. Reduce Emergency Fund: Only if emergency fund > 6 months expenses
-        6. Extend Timeline: Calculate how much longer needed with current contributions
-        7. Reduce Target Amount: As last resort, suggest adjusting goal amount
-
-        Be SPECIFIC with dollar amounts and timelines. For example:
-        - "Increase monthly contributions by $X to close the $${shortfall.toLocaleString()} gap by [date]"
-        - "Consider a $${Math.min(shortfall, (userProfile?.homeValue || 0) - (userProfile?.mortgageBalance || 0) - 100000).toLocaleString()} HELOC against your home equity"
-        - "Take a $${Math.min(50000, shortfall, (userProfile?.retirement401k || 0) * 0.5).toLocaleString()} loan from your 401(k)"
-        ` : `
-        The user has FULLY FUNDED this goal. Provide recommendations to:
-        1. Protect the funding (ensure it's in appropriate accounts)
-        2. Optimize for taxes
-        3. Consider if they can achieve the goal sooner
-        4. Ensure proper insurance/protection
-        `}
-
-        Return recommendations as "urgent" type if shortfall > 20% of target, "caution" if 5-20%, "info" for specific strategies, and "success" only if fully funded.
-
-        Format your response as a JSON array of recommendation objects, each with:
-        {
-          "type": "success" | "info" | "caution" | "urgent",
-          "text": "Specific recommendation text"
-        }
-      `;
-
-      // Call Gemini API
-      const geminiResponse = await fetch('/api/generate-goal-recommendations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, goalData: goal })
-      });
-
-      if (geminiResponse.ok) {
-        const data = await geminiResponse.json();
-        if (data.recommendations) {
-          setGeminiRecommendations(data.recommendations);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching recommendations:', error);
-    } finally {
-      setLoadingRecommendations(false);
-    }
   };
 
   const getProgressColor = (percentage: number) => {
@@ -800,89 +725,47 @@ const LifeGoalsComponent = () => {
           </div>
           
           {/* Add Goal Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button 
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Life Goal
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent 
-              align="end" 
-              sideOffset={8}
-              className="w-56 bg-gray-800 border-gray-700"
-              onCloseAutoFocus={(e) => e.preventDefault()}
-            >
-              <DropdownMenuItem 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAddGoal('education');
-                }}
-                className="text-gray-300 hover:text-white hover:bg-gray-700 focus:bg-gray-700 focus:text-white"
-              >
-                <GraduationCap className="h-4 w-4 mr-2" />
-                Education
-              </DropdownMenuItem>
-              <DropdownMenuItem 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAddGoal('home-purchase');
-                }}
-                className="text-gray-300 hover:text-white hover:bg-gray-700 focus:bg-gray-700 focus:text-white"
-              >
-                <Home className="h-4 w-4 mr-2" />
-                Buying First Home
-              </DropdownMenuItem>
-              <DropdownMenuItem 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAddGoal('investment-property');
-                }}
-                className="text-gray-300 hover:text-white hover:bg-gray-700 focus:bg-gray-700 focus:text-white"
-              >
-                <Building2 className="h-4 w-4 mr-2" />
-                Buying Investment Property
-              </DropdownMenuItem>
-              <DropdownMenuItem 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAddGoal('debt-free');
-                }}
-                className="text-gray-300 hover:text-white hover:bg-gray-700 focus:bg-gray-700 focus:text-white"
-              >
-                <CreditCard className="h-4 w-4 mr-2" />
-                Debt-Free
-              </DropdownMenuItem>
-              <DropdownMenuItem 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAddGoal('business');
-                }}
-                className="text-gray-300 hover:text-white hover:bg-gray-700 focus:bg-gray-700 focus:text-white"
-              >
-                <Briefcase className="h-4 w-4 mr-2" />
-                Start a New Business
-              </DropdownMenuItem>
-              <DropdownMenuItem 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleAddGoal('custom');
-                }}
-                className="text-gray-300 hover:text-white hover:bg-gray-700 focus:bg-gray-700 focus:text-white"
-              >
-                <Sparkles className="h-4 w-4 mr-2" />
-                Custom Goal
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button 
+            className="bg-blue-600 hover:bg-blue-700"
+            onClick={() => setShowAddGoalDrawer(true)}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Life Goal
+          </Button>
         </div>
       </div>
 
+      {/* Loading State */}
+      {(isLoadingLifeGoals || isLoadingEducation) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Card key={i} className="bg-gray-800/50 border-gray-700 animate-pulse">
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-gray-700 w-9 h-9"></div>
+                    <div>
+                      <div className="h-5 bg-gray-700 rounded w-32 mb-2"></div>
+                      <div className="h-4 bg-gray-700 rounded w-24"></div>
+                    </div>
+                  </div>
+                  <div className="h-6 bg-gray-700 rounded w-16"></div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="h-4 bg-gray-700 rounded w-full"></div>
+                <div className="h-4 bg-gray-700 rounded w-3/4"></div>
+                <div className="h-8 bg-gray-700 rounded w-full"></div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
       {/* Goals Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {allGoals.map((goal, index) => {
+      {!isLoadingLifeGoals && !isLoadingEducation && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {allGoals.map((goal, index) => {
           const config = goalTypeConfig[goal.goalType];
           const Icon = config.icon;
           
@@ -1116,28 +999,8 @@ const LifeGoalsComponent = () => {
                   </div>
                   )}
                   
-                  {/* Action Buttons (non-retirement generic) */}
+                  {/* Action Buttons */}
                   <div className="flex gap-2 pt-2">
-                    {goal.goalType === 'retirement' ? null : (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="flex-1 bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-500"
-                          onClick={() => {
-                            if (goal.goalType === 'education') handleEditGoal(goal);
-                            else {
-                              setSelectedGoal(goal);
-                              setSelectedGoalType(goal.goalType);
-                              setShowUniversalForm(true);
-                            }
-                          }}
-                        >
-                          <Edit className="h-4 w-4 mr-1" />
-                          Edit
-                        </Button>
-                      </>
-                    )}
                     
                     {goal.goalType === 'education' && (
                       <>
@@ -1192,7 +1055,9 @@ const LifeGoalsComponent = () => {
                           className="flex-1 bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-500"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleEditGoal(goal);
+                            setSelectedGoal(goal);
+                            setSelectedGoalType(goal.goalType);
+                            setShowUniversalForm(true);
                           }}
                         >
                           <Edit className="h-4 w-4 mr-1" />
@@ -1228,8 +1093,9 @@ const LifeGoalsComponent = () => {
               </Card>
             </motion.div>
           );
-        })}
-      </div>
+          })}
+        </div>
+      )}
 
       {/* Forms */}
       {showEducationForm && (
@@ -1249,30 +1115,84 @@ const LifeGoalsComponent = () => {
         />
       )}
       
-      {showUniversalForm && (
-        <UniversalGoalFormEnhanced
-          isOpen={showUniversalForm}
-          onClose={() => {
-            setShowUniversalForm(false);
-            setSelectedGoal(null);
-            setSelectedGoalType('');
-          }}
-          goalType={selectedGoalType}
-          initialGoal={selectedGoal}
-        />
-      )}
+      <UniversalGoalFormEnhanced
+        isOpen={showUniversalForm}
+        onClose={() => {
+          setShowUniversalForm(false);
+          setSelectedGoal(null);
+          setSelectedGoalType('');
+        }}
+        goalType={selectedGoalType}
+        initialGoal={selectedGoal}
+      />
+
+      {/* Add Goal Drawer */}
+      <Drawer
+        shouldScaleBackground={false}
+        open={showAddGoalDrawer}
+        onOpenChange={(open) => setShowAddGoalDrawer(open)}
+      >
+        <DrawerContent className="bg-gray-900 border-gray-800 text-white h-[85vh] mt-0 left-0 sm:left-16 md:left-64 right-0 overflow-hidden">
+          <DrawerHeader className="px-6 pt-4 pb-2">
+            <div className="flex items-center justify-between">
+              <DrawerTitle className="text-white">Create Life Goal</DrawerTitle>
+              <DrawerClose asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Close"
+                  className="rounded-full text-gray-400 hover:text-white hover:bg-gray-800"
+                >
+                  <X className="h-5 w-5" />
+                </Button>
+              </DrawerClose>
+            </div>
+          </DrawerHeader>
+
+          <div className="px-6 pb-6 overflow-y-auto h-[calc(85vh-64px)]">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <Button className="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white"
+                onClick={() => { handleAddGoal('education'); setShowAddGoalDrawer(false); }}>
+                <GraduationCap className="h-4 w-4 mr-2" /> Education
+              </Button>
+              <Button className="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white"
+                onClick={() => { handleAddGoal('home-purchase'); setShowAddGoalDrawer(false); }}>
+                <Home className="h-4 w-4 mr-2" /> Buying First Home
+              </Button>
+              <Button className="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white"
+                onClick={() => { handleAddGoal('investment-property'); setShowAddGoalDrawer(false); }}>
+                <Building2 className="h-4 w-4 mr-2" /> Investment Property
+              </Button>
+              <Button className="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white"
+                onClick={() => { handleAddGoal('debt-free'); setShowAddGoalDrawer(false); }}>
+                <CreditCard className="h-4 w-4 mr-2" /> Debt-Free
+              </Button>
+              <Button className="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white"
+                onClick={() => { handleAddGoal('business'); setShowAddGoalDrawer(false); }}>
+                <Briefcase className="h-4 w-4 mr-2" /> Start a Business
+              </Button>
+              <Button className="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white"
+                onClick={() => { handleAddGoal('custom'); setShowAddGoalDrawer(false); }}>
+                <Sparkles className="h-4 w-4 mr-2" /> Custom Goal
+              </Button>
+            </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deleteConfirmGoal} onOpenChange={(open) => !open && setDeleteConfirmGoal(null)}>
         <AlertDialogContent className="bg-gray-900 border-gray-800 text-white">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-xl font-semibold text-white">
-              Delete Education Goal
+              {deleteConfirmGoal?.goalType === 'education' ? 'Delete Education Goal' : 'Delete Life Goal'}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">
-              Are you sure you want to delete the education goal for{' '}
+              {deleteConfirmGoal?.goalType === 'education'
+                ? 'Are you sure you want to delete the education goal '
+                : 'Are you sure you want to delete this goal '}
               <span className="text-white font-medium">
-                {deleteConfirmGoal?.goalName || 'this student'}
+                {deleteConfirmGoal?.goalName || (deleteConfirmGoal?.goalType === 'education' ? 'this student' : 'this goal')}
               </span>
               ? This action cannot be undone.
             </AlertDialogDescription>
@@ -1311,30 +1231,46 @@ const LifeGoalsComponent = () => {
         />
       )}
 
-      {/* Goal Analysis Modal */}
-      <Dialog open={showAnalysisModal} onOpenChange={setShowAnalysisModal}>
-        <DialogContent className="max-w-none w-[calc(100vw-4rem)] h-[80vh] bg-gray-900 border-gray-800 text-white overflow-hidden fixed left-16 top-20 translate-x-0 translate-y-0">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-semibold text-white">
-              {analysisGoal?.goalName} - Detailed Analysis
-            </DialogTitle>
-          </DialogHeader>
-          
+      {/* Goal Analysis Drawer */}
+      <Drawer
+        shouldScaleBackground={false}
+        open={showAnalysisModal}
+        onOpenChange={(open) => setShowAnalysisModal(open)}
+      >
+        <DrawerContent className="bg-gray-900 border-gray-800 text-white h-[95vh] mt-0 left-0 sm:left-16 md:left-64 right-0 overflow-hidden">
+          <DrawerHeader className="px-6 pt-4 pb-2">
+            <div className="flex items-center justify-between">
+              <DrawerTitle className="text-white">
+                {analysisGoal?.goalName} - Detailed Analysis
+              </DrawerTitle>
+              <DrawerClose asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Close analysis"
+                  className="rounded-full text-gray-400 hover:text-white hover:bg-gray-800"
+                >
+                  <X className="h-5 w-5" />
+                </Button>
+              </DrawerClose>
+            </div>
+          </DrawerHeader>
           {analysisGoal && (
-            <LifeGoalDetailView
-              goal={analysisGoal}
-              isOpen={showAnalysisModal}
-              userProfile={profile}
-              onClose={() => setShowAnalysisModal(false)}
-              onUpdate={(updatedGoal) => {
-                // Refresh the goals list and update local modal state
-                queryClient.invalidateQueries({ queryKey: ['/api/life-goals'] });
-                setAnalysisGoal(updatedGoal);
-              }}
-            />
+            <div className="px-6 pb-6 overflow-y-auto h-[calc(95vh-64px)]">
+              <LifeGoalDetailView
+                goal={analysisGoal}
+                isOpen={showAnalysisModal}
+                userProfile={profile}
+                onClose={() => setShowAnalysisModal(false)}
+                onUpdate={(updatedGoal) => {
+                  queryClient.invalidateQueries({ queryKey: ['/api/life-goals'] });
+                  setAnalysisGoal(updatedGoal);
+                }}
+              />
+            </div>
           )}
-        </DialogContent>
-      </Dialog>
+        </DrawerContent>
+      </Drawer>
     </div>
     </ErrorBoundary>
   );

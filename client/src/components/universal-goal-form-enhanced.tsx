@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Drawer,
   DrawerContent,
   DrawerHeader,
   DrawerTitle,
-  DrawerFooter,
 } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +23,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from 'sonner';
+import DebouncedInvalidation from '@/utils/debounced-invalidation';
 import {
   Home,
   Building2,
@@ -84,6 +84,10 @@ export function UniversalGoalFormEnhanced({
 }: UniversalGoalFormEnhancedProps) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('details');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Create debounced invalidation instance
+  const debouncedInvalidation = useMemo(() => new DebouncedInvalidation(queryClient), [queryClient]);
   
   // Form state
   const [goalName, setGoalName] = useState('');
@@ -94,42 +98,109 @@ export function UniversalGoalFormEnhanced({
   const [showLoanOptions, setShowLoanOptions] = useState(false);
   const [priority, setPriority] = useState<'high' | 'medium' | 'low'>('medium');
 
-  // Fetch financial profile to get liquid assets
-  const { data: profile } = useQuery({
+  // Fetch financial profile to get assets (use cache if already loaded by parent)
+  const { data: profile, refetch: refetchProfile } = useQuery({
     queryKey: ['/api/financial-profile'],
     queryFn: async () => {
-      const response = await fetch('/api/financial-profile');
+      const response = await fetch('/api/financial-profile', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to fetch profile');
       return response.json();
-    }
+    },
+    enabled: isOpen, // only fetch when drawer is open
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
 
-  // Extract liquid assets from profile
-  const liquidAssets = React.useMemo(() => {
-    if (!profile) return [];
-    
-    const assets = [];
-    
-    // Parse assets from profile
-    if (profile.assets && Array.isArray(profile.assets)) {
-      profile.assets.forEach((asset: any) => {
-        if (['checking', 'savings', 'taxable-brokerage', 'money-market'].includes(asset.type)) {
-          const owner = asset.owner === 'user' ? 'Your' : 
-                       asset.owner === 'spouse' ? "Spouse's" : 
-                       'Joint';
-          assets.push({
-            id: `asset-${assets.length}`,
-            name: `${owner} ${asset.description || asset.type}`,
-            value: Number(asset.value) || 0,
-            type: asset.type,
-            owner: asset.owner
-          });
-        }
-      });
+  // Refetch when the drawer opens to ensure latest assets
+  useEffect(() => {
+    if (isOpen) {
+      refetchProfile();
     }
-    
-    return assets;
+  }, [isOpen, refetchProfile]);
+
+  // Extract and normalize assets; return only LIQUID assets suitable for funding
+  const { liquidAssets, hasAnyAssets } = useMemo(() => {
+    const result = { liquidAssets: [] as Array<{ id: string; name: string; value: number; type: string; owner: string }>, hasAnyAssets: false };
+    if (!profile) return result;
+
+    // Parse assets array robustly
+    let assetsArray: any[] = [];
+    try {
+      assetsArray = Array.isArray(profile.assets)
+        ? profile.assets
+        : (typeof profile.assets === 'string' ? JSON.parse(profile.assets) : []);
+    } catch {
+      assetsArray = [];
+    }
+    if (!Array.isArray(assetsArray)) return result;
+    result.hasAnyAssets = assetsArray.length > 0;
+
+    // Normalization helpers
+    const normalizeType = (t: any) => {
+      const s = String(t || '').trim().toLowerCase();
+      if (!s) return '';
+      if (s === 'checking' || s === 'checking account') return 'checking';
+      if (s === 'savings' || s === 'saving account' || s === 'savings account') return 'savings';
+      if (s === 'brokerage' || s === 'brokerage account' || s === 'taxable brokerage' || s === 'taxable-brokerage') return 'taxable-brokerage';
+      if (s === 'money market' || s === 'money-market' || s === 'mmf' || s === 'money market fund') return 'money-market';
+      if (s === 'cd' || s === 'certificate of deposit' || s === 'certificate-of-deposit') return 'certificate-of-deposit';
+      if (s === 'cash' || s === 'cash account') return 'cash';
+      if (s === 'cash management' || s === 'cash-management') return 'cash-management';
+      return s; // fall through for unknowns
+    };
+
+    const normalizeOwner = (o: any) => {
+      const v = (o || '').toString().toLowerCase();
+      if (v === 'user' || v === 'self' || v === 'me') return "Your";
+      if (v === 'spouse' || v === 'partner') return "Spouse's";
+      if (v === 'joint') return 'Joint';
+      return 'Your';
+    };
+
+    const LIQUID_TYPES = new Set([
+      'checking',
+      'savings',
+      'taxable-brokerage',
+      'money-market',
+      'certificate-of-deposit',
+      'cd',
+      'cash',
+      'cash-management',
+    ]);
+
+    const items: Array<{ id: string; name: string; value: number; type: string; owner: string }> = [];
+
+    assetsArray.forEach((a: any, idx: number) => {
+      const normType = normalizeType(a.type);
+      if (!LIQUID_TYPES.has(normType)) return; // skip non-liquid assets
+
+      const ownerLabel = normalizeOwner(a.owner);
+      const typeLabel = (a.type || '').toString();
+      const desc = (a.description || '').toString().trim();
+      const label = `${ownerLabel} ${desc || typeLabel || 'Asset'}`;
+      const id = a._source?.plaidAccountId || `manual-${idx}`;
+      const rawVal = a.value ?? a.currentValue ?? a.balance ?? a.amount;
+      const value = Number(rawVal) || 0;
+      items.push({ id, name: label, value, type: normType, owner: a.owner || '' });
+    });
+
+    result.liquidAssets = items;
+    return result;
   }, [profile]);
+
+  // If user has liquid assets and no funding sources yet, pre-populate with all liquid assets
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!liquidAssets || liquidAssets.length === 0) return;
+    if (fundingSources && fundingSources.length > 0) return;
+    const prefilled = liquidAssets.map((a) => ({
+      id: `source-${a.id}`,
+      type: 'asset' as const,
+      name: a.name,
+      amount: a.value,
+    }));
+    setFundingSources(prefilled);
+  }, [isOpen, liquidAssets, fundingSources]);
 
   // Calculate funding coverage
   const fundingCoverage = React.useMemo(() => {
@@ -182,23 +253,25 @@ export function UniversalGoalFormEnhanced({
     ));
   };
 
-  // Save goal mutation
+  // Save goal mutation with optimized cache invalidation
   const saveGoalMutation = useMutation({
     mutationFn: async (data: GoalData) => {
+      setIsSubmitting(true);
+
       const url = data.id ? `/api/life-goals/${data.id}` : '/api/life-goals';
       const method = data.id ? 'PATCH' : 'POST';
-      
+
       const response = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
-      
+
       if (!response.ok) {
         const errorData = await response.text();
         console.error('Server response:', errorData);
         let errorMessage = 'Failed to save goal';
-        
+
         try {
           const parsedError = JSON.parse(errorData);
           if (parsedError.details) {
@@ -209,19 +282,22 @@ export function UniversalGoalFormEnhanced({
         } catch (e) {
           // Use default error message
         }
-        
+
         throw new Error(errorMessage);
       }
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/life-goals'] });
+      // Use debounced invalidation to prevent UI freezing
+      debouncedInvalidation.invalidateQueries(['/api/life-goals'], 500);
       toast.success('Goal saved successfully');
+      setIsSubmitting(false);
       onClose();
     },
     onError: (error: Error) => {
       console.error('Save error:', error);
       toast.error(error.message || 'Failed to save goal');
+      setIsSubmitting(false);
     }
   });
 
@@ -235,7 +311,7 @@ export function UniversalGoalFormEnhanced({
       setFundingSources(initialGoal.fundingSources || []);
       setPriority(initialGoal.priority || 'medium');
     } else {
-      // Set default goal name based on type
+      // Reset all form fields for new goal creation
       const defaultNames: Record<string, string> = {
         'home-purchase': 'First Home Purchase',
         'investment-property': 'Investment Property',
@@ -244,8 +320,28 @@ export function UniversalGoalFormEnhanced({
         'custom': 'Custom Goal'
       };
       setGoalName(defaultNames[goalType] || 'New Goal');
+      setDescription('');
+      setTargetDate('');
+      setTargetAmount('');
+      setFundingSources([]); // Clear funding sources for new goals
+      setPriority('medium');
     }
   }, [initialGoal, goalType]);
+
+  // Reset form when modal opens/closes (for new goals)
+  useEffect(() => {
+    if (!isOpen) {
+      setActiveTab('details');
+      if (!initialGoal) {
+        setFundingSources([]);
+        setGoalName('');
+        setDescription('');
+        setTargetDate('');
+        setTargetAmount('');
+        setPriority('medium');
+      }
+    }
+  }, [isOpen, initialGoal]);
 
   const handleSave = () => {
     if (!goalName || !targetDate || !targetAmount) {
@@ -294,8 +390,16 @@ export function UniversalGoalFormEnhanced({
   const Icon = getGoalIcon();
 
   return (
-    <Drawer open={isOpen} onOpenChange={(open) => { if (!open) return; }}>
-      <DrawerContent className="bg-gray-900 border-gray-800 text-white h-[90vh] mt-0 left-0 sm:left-16 md:left-64 right-0 overflow-y-auto">
+    <Drawer
+      shouldScaleBackground={false}
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      dismissible={false}
+      modal={true}
+    >
+      <DrawerContent className="bg-gray-900 border-gray-800 text-white h-[90vh] mt-0 left-0 sm:left-16 md:left-64 right-0 overflow-y-auto [&>div:first-child]:hidden">
         <DrawerHeader className="px-6 pt-6 pb-0">
           <div className="flex items-center justify-between">
             <DrawerTitle className="flex items-center gap-3 text-xl">
@@ -406,17 +510,55 @@ export function UniversalGoalFormEnhanced({
             {/* Removed Funding Coverage Preview - moved to Funding Sources tab only */}
             </TabsContent>
 
-          <TabsContent value="funding" className="space-y-6 mt-6">
+          <TabsContent value="funding" className="space-y-6 mt-6 relative">
+            {/* Show loading overlay when submitting */}
+            {isSubmitting && (
+              <div className="absolute inset-0 bg-gray-900/50 flex items-center justify-center z-20 rounded-lg">
+                <div className="bg-gray-800 p-4 rounded-lg flex items-center gap-3">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+                  <span className="text-white">Saving goal...</span>
+                </div>
+              </div>
+            )}
+
             <Alert className="bg-blue-900/20 border-blue-800">
               <Info className="h-4 w-4 text-blue-400" />
               <AlertDescription className="text-gray-300">
-                Add funding sources to show how you'll achieve this goal. You can use existing assets, 
+                Add funding sources to show how you'll achieve this goal. You can use existing assets,
                 take a loan, or save monthly.
               </AlertDescription>
             </Alert>
 
-            {/* Funding Sources List */}
-            <div className="space-y-3">
+            {/* Add Funding Source Buttons - Moved to top for better visibility */}
+            <div className="flex gap-3">
+              <Button
+                onClick={() => addFundingSource('asset')}
+                variant="outline"
+                className="flex-1 bg-gray-800 border-gray-700 text-white hover:bg-gray-700"
+              >
+                <Wallet className="h-4 w-4 mr-2" />
+                Add Asset
+              </Button>
+              <Button
+                onClick={() => addFundingSource('loan')}
+                variant="outline"
+                className="flex-1 bg-gray-800 border-gray-700 text-white hover:bg-gray-700"
+              >
+                <Banknote className="h-4 w-4 mr-2" />
+                Add Loan
+              </Button>
+              <Button
+                onClick={() => addFundingSource('monthly_savings')}
+                variant="outline"
+                className="flex-1 bg-gray-800 border-gray-700 text-white hover:bg-gray-700"
+              >
+                <PiggyBank className="h-4 w-4 mr-2" />
+                Add Monthly Savings
+              </Button>
+            </div>
+
+            {/* Funding Sources List - Made scrollable */}
+            <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800">
               {fundingSources.map((source) => (
                 <Card key={source.id} className="bg-gray-800 border-gray-700">
                   <CardContent className="pt-4">
@@ -458,11 +600,19 @@ export function UniversalGoalFormEnhanced({
                               <SelectValue placeholder="Choose asset" />
                             </SelectTrigger>
                             <SelectContent className="bg-gray-800 border-gray-700">
-                              {liquidAssets.map(asset => (
-                                <SelectItem key={asset.id} value={asset.name} className="text-white">
-                                  {asset.name} (${asset.value.toLocaleString()})
-                                </SelectItem>
-                              ))}
+                              {liquidAssets.length === 0 ? (
+                                <div className="px-3 py-2 text-sm text-gray-400">
+                                  {hasAnyAssets
+                                    ? 'No liquid accounts found. Add checking/savings/money market/CD in Intake Step 3, or use Loan/Monthly Savings.'
+                                    : 'No assets found'}
+                                </div>
+                              ) : (
+                                liquidAssets.map(asset => (
+                                  <SelectItem key={asset.id} value={asset.name} className="text-white">
+                                    {asset.name} (${asset.value.toLocaleString()})
+                                  </SelectItem>
+                                ))
+                              )}
                             </SelectContent>
                           </Select>
                         </div>
@@ -546,48 +696,22 @@ export function UniversalGoalFormEnhanced({
               ))}
             </div>
 
-            {/* Add Funding Source Buttons */}
-            <div className="flex gap-3">
-              <Button
-                onClick={() => addFundingSource('asset')}
-                variant="outline"
-                className="flex-1 bg-gray-800 border-gray-700 text-white hover:bg-gray-700"
-              >
-                <Wallet className="h-4 w-4 mr-2" />
-                Add Asset
-              </Button>
-              <Button
-                onClick={() => addFundingSource('loan')}
-                variant="outline"
-                className="flex-1 bg-gray-800 border-gray-700 text-white hover:bg-gray-700"
-              >
-                <Banknote className="h-4 w-4 mr-2" />
-                Add Loan
-              </Button>
-              <Button
-                onClick={() => addFundingSource('monthly_savings')}
-                variant="outline"
-                className="flex-1 bg-gray-800 border-gray-700 text-white hover:bg-gray-700"
-              >
-                <PiggyBank className="h-4 w-4 mr-2" />
-                Add Monthly Savings
-              </Button>
-            </div>
+            {/* Removed old Add Funding Source Buttons section from bottom */}
             {/* Save Goal Button - Only on Funding Sources Tab */}
-            <div className="flex justify-between pt-4">
+            <div className="flex justify-between pt-4 relative z-10 pointer-events-auto">
               <Button
                 onClick={() => setActiveTab('details')}
                 variant="outline"
-                className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700"
+                className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 relative z-10"
               >
                 Back
               </Button>
               <Button
                 onClick={handleSave}
-                disabled={saveGoalMutation.isPending}
-                className="bg-primary hover:bg-primary/90"
+                disabled={saveGoalMutation.isPending || isSubmitting}
+                className="bg-primary hover:bg-primary/90 relative z-10 pointer-events-auto"
               >
-                {saveGoalMutation.isPending ? 'Saving...' : 'Save Goal'}
+                {(saveGoalMutation.isPending || isSubmitting) ? 'Saving...' : 'Save Goal'}
               </Button>
               </div>
             </TabsContent>

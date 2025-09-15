@@ -19,7 +19,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { toast } from 'sonner';
 import {
   Home,
@@ -35,6 +35,7 @@ import {
   AlertCircle,
   Info
 } from "lucide-react";
+import { parseAssets, normalizeAssetType } from '@/utils/asset-utils';
 
 interface GoalData {
   id?: number;
@@ -194,6 +195,54 @@ export function UniversalGoalFormModal({
   }
   
   const [projectionResult, setProjectionResult] = useState<ProjectionResult | null>(null);
+
+  // Fetch financial profile to prefill funding sources from saved liquid assets
+  const { data: profile } = useQuery({
+    queryKey: ['/api/financial-profile'],
+    queryFn: async () => {
+      const res = await fetch('/api/financial-profile', { credentials: 'include' });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: isOpen,
+    staleTime: 30_000,
+  });
+
+  // Pre-populate fundingSources with user's liquid assets if empty
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!profile) return;
+    if (formData.fundingSources && formData.fundingSources.length > 0) return;
+
+    const assets = parseAssets((profile as any)?.assets);
+    if (!Array.isArray(assets) || assets.length === 0) return;
+
+    const LIQUID_TYPES = new Set([
+      'checking',
+      'savings',
+      'taxable-brokerage',
+      'brokerage',
+      'money-market',
+      'certificate-of-deposit',
+      'cd',
+      'cash',
+      'cash-management',
+    ]);
+
+    const initialSources = assets
+      .filter((a: any) => LIQUID_TYPES.has(normalizeAssetType(a?.type)))
+      .map((a: any) => {
+        const norm = normalizeAssetType(a?.type);
+        const type = (norm === 'taxable-brokerage' || norm === 'brokerage') ? 'investment' : 'savings';
+        const rawVal = a?.value ?? a?.currentValue ?? a?.balance ?? a?.amount;
+        const amount = Number(rawVal) || 0;
+        return { type, amount, frequency: 'one-time' as const };
+      });
+
+    if (initialSources.length > 0) {
+      setFormData(prev => ({ ...prev, fundingSources: initialSources }));
+    }
+  }, [isOpen, profile, formData.fundingSources]);
 
   useEffect(() => {
     if (initialGoal) {

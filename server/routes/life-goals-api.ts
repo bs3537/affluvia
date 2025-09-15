@@ -139,8 +139,8 @@ export function setupLifeGoalsRoutes(app: any, storage: Storage) {
       // Get user's financial profile for context
       const profile = await storage.getFinancialProfile(req.user!.id);
       
-      // Generate insights using Gemini API
-      const insights = await generateLifeGoalInsights(goal, profile);
+      // Generate insights using Gemini API with comprehensive context
+      const insights = await generateLifeGoalInsights(goal, profile, req.user!.id);
       
       res.json(insights);
     } catch (error) {
@@ -349,8 +349,8 @@ export function setupLifeGoalsRoutes(app: any, storage: Storage) {
       // Get user's financial profile for context
       const profile = await storage.getFinancialProfile(req.user!.id);
       
-      // Generate insights using Gemini API
-      const insights = await generateLifeGoalInsights(goal, profile);
+      // Generate insights using Gemini API with comprehensive context
+      const insights = await generateLifeGoalInsights(goal, profile, req.user!.id);
       
       res.json(insights);
     } catch (error) {
@@ -411,7 +411,7 @@ export function setupLifeGoalsRoutes(app: any, storage: Storage) {
       };
       
       // Use the sophisticated analysis function that considers all funding options
-      const insights = await generateLifeGoalInsights(goalForAnalysis, profile);
+      const insights = await generateLifeGoalInsights(goalForAnalysis, profile, req.user!.id);
       
       // Transform insights to match the client's expected format
       const recommendations = insights.map((insight: any) => {

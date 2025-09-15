@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   X, 
@@ -28,6 +28,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Slider } from '@/components/ui/slider';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
+import { useQuery } from '@tanstack/react-query';
+import { filter529Plans, parseAssets } from '@/utils/asset-utils';
 
 interface CollegeSearchResult {
   id: number;
@@ -70,6 +72,9 @@ interface EducationGoal {
   fundingSources?: FundingSource[];
   expectedReturn?: number;
   riskProfile?: string;
+  // Optional linkage to a specific 529 asset from profile
+  selected529AssetId?: string;
+  selected529AssetName?: string;
   // Student loan specific fields
   loanInterestRate?: number;
   loanRepaymentTerm?: number;
@@ -242,6 +247,21 @@ export function GoalFormModal({ goal, onClose, onSave }: GoalFormModalProps) {
   const [selectedState, setSelectedState] = useState<string>('');
   const [selectedSchoolType, setSelectedSchoolType] = useState<'public' | 'private' | null>(null);
   const [selectedGradeLevel, setSelectedGradeLevel] = useState<'elementary' | 'secondary' | 'average' | null>(null);
+  
+  // Load financial profile to surface 529 plan accounts
+  const { data: profile } = useQuery({
+    queryKey: ['/api/financial-profile'],
+    queryFn: async () => {
+      const res = await fetch('/api/financial-profile', { credentials: 'include' });
+      if (!res.ok) return null;
+      return res.json();
+    }
+  });
+  const educationAssetOptions = useMemo(() => {
+    if (!profile) return [] as Array<{ id: string; name: string; value: number; type: string; owner?: any }>;
+    const assets = parseAssets((profile as any).assets);
+    return filter529Plans(assets);
+  }, [profile]);
   
   // Reconstruct funding sources from scholarshipPerYear and loanPerYear if editing
   const reconstructFundingSources = (goal: EducationGoal | null): FundingSource[] => {
@@ -1541,6 +1561,41 @@ export function GoalFormModal({ goal, onClose, onSave }: GoalFormModalProps) {
                 </Alert>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  {/* 529 Plan Account Selection */}
+                  <div className="space-y-2">
+                    <Label className="text-white text-base font-medium">529 Plan Account (optional)</Label>
+                    <p className="text-sm text-gray-400">Choose an existing 529 plan from your assets</p>
+                    <Select
+                      value={formData.selected529AssetId || ''}
+                      onValueChange={(val) => {
+                        const asset = educationAssetOptions.find(a => a.id === val);
+                        setFormData(prev => ({
+                          ...prev,
+                          selected529AssetId: val,
+                          selected529AssetName: asset?.name,
+                          // If no current savings entered, default from selected asset value
+                          currentSavings: (prev.currentSavings && prev.currentSavings > 0) ? prev.currentSavings : (asset?.value || 0),
+                          accountType: '529'
+                        }));
+                      }}
+                    >
+                      <SelectTrigger className="bg-gray-800/50 border-gray-700 focus:border-purple-500 text-white">
+                        <SelectValue placeholder={educationAssetOptions.length ? 'Select 529 account' : 'No 529 accounts found'} />
+                      </SelectTrigger>
+                      <SelectContent className="bg-gray-800 border-gray-700 text-white">
+                        {educationAssetOptions.length === 0 ? (
+                          <div className="px-3 py-2 text-sm text-gray-400">No 529 plans found</div>
+                        ) : (
+                          educationAssetOptions.map(a => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.name} (${a.value.toLocaleString()})
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   {/* Current Savings */}
                   <div className="space-y-2">
                     <Label htmlFor="currentSavings" className="text-white text-base font-medium">

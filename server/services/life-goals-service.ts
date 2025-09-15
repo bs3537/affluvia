@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { buildComprehensiveUserContext, formatUserDataForAI } from "../ai-context-builder";
 
 interface FundingSource {
   id: string;
@@ -128,8 +129,13 @@ export function calculateLifeGoalScenario(goal: LifeGoal, scenario: WhatIfScenar
   };
 }
 
-export async function generateLifeGoalInsights(goal: LifeGoal, profile: any): Promise<any[]> {
+export async function generateLifeGoalInsights(goal: LifeGoal, profile: any, userId?: number): Promise<any[]> {
   try {
+    // Ignore Gemini insights for retirement and education goals per requirements
+    if (goal.goalType === 'retirement' || goal.goalType === 'education') {
+      return [];
+    }
+
     const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
@@ -186,8 +192,23 @@ export async function generateLifeGoalInsights(goal: LifeGoal, profile: any): Pr
     const emergencyFund = profile.emergencyFund || 0;
     const netWorth = profile.netWorth || 0;
     
+    // Build comprehensive user context (if possible)
+    let comprehensiveContext = '';
+    if (typeof userId === 'number') {
+      try {
+        const userData = await buildComprehensiveUserContext(userId);
+        comprehensiveContext = formatUserDataForAI(userData);
+      } catch (e) {
+        console.log('Error building comprehensive user context for insights:', e);
+      }
+    }
+
     const prompt = `
-    As a certified financial planner, analyze this life goal and provide SPECIFIC, PERSONALIZED recommendations to COMPLETELY ELIMINATE the funding shortfall.
+    You are AFFLUVIA AI, a CFP professional planner.
+    THINK HARD. Reason step-by-step using the user's FULL financial context (intake, dashboard widgets, retirement planning results, optimized plan deltas).
+    Use the user's ACTUAL numbers. Be precise, realistic, and prioritize impact. Do not output your internal reasoning, only final results.
+
+    Analyze this life goal and provide SPECIFIC, PERSONALIZED recommendations to COMPLETELY ELIMINATE the funding shortfall.
     
     CRITICAL: THE ACTUAL SHORTFALL IS $${actualShortfall.toLocaleString()} - USE THIS NUMBER FOR ALL CALCULATIONS
     
@@ -223,10 +244,12 @@ export async function generateLifeGoalInsights(goal: LifeGoal, profile: any): Pr
     - **Maximum 401(k) Loan: $${max401kLoan.toLocaleString()}**
     
     - Total Net Worth: $${netWorth.toLocaleString()}
+
+    ${comprehensiveContext ? `\n\n=== USER CONTEXT (CONDENSED) ===\n${comprehensiveContext}` : ''}
     
     ${actualShortfall <= 0 ? 
       'NOTE: This goal is ALREADY FULLY FUNDED! Provide optimization recommendations instead.' :
-      `PROVIDE 3-5 SPECIFIC recommendations to eliminate the $${actualShortfall.toLocaleString()} shortfall.`
+      `PROVIDE AT LEAST 3 (ideally 3-5) SPECIFIC recommendations to eliminate the $${actualShortfall.toLocaleString()} shortfall.`
     }
     
     FOLLOW THIS EXACT PRIORITY ORDER:
@@ -259,7 +282,7 @@ export async function generateLifeGoalInsights(goal: LifeGoal, profile: any): Pr
     - Why this option makes sense for THEIR specific situation
     - Any risks or considerations
     
-    Return ONLY a JSON array with this structure:
+    Return ONLY a JSON array with this structure (no markdown, no prose, JSON array only):
     [
       {
         "title": "Specific action with exact dollar amount",
@@ -292,6 +315,33 @@ export async function generateLifeGoalInsights(goal: LifeGoal, profile: any): Pr
         return aOrder - bOrder;
       });
       
+      // Ensure at least 3 insights; if fewer, top up with fallback
+      if (Array.isArray(insights) && insights.length < 3) {
+        const fallback = getEnhancedDefaultInsights(
+          goal,
+          profile,
+          monthsToGoal,
+          monthlyCashFlow,
+          actualShortfall,
+          {
+            homeEquity,
+            maxHELOC,
+            total401k,
+            max401kLoan,
+            taxableInvestments
+          }
+        );
+        const merged = [...insights, ...fallback];
+        // De-duplicate by title and take first 3-5
+        const seen = new Set<string>();
+        const unique = merged.filter((i: any) => {
+          const key = (i.title || '').toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        return unique.slice(0, Math.max(3, Math.min(5, unique.length)));
+      }
       return insights;
     }
     
