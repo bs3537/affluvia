@@ -425,6 +425,61 @@ const LifeGoalsComponent = () => {
     },
   });
 
+  // Create education goal mutation (used when adding from Life Goals)
+  const createEducationGoalMutation = useMutation({
+    mutationFn: async (goalData: EducationGoalFromAPI) => {
+      // Transform to API shape consistent with Education Funding Center
+      const fallbackCost = goalData.goalType === 'college' ? 35000 : 15000;
+      const apiData = {
+        studentName: goalData.studentName,
+        relationship: goalData.relationship || 'child',
+        goalType: goalData.goalType,
+        degreeType: (goalData as any).degreeType || 'undergraduate',
+        stateOfResidence: goalData.stateOfResidence || profile?.state || null,
+        startYear: goalData.startYear,
+        endYear: goalData.endYear,
+        years: goalData.years,
+        costOption: goalData.costOption,
+        collegeId: (goalData as any).collegeId,
+        collegeName: goalData.collegeName || null,
+        costPerYear: goalData.costPerYear || fallbackCost,
+        includeRoomBoard: (goalData as any).includeRoomBoard,
+        isInState: (goalData as any).isInState,
+        // Server aggregates these but include sane inputs
+        scholarshipPerYear: (goalData as any).scholarshipPerYear || 0,
+        loanPerYear: (goalData as any).loanPerYear || 0,
+        coverPercent: goalData.coverPercent,
+        currentSavings: goalData.currentSavings || 0,
+        monthlyContribution: goalData.monthlyContribution || 0,
+        accountType: goalData.accountType || '529',
+        expectedReturn: goalData.expectedReturn || 6,
+        riskProfile: goalData.riskProfile || 'moderate',
+        fundingSources: goalData.fundingSources || []
+      } as any;
+
+      const response = await fetch('/api/education/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(apiData),
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`Failed to create education goal: ${response.status} ${errorText}`);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      // Refresh both lists
+      queryClient.invalidateQueries({ queryKey: ['/api/education/goals'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/life-goals'] });
+      toast.success('Education goal created successfully');
+    },
+    onError: (err: any) => {
+      const msg = err?.message || 'Failed to create education goal';
+      toast.error(msg);
+    }
+  });
+
   // Combine all goals with optimized processing
   const allGoals = React.useMemo(() => {
     // Early return if data is still loading to prevent blocking operations
@@ -1106,11 +1161,10 @@ const LifeGoalsComponent = () => {
             setEditingEducationGoal(null);
           }}
           onSave={(goal) => {
-            // The education goal will be saved through the education funding center API
-            // and will automatically sync to life goals
+            // Persist the education goal via API so it appears across the app
+            createEducationGoalMutation.mutate(goal as unknown as EducationGoalFromAPI);
             setShowEducationForm(false);
             setEditingEducationGoal(null);
-            queryClient.invalidateQueries({ queryKey: ['/api/education/goals'] });
           }}
         />
       )}

@@ -39,6 +39,7 @@ import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import { GoalFormModal } from './education-goal-form';
 import { EducationAIChatbot } from './education-ai-chatbot';
+import { Gauge } from "@/components/ui/gauge";
 
 // Register ChartJS components
 ChartJS.register(
@@ -86,6 +87,9 @@ interface EducationGoal {
     fundingPercentage: number;
     monthlyContributionNeeded: number;
     comprehensiveFundingPercentage?: number;
+    // Monte Carlo outputs (optional, provided by server)
+    probabilityOfSuccess?: number;
+    monteCarloAnalysis?: any;
   };
 }
 
@@ -167,8 +171,8 @@ export function EducationFundingCenter() {
     }
   };
 
-  // Fetch education goals
-  const { data: goals = [], isLoading } = useQuery({
+  // Fetch education goals (server returns { goals: [...], plaid529Accounts: [...] })
+  const { data: goalsPayload, isLoading } = useQuery({
     queryKey: ['/api/education/goals'],
     queryFn: async () => {
       const response = await fetch('/api/education/goals');
@@ -176,6 +180,13 @@ export function EducationFundingCenter() {
       return response.json();
     }
   });
+
+  // Normalize payload to arrays for safer use
+  const goals: EducationGoal[] = Array.isArray(goalsPayload)
+    ? (goalsPayload as any)
+    : (Array.isArray((goalsPayload as any)?.goals) ? (goalsPayload as any).goals : []);
+  const plaid529Accounts: Array<{ accountId: string; accountName: string; balance: number; institutionName?: string }>
+    = Array.isArray((goalsPayload as any)?.plaid529Accounts) ? (goalsPayload as any).plaid529Accounts : [];
 
   // Fetch user profile
   const { data: profile } = useQuery({
@@ -344,11 +355,11 @@ export function EducationFundingCenter() {
     }
   };
 
-  // Calculate aggregated metrics
-  const totalCost = goals.reduce((sum: number, goal: EducationGoal) => 
+  // Calculate aggregated metrics (guard for undefined goals)
+  const totalCost = (goals || []).reduce((sum: number, goal: EducationGoal) => 
     sum + (goal.projection?.totalCost || 0), 0
   );
-  const totalFunded = goals.reduce((sum: number, goal: EducationGoal) => 
+  const totalFunded = (goals || []).reduce((sum: number, goal: EducationGoal) => 
     sum + (goal.projection?.totalFunded || 0), 0
   );
   const totalGap = totalCost - totalFunded;
@@ -406,7 +417,7 @@ export function EducationFundingCenter() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <MetricCard
             label="Total Cost"
-            value={`$${totalCost.toLocaleString()}`}
+            value={`$${totalCost.toLocaleString()} (includes tuition inflation)`}
             icon={<DollarSign className="h-5 w-5" />}
             trend="neutral"
           />
@@ -430,16 +441,16 @@ export function EducationFundingCenter() {
           />
           <MetricCard
             label="Active Goals"
-            value={goals.length.toString()}
+            value={(goals || []).length.toString()}
             icon={<School className="h-5 w-5" />}
             trend="neutral"
           />
           <MetricCard
             label="Avg Monthly"
-            value={`$${goals.length > 0 ? 
-              Math.round(goals.reduce((sum: number, g: EducationGoal) => 
+            value={`$${(goals || []).length > 0 ? 
+              Math.round((goals || []).reduce((sum: number, g: EducationGoal) => 
                 sum + parseFloat(g.monthlyContribution?.toString() || '0'), 0
-              ) / goals.length).toLocaleString() : '0'
+              ) / (goals || []).length).toLocaleString() : '0'
             }`}
             icon={<TrendingUp className="h-5 w-5" />}
             trend="neutral"
@@ -519,7 +530,7 @@ export function EducationFundingCenter() {
       <EducationAIChatbot
         isOpen={showAIChatbot}
         onClose={() => setShowAIChatbot(false)}
-        educationGoals={goals}
+        educationGoals={goals || []}
       />
     </div>
   );
@@ -571,7 +582,20 @@ function GoalCard({
   onDelete: () => void;
 }) {
   const fundingPercentage = goal.projection?.fundingPercentage || 0;
+  const successProbability = (goal.projection?.probabilityOfSuccess ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfSuccess ?? 0) as number;
   const isOnTrack = fundingPercentage >= 70;
+
+  const getSuccessColor = (p: number) => {
+    if (p >= 80) return 'text-green-400';
+    if (p >= 60) return 'text-yellow-400';
+    return 'text-red-400';
+  };
+
+  const getSuccessBadgeVariant = (p: number) => {
+    if (p >= 80) return 'default' as const;
+    if (p >= 60) return 'secondary' as const;
+    return 'destructive' as const;
+  };
 
   return (
     <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
@@ -615,6 +639,9 @@ function GoalCard({
             <Badge variant={isOnTrack ? "default" : "destructive"}>
               {fundingPercentage}% Funded
             </Badge>
+            <Badge variant={getSuccessBadgeVariant(successProbability)} className="bg-opacity-80">
+              {Math.round(successProbability)}% Success (Monte Carlo)
+            </Badge>
             <span className="text-sm text-gray-400">
               {goal.startYear}-{goal.endYear}
             </span>
@@ -625,7 +652,13 @@ function GoalCard({
             <div className="flex justify-between text-sm">
               <span className="text-gray-400">Total Cost:</span>
               <span className="text-white font-medium">
-                ${goal.projection?.totalCost.toLocaleString() || 0}
+                ${goal.projection?.totalCost.toLocaleString() || 0} (includes tuition inflation)
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-400">Success Probability:</span>
+              <span className={`font-medium ${getSuccessColor(successProbability)}`}>
+                {Math.round(successProbability)}% (Monte Carlo)
               </span>
             </div>
           </div>
@@ -659,10 +692,12 @@ function GoalAnalysis({
   onSaveScenario: () => void;
   isSavingScenario: boolean;
 }) {
+  const successProbability = (goal.projection?.probabilityOfSuccess ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfSuccess ?? 0) as number;
+
   return (
     <div className="space-y-6">
-          {/* 1. Funding Coverage and Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 1. Funding Coverage, Charts, and Monte Carlo Success Gauge */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Current Plan - Update with scenario data when available */}
             <Card className="bg-gray-900/50 border-gray-800">
               <CardHeader>
@@ -725,6 +760,7 @@ function GoalAnalysis({
                 <CardTitle className="text-white">
                   Annual Cost vs. Funding Sources
                 </CardTitle>
+                <p className="text-xs text-gray-400">(includes tuition inflation)</p>
               </CardHeader>
               <CardContent>
                 <div className="h-64">
@@ -782,6 +818,41 @@ function GoalAnalysis({
                       }}
                     />
                   )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Monte Carlo Success Probability Gauge */}
+            <Card className="bg-gray-900/50 border-gray-800">
+              <CardHeader>
+                <CardTitle className="text-white">
+                  Monte Carlo Success Probability
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col items-center py-4">
+                  <Gauge
+                    value={successProbability}
+                    max={100}
+                    size="md"
+                    showValue={true}
+                    valueLabel=""
+                    colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
+                    thresholds={{ medium: 65, high: 80 }}
+                  />
+                  <p className="text-xs text-gray-400 mt-3 text-center">
+                    Probability of meeting education funding goals
+                  </p>
+                  <p className="text-xs text-gray-500 text-center">
+                    Target: 80%+ recommended for confidence
+                  </p>
+                  <div className={`mt-3 px-3 py-1 rounded-full text-xs font-medium ${
+                    successProbability >= 80 ? 'bg-green-900/30 text-green-400' :
+                    successProbability >= 65 ? 'bg-yellow-900/30 text-yellow-400' :
+                    'bg-red-900/30 text-red-400'
+                  }`}>
+                    {successProbability >= 80 ? 'High Confidence' : successProbability >= 65 ? 'Moderate Risk' : 'Needs Improvement'}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1205,5 +1276,3 @@ function SensitivityBar({ label, impact }: { label: string; impact: number }) {
     </div>
   );
 }
-
-

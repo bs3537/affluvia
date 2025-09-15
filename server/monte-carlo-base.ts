@@ -1,4 +1,5 @@
 import type { EducationGoal, FinancialProfile } from './types.ts';
+import { runEducationMonteCarlo } from "./education-monte-carlo.ts";
 import { calculateCombinedTaxRate, calculateCapitalGainsTax } from './tax-calculator.ts';
 import { 
   categorizeAssetsByTax, 
@@ -535,63 +536,10 @@ export async function calculateEducationProjectionWithMonteCarlo(
     totalCostNeeded += netCost;
   }
   
-  // Run Monte Carlo simulation
-  const currentSavings = parseFloat(goal.currentSavings?.toString() || '0');
+  // Run Education-specific tax/aid-aware Monte Carlo for success probability and contribution target
+  const eduMC = runEducationMonteCarlo(goal, profile, { iterations: 1000, targetSuccessRate: 80 });
   const monthlyContribution = parseFloat(goal.monthlyContribution?.toString() || '0');
-  const yearsUntilStart = goal.startYear - currentYear;
-  
-  // Determine volatility based on risk profile
-  let returnVolatility = 0.15; // Default 15%
-  if (goal.riskProfile === 'conservative') {
-    returnVolatility = 0.08; // 8% for conservative
-  } else if (goal.riskProfile === 'aggressive') {
-    returnVolatility = 0.20; // 20% for aggressive
-  } else if (goal.riskProfile === 'glide') {
-    returnVolatility = 0.12; // 12% for glide path (moderate volatility)
-  }
-  
-  const monteCarloResult = runMonteCarloSimulation({
-    currentSavings,
-    monthlyContribution,
-    yearsUntilStart,
-    totalCostNeeded,
-    expectedReturn,
-    inflationRate,
-    returnVolatility,
-    riskProfile: goal.riskProfile,
-  });
-  
-  // Calculate required monthly contribution for target success probability
-  let targetMonthlyContribution = monthlyContribution;
-  const targetSuccessProbability = 80; // Target 80% success rate
-  
-  if (monteCarloResult.probabilityOfSuccess < targetSuccessProbability) {
-    // Binary search to find required monthly contribution
-    let low = monthlyContribution;
-    let high = totalCostNeeded / (yearsUntilStart * 12);
-    
-    while (high - low > 1) {
-      const mid = (low + high) / 2;
-      const testResult = runMonteCarloSimulation({
-        currentSavings,
-        monthlyContribution: mid,
-        yearsUntilStart,
-        totalCostNeeded,
-        expectedReturn,
-        inflationRate,
-        returnVolatility,
-        riskProfile: goal.riskProfile,
-      }, 100); // Fewer iterations for speed
-      
-      if (testResult.probabilityOfSuccess < targetSuccessProbability) {
-        low = mid;
-      } else {
-        high = mid;
-      }
-    }
-    
-    targetMonthlyContribution = Math.ceil(high);
-  }
+  const targetMonthlyContribution = eduMC.recommendedMonthlyContribution ?? monthlyContribution;
   
   // Generate glide path projection data for dashboard
   let glidePathProjection = null;
@@ -637,20 +585,21 @@ export async function calculateEducationProjectionWithMonteCarlo(
   // Return enhanced projection with Monte Carlo results
   return {
     totalCostNeeded: Math.round(totalCostNeeded),
-    currentProjectedValue: Math.round(monteCarloResult.projectedValues.median),
-    probabilityOfSuccess: Math.round(monteCarloResult.probabilityOfSuccess),
+    currentProjectedValue: undefined,
+    probabilityOfSuccess: Math.round(eduMC.probabilityOfSuccess),
     monthlyContributionNeeded: targetMonthlyContribution,
     glidePathProjection,
     monteCarloAnalysis: {
-      ...monteCarloResult,
+      scenarios: eduMC.scenarios,
+      shortfallPercentiles: eduMC.shortfallPercentiles,
       recommendedMonthlyContribution: targetMonthlyContribution,
       riskProfile: goal.riskProfile,
-      volatilityUsed: returnVolatility,
+      volatilityUsed: undefined,
       confidenceLevels: {
-        veryLikely: monteCarloResult.probabilityOfSuccess >= 90,
-        likely: monteCarloResult.probabilityOfSuccess >= 75,
-        possible: monteCarloResult.probabilityOfSuccess >= 50,
-        unlikely: monteCarloResult.probabilityOfSuccess < 50,
+        veryLikely: eduMC.probabilityOfSuccess >= 90,
+        likely: eduMC.probabilityOfSuccess >= 75,
+        possible: eduMC.probabilityOfSuccess >= 50,
+        unlikely: eduMC.probabilityOfSuccess < 50,
       },
     },
   };
