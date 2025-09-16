@@ -263,6 +263,37 @@ export function GoalFormModal({ goal, onClose, onSave }: GoalFormModalProps) {
     return filter529Plans(assets);
   }, [profile]);
   
+  // Load Plaid-linked 529 accounts (if any)
+  const { data: plaidData } = useQuery({
+    queryKey: ['/api/education/plaid-529-accounts'],
+    queryFn: async () => {
+      const res = await fetch('/api/education/plaid-529-accounts', { credentials: 'include' });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  const plaidAssetOptions = useMemo(() => {
+    const accounts = plaidData?.accounts || [];
+    return accounts.map((acc: any) => ({
+      id: acc.accountId,
+      name: `Plaid • ${[acc.institutionName, acc.accountName].filter(Boolean).join(' ')}`.trim(),
+      value: Number(acc.balance) || 0,
+      type: acc.accountType || '529',
+    }));
+  }, [plaidData]);
+
+  const merged529Options = useMemo(() => {
+    const merged = new Map<string, { id: string; name: string; value: number; type: string }>();
+    [...plaidAssetOptions, ...educationAssetOptions].forEach((asset) => {
+      if (!merged.has(asset.id)) {
+        merged.set(asset.id, asset);
+      }
+    });
+    return Array.from(merged.values());
+  }, [plaidAssetOptions, educationAssetOptions]);
+  
   // Reconstruct funding sources from scholarshipPerYear and loanPerYear if editing
   const reconstructFundingSources = (goal: EducationGoal | null): FundingSource[] => {
     if (!goal) return [];
@@ -1564,11 +1595,11 @@ export function GoalFormModal({ goal, onClose, onSave }: GoalFormModalProps) {
                   {/* 529 Plan Account Selection */}
                   <div className="space-y-2">
                     <Label className="text-white text-base font-medium">529 Plan Account (optional)</Label>
-                    <p className="text-sm text-gray-400">Choose an existing 529 plan from your assets</p>
+                    <p className="text-sm text-gray-400">Choose from linked Plaid accounts or saved assets</p>
                     <Select
                       value={formData.selected529AssetId || ''}
                       onValueChange={(val) => {
-                        const asset = educationAssetOptions.find(a => a.id === val);
+                        const asset = merged529Options.find(a => a.id === val);
                         setFormData(prev => ({
                           ...prev,
                           selected529AssetId: val,
@@ -1580,13 +1611,13 @@ export function GoalFormModal({ goal, onClose, onSave }: GoalFormModalProps) {
                       }}
                     >
                       <SelectTrigger className="bg-gray-800/50 border-gray-700 focus:border-purple-500 text-white">
-                        <SelectValue placeholder={educationAssetOptions.length ? 'Select 529 account' : 'No 529 accounts found'} />
+                        <SelectValue placeholder={merged529Options.length ? 'Select 529 account' : 'No 529 accounts found'} />
                       </SelectTrigger>
                       <SelectContent className="bg-gray-800 border-gray-700 text-white">
-                        {educationAssetOptions.length === 0 ? (
+                        {merged529Options.length === 0 ? (
                           <div className="px-3 py-2 text-sm text-gray-400">No 529 plans found</div>
                         ) : (
-                          educationAssetOptions.map(a => (
+                          merged529Options.map(a => (
                             <SelectItem key={a.id} value={a.id}>
                               {a.name} (${a.value.toLocaleString()})
                             </SelectItem>
@@ -1594,6 +1625,21 @@ export function GoalFormModal({ goal, onClose, onSave }: GoalFormModalProps) {
                         )}
                       </SelectContent>
                     </Select>
+
+                    {typeof plaidData?.detectedMonthlyContribution === 'number' && plaidData.detectedMonthlyContribution > 0 && (
+                      <div className="text-xs text-gray-400 mt-2 flex items-center gap-2">
+                        Detected monthly contribution via Plaid: ${Number(plaidData.detectedMonthlyContribution).toLocaleString()}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="border-purple-500 text-purple-400 hover:bg-purple-900/20 hover:text-white"
+                          onClick={() => updateField('monthlyContribution', Number(plaidData.detectedMonthlyContribution) || 0)}
+                        >
+                          Use
+                        </Button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Current Savings */}
@@ -1649,7 +1695,7 @@ export function GoalFormModal({ goal, onClose, onSave }: GoalFormModalProps) {
                       onClick={addFundingSource}
                       variant="outline"
                       size="sm"
-                      className="border-purple-500 text-purple-400 hover:bg-purple-900/20 hover:text-white"
+                      className="bg-purple-600 hover:bg-purple-700 text-white border-purple-600 hover:border-purple-700"
                     >
                       <Plus className="h-4 w-4 mr-1" />
                       Add Source
@@ -2115,7 +2161,7 @@ export function GoalFormModal({ goal, onClose, onSave }: GoalFormModalProps) {
                   onClick={onClose} 
                   variant="outline" 
                   size="lg"
-                  className="border-purple-600 bg-white text-black hover:bg-purple-50 hover:border-purple-700 px-8"
+                  className="border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-500 px-8"
                 >
                   Cancel
                 </Button>

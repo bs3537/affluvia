@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
 import {
   School,
   Plus,
@@ -17,7 +15,8 @@ import {
   Calculator,
   Target,
   PiggyBank,
-  Sparkles
+  CreditCard,
+  RefreshCcw
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -38,7 +37,7 @@ import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import { GoalFormModal } from './education-goal-form';
-import { EducationAIChatbot } from './education-ai-chatbot';
+import { EducationOptimizerForm, OptimizerSavePayload } from './education-optimizer-form';
 import { Gauge } from "@/components/ui/gauge";
 
 // Register ChartJS components
@@ -72,9 +71,16 @@ interface EducationGoal {
   currentSavings?: number;
   monthlyContribution?: number;
   accountType?: string;
-  fundingSources?: any[];
+  // funding sources include scholarships and student loans
+  fundingSources?: Array<{ type: string; amount?: number }>;
   expectedReturn?: number;
   riskProfile?: string;
+  // Added fields so we can baseline-fill the optimizer
+  inflationRate?: number;
+  scholarshipPerYear?: number;
+  loanPerYear?: number;
+  loanInterestRate?: number;
+  loanRepaymentTerm?: number;
   stateOfResidence?: string;
   projection?: {
     years: number[];
@@ -101,75 +107,249 @@ interface Recommendation {
   impact: string;
 }
 
+type OptimizerControls = {
+  strategy?: string | null;
+  tuitionInflation?: number | null;
+  annualScholarships?: number | null;
+  extraYearProbability?: number | null;
+  maxMonthlyContribution?: number | null;
+  maxLoanPerYear?: number | null;
+  monthlyContribution?: number | null;
+  loanPerYear?: number | null;
+};
+
 export function EducationFundingCenter() {
   const [selectedGoal, setSelectedGoal] = useState<EducationGoal | null>(null);
   const [showGoalForm, setShowGoalForm] = useState(false);
-  const [whatIfVariables, setWhatIfVariables] = useState({
-    annualCost: '',
-    inflationRate: '',
-    scholarships: '',
-    monthlyContribution: '',
-    expectedReturn: '',
-    currentSavings: ''
-  });
   const [scenarioResult, setScenarioResult] = useState<any>(null);
-  const [isCalculatingScenario, setIsCalculatingScenario] = useState(false);
-  const [isSavingScenario, setIsSavingScenario] = useState(false);
-  const [showAIChatbot, setShowAIChatbot] = useState(false);
+  const [optimizerDefaults, setOptimizerDefaults] = useState<OptimizerControls>({});
+  const [isSavingOptimization, setIsSavingOptimization] = useState(false);
+  const [canGenerateInsights, setCanGenerateInsights] = useState(false);
+  const [showInsights, setShowInsights] = useState(false);
   const queryClient = useQueryClient();
 
-  // Initialize What-If variables with current goal data when goal is selected
-  React.useEffect(() => {
-    if (selectedGoal) {
-      // Map risk profile to expected return (same mapping as in education goal form)
-      const riskProfileReturns: { [key: string]: number } = {
-        'conservative': 4,
-        'moderate': 6,
-        'aggressive': 8,
-        'glide': 6 // Glide path starts with moderate baseline
-      };
-      
-      // Get expected return from risk profile mapping or fall back to stored expectedReturn
-      let expectedReturn = '6'; // Default
-      if (selectedGoal.riskProfile && riskProfileReturns[selectedGoal.riskProfile] !== undefined) {
-        expectedReturn = riskProfileReturns[selectedGoal.riskProfile].toString();
-      } else if (selectedGoal.expectedReturn) {
-        expectedReturn = selectedGoal.expectedReturn.toString();
-      }
-      
-      // First set defaults from current goal
-      const defaultVariables = {
-        annualCost: selectedGoal.costPerYear?.toString() || '',
-        inflationRate: '5', // Default inflation rate used in calculations
-        scholarships: '0', // Default scholarship amount
-        monthlyContribution: selectedGoal.monthlyContribution?.toString() || '',
-        expectedReturn: expectedReturn,
-        currentSavings: selectedGoal.currentSavings?.toString() || ''
-      };
-      
-      setWhatIfVariables(defaultVariables);
-      
-      // Try to load any saved scenario for this goal
-      loadSavedScenario();
-    }
-  }, [selectedGoal]);
-
-  // Load saved What-If scenario if exists
-  const loadSavedScenario = async () => {
-    if (!selectedGoal?.id) return;
-    
+  const loadSavedScenario = React.useCallback(async (goalId: number | string, baseDefaults: OptimizerControls) => {
     try {
-      const response = await fetch(`/api/education/saved-scenario/${selectedGoal.id}`);
-      if (response.ok) {
-        const savedScenario = await response.json();
-        setWhatIfVariables(savedScenario.variables);
-        setScenarioResult(savedScenario.result);
+      const response = await fetch(`/api/education/saved-scenario/${goalId}`);
+      if (!response.ok) {
+        setScenarioResult(null);
+        setOptimizerDefaults(baseDefaults);
+        return;
       }
+      const savedScenario = await response.json();
+      setScenarioResult(savedScenario.result);
+      setOptimizerDefaults({
+        ...baseDefaults,
+        strategy: savedScenario.variables?.investmentStrategy ?? savedScenario.variables?.strategy ?? baseDefaults.strategy ?? null,
+        tuitionInflation: typeof savedScenario.variables?.tuitionInflationRate === 'number'
+          ? Math.round(savedScenario.variables.tuitionInflationRate * 1000) / 10
+          : baseDefaults.tuitionInflation ?? null,
+        annualScholarships: typeof savedScenario.variables?.annualScholarships === 'number'
+          ? savedScenario.variables.annualScholarships
+          : baseDefaults.annualScholarships ?? null,
+        extraYearProbability: typeof savedScenario.variables?.extraYearProbability === 'number'
+          ? Math.round(savedScenario.variables.extraYearProbability * 100)
+          : baseDefaults.extraYearProbability ?? null,
+        maxMonthlyContribution: typeof savedScenario.variables?.monthlyContribution === 'number'
+          ? savedScenario.variables.monthlyContribution
+          : baseDefaults.maxMonthlyContribution ?? null,
+        maxLoanPerYear: typeof savedScenario.variables?.loanPerYear === 'number'
+          ? savedScenario.variables.loanPerYear
+          : baseDefaults.maxLoanPerYear ?? null,
+        monthlyContribution: typeof savedScenario.variables?.monthlyContribution === 'number'
+          ? savedScenario.variables.monthlyContribution
+          : baseDefaults.monthlyContribution ?? null,
+        loanPerYear: typeof savedScenario.variables?.loanPerYear === 'number'
+          ? savedScenario.variables.loanPerYear
+          : baseDefaults.loanPerYear ?? null,
+      });
     } catch (error) {
-      // Silently fail - just means no saved scenario exists
-      console.log('No saved scenario found for goal:', selectedGoal.id);
+      console.log('No saved scenario found for goal:', goalId);
+      setScenarioResult(null);
+      setOptimizerDefaults(baseDefaults);
     }
-  };
+  }, []);
+
+  React.useEffect(() => {
+    if (!selectedGoal) {
+      setScenarioResult(null);
+      setOptimizerDefaults({});
+      setCanGenerateInsights(false);
+      setShowInsights(false);
+      return;
+    }
+
+    const baseDefaults: OptimizerControls = {
+      strategy: selectedGoal.riskProfile || "balanced",
+      tuitionInflation: (() => {
+        const inflationValue = Number(selectedGoal.inflationRate ?? 2.4);
+        return Number.isFinite(inflationValue) ? inflationValue : 2.4;
+      })(),
+      annualScholarships: (() => {
+        const fromSources = Array.isArray(selectedGoal.fundingSources)
+          ? selectedGoal.fundingSources
+              .filter((s: any) => (s?.type || "").toLowerCase() === "scholarships")
+              .reduce((sum: number, s: any) => sum + (Number(s?.amount) || 0), 0)
+          : 0;
+        const scholarshipsValue = Number(selectedGoal.scholarshipPerYear ?? fromSources ?? 0);
+        return Number.isFinite(scholarshipsValue) ? scholarshipsValue : 0;
+      })(),
+      extraYearProbability: 0,
+      maxMonthlyContribution: (() => {
+        const val = Number(selectedGoal.monthlyContribution ?? 0);
+        return Number.isFinite(val) ? val : 0;
+      })(),
+      maxLoanPerYear: (() => {
+        const fromSources = Array.isArray(selectedGoal.fundingSources)
+          ? selectedGoal.fundingSources
+              .filter((s: any) => (s?.type || "").toLowerCase() === "student_loan")
+              .reduce((sum: number, s: any) => sum + (Number(s?.amount) || 0), 0)
+          : 0;
+        const val = Number(selectedGoal.loanPerYear ?? fromSources ?? 0);
+        return Number.isFinite(val) ? val : 0;
+      })(),
+      monthlyContribution: (() => {
+        const val = Number(selectedGoal.monthlyContribution ?? 0);
+        return Number.isFinite(val) ? val : 0;
+      })(),
+      loanPerYear: (() => {
+        const fromSources = Array.isArray(selectedGoal.fundingSources)
+          ? selectedGoal.fundingSources
+              .filter((s: any) => (s?.type || "").toLowerCase() === "student_loan")
+              .reduce((sum: number, s: any) => sum + (Number(s?.amount) || 0), 0)
+          : 0;
+        const val = Number(selectedGoal.loanPerYear ?? fromSources ?? 0);
+        return Number.isFinite(val) ? val : 0;
+      })(),
+    };
+
+    setScenarioResult(null);
+    setOptimizerDefaults(baseDefaults);
+    loadSavedScenario(selectedGoal.id ?? 0, baseDefaults);
+  }, [selectedGoal?.id, loadSavedScenario]);
+
+  React.useEffect(() => {
+    let aborted = false;
+    async function loadOptimizationStatus() {
+      setCanGenerateInsights(false);
+      setShowInsights(false);
+      if (!selectedGoal?.id) return;
+      try {
+        const response = await fetch(`/api/education/optimization-status/${selectedGoal.id}`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!aborted) {
+          setCanGenerateInsights(Boolean(data?.hasSavedOptimization));
+        }
+      } catch (error) {
+        console.warn('Unable to load optimization status', error);
+      }
+    }
+    loadOptimizationStatus();
+    return () => {
+      aborted = true;
+    };
+  }, [selectedGoal?.id]);
+
+  React.useEffect(() => {
+    if (!selectedGoal?.id || showInsights) {
+      return;
+    }
+
+    const queryKey = [`/api/education/goal-recommendations/${selectedGoal.id}`];
+    const cachedQuery = queryClient.getQueryData(queryKey) as any;
+    if (cachedQuery?.recommendations?.length) {
+      setShowInsights(true);
+      return;
+    }
+
+    if (!canGenerateInsights) {
+      return;
+    }
+
+    let aborted = false;
+    async function preloadExistingInsights() {
+      try {
+        const response = await fetch(`/api/education/goal-recommendations/${selectedGoal.id}?cachedOnly=true`);
+        if (!response.ok || response.status === 204) {
+          return;
+        }
+        const data = await response.json();
+        if (aborted) {
+          return;
+        }
+        if (Array.isArray(data?.recommendations) && data.recommendations.length > 0) {
+          queryClient.setQueryData(queryKey, data);
+          setShowInsights(true);
+        }
+      } catch (error) {
+        console.warn("Unable to preload education insights", error);
+      }
+    }
+
+    preloadExistingInsights();
+    return () => {
+      aborted = true;
+    };
+  }, [selectedGoal?.id, showInsights, canGenerateInsights, queryClient]);
+
+  const handleOptimizationSave = React.useCallback(async (payload: OptimizerSavePayload) => {
+    if (!selectedGoal?.id) {
+      toast.error('Select an education goal before saving.');
+      return;
+    }
+    if (!scenarioResult) {
+      toast.error('Run the optimizer before saving the plan.');
+      return;
+    }
+
+    setIsSavingOptimization(true);
+    try {
+      const response = await fetch('/api/education/optimize/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          goalId: selectedGoal.id,
+          optimizerControls: payload.controls,
+          optimizerResult: scenarioResult,
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Save failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.optimizerResult) {
+        setScenarioResult(data.optimizerResult);
+      }
+      if (data.goal) {
+        setSelectedGoal((prev) => {
+          if (!prev || String(prev.id) !== String(data.goal.id)) return prev;
+          return { ...prev, ...data.goal };
+        });
+      }
+      setOptimizerDefaults((prev) => ({
+        ...prev,
+        strategy: payload.controls.strategy,
+        tuitionInflation: payload.controls.tuitionInflation,
+        annualScholarships: payload.controls.annualScholarships,
+        extraYearProbability: payload.controls.extraYearProbability,
+        maxMonthlyContribution: payload.controls.maxMonthlyContribution,
+        maxLoanPerYear: payload.controls.maxLoanPerYear,
+        monthlyContribution: payload.controls.maxMonthlyContribution,
+        loanPerYear: payload.controls.maxLoanPerYear,
+      }));
+      await queryClient.invalidateQueries({ queryKey: ['/api/education/goals'] });
+      setCanGenerateInsights(true);
+      toast.success('Optimization saved successfully.');
+    } catch (error) {
+      console.error('Error saving optimization:', error);
+      toast.error('Failed to save optimized plan.');
+    } finally {
+      setIsSavingOptimization(false);
+    }
+  }, [selectedGoal, scenarioResult, queryClient]);
 
   // Fetch education goals (server returns { goals: [...], plaid529Accounts: [...] })
   const { data: goalsPayload, isLoading } = useQuery({
@@ -210,7 +390,7 @@ export function EducationFundingCenter() {
       costOption: goal.costOption,
       collegeName: goal.collegeName || null,
       costPerYear: goal.costPerYear || (goal.goalType === 'college' ? 35000 : 15000),
-      inflationRate: 5.0,
+      inflationRate: 2.4,
       coverPercent: goal.coverPercent,
       currentSavings: goal.currentSavings || 0,
       monthlyContribution: goal.monthlyContribution || 0,
@@ -290,70 +470,10 @@ export function EducationFundingCenter() {
   });
 
   // Calculate What-If scenario
-  const calculateScenario = async () => {
-    if (!selectedGoal?.id) return;
-    
-    setIsCalculatingScenario(true);
-    try {
-      const response = await fetch('/api/education/calculate-scenario', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          goalId: selectedGoal.id,
-          variables: {
-            annualCost: whatIfVariables.annualCost ? parseFloat(whatIfVariables.annualCost) : undefined,
-            inflationRate: whatIfVariables.inflationRate ? parseFloat(whatIfVariables.inflationRate) : undefined,
-            scholarships: whatIfVariables.scholarships ? parseFloat(whatIfVariables.scholarships) : undefined,
-            monthlyContribution: whatIfVariables.monthlyContribution ? parseFloat(whatIfVariables.monthlyContribution) : undefined,
-            expectedReturn: whatIfVariables.expectedReturn ? parseFloat(whatIfVariables.expectedReturn) : undefined,
-            currentSavings: whatIfVariables.currentSavings ? parseFloat(whatIfVariables.currentSavings) : undefined,
-          }
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to calculate scenario');
-      }
-      
-      const result = await response.json();
-      setScenarioResult(result);
-      toast.success('Scenario calculated successfully');
-    } catch (error) {
-      console.error('Error calculating scenario:', error);
-      toast.error('Failed to calculate scenario');
-    } finally {
-      setIsCalculatingScenario(false);
-    }
-  };
+
 
   // Save What-If scenario
-  const saveScenario = async () => {
-    if (!selectedGoal?.id || !scenarioResult) return;
-    
-    setIsSavingScenario(true);
-    try {
-      const response = await fetch('/api/education/save-scenario', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          goalId: selectedGoal.id,
-          variables: whatIfVariables,
-          result: scenarioResult
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to save scenario');
-      }
-      
-      toast.success('Scenario saved successfully');
-    } catch (error) {
-      console.error('Error saving scenario:', error);
-      toast.error('Failed to save scenario');
-    } finally {
-      setIsSavingScenario(false);
-    }
-  };
+
 
   // Calculate aggregated metrics (guard for undefined goals)
   const totalCost = (goals || []).reduce((sum: number, goal: EducationGoal) => 
@@ -362,10 +482,106 @@ export function EducationFundingCenter() {
   const totalFunded = (goals || []).reduce((sum: number, goal: EducationGoal) => 
     sum + (goal.projection?.totalFunded || 0), 0
   );
-  const totalGap = totalCost - totalFunded;
+  const totalLoans = (goals || []).reduce((sum: number, goal: EducationGoal) => 
+    sum + (goal.projection?.totalLoans || 0), 0
+  );
+  const totalGap = totalCost - totalFunded - totalLoans;
   const overallFundingPercentage = totalCost > 0 
     ? Math.round((totalFunded / totalCost) * 100) 
     : 0;
+
+  const optimizerCaps = React.useMemo(() => {
+    const isIndependent = selectedGoal?.relationship?.toLowerCase() === 'independent';
+    return {
+      maxMonthlyContribution: 5000,
+      maxLoanPerYear: isIndependent ? 12500 : 7500
+    };
+  }, [selectedGoal?.relationship]);
+
+  // Affordable payment hint based on household income, expenses, existing debt, and loan terms
+  const affordabilityHint = React.useMemo(() => {
+    const goal = selectedGoal;
+    if (!goal) return null as null | {
+      monthlyPaymentLimit: number;
+      impliedMaxTotalLoan: number;
+      impliedMaxLoanPerYear: number;
+      termYears: number;
+      ratePct: number;
+      constraintsUsed: { burden: number | null; dtiRoom: number | null; surplus: number | null };
+    };
+
+    const annualIncome = Number(profile?.annualIncome || 0) + Number(profile?.spouseAnnualIncome || 0);
+    const monthlyIncome = annualIncome / 12;
+    if (!Number.isFinite(monthlyIncome) || monthlyIncome <= 0) return null;
+
+    // Existing debt (mirror server logic: mortgage, auto_loan, personal_loan)
+    let existingDebt = 0;
+    try {
+      const liabilities: any[] = Array.isArray((profile as any)?.liabilities) ? (profile as any)?.liabilities : [];
+      existingDebt = liabilities
+        .filter(l => ['mortgage', 'auto_loan', 'personal_loan'].includes(String(l.type)))
+        .reduce((s, l) => s + (Number(l.monthlyPayment || 0)), 0);
+    } catch {}
+
+    // Monthly expenses
+    let monthlyExpenses = 0;
+    let hasExpenses = false;
+    if (profile?.totalMonthlyExpenses != null) {
+      monthlyExpenses = Number(profile?.totalMonthlyExpenses || 0);
+      hasExpenses = true;
+    } else if ((profile as any)?.monthlyExpenses && typeof (profile as any).monthlyExpenses === 'object') {
+      try {
+        const me: any = (profile as any).monthlyExpenses;
+        monthlyExpenses = Object.values(me).reduce((s: number, v: any) => s + (Number(v || 0)), 0);
+        hasExpenses = true;
+      } catch {}
+    }
+
+    const burdenMax = Math.min(0.10, Number((goal as any).loanBurdenMaxPct ?? 0.10));
+    const m1 = monthlyIncome * burdenMax; // burden limit
+    const m2 = Math.max(0, monthlyIncome * 0.43 - existingDebt); // DTI room
+    const surplus = hasExpenses ? Math.max(0, monthlyIncome - monthlyExpenses) : null; // cash flow margin
+
+    const candidates: number[] = [m1, m2].filter((x) => Number.isFinite(x));
+    if (surplus != null) candidates.push(surplus);
+    if (candidates.length === 0) return null;
+    const monthlyPaymentLimit = Math.max(0, Math.min(...candidates));
+
+    // Invert amortization to estimate max total loans supportable by this payment
+    const ratePct = Number((goal as any).loanInterestRate ?? 10);
+    const years = Math.max(1, Number((goal as any).loanRepaymentTerm ?? 10));
+    const r = (ratePct / 100) / 12;
+    const n = years * 12;
+    const impliedMaxTotalLoan = r > 0
+      ? monthlyPaymentLimit * ((Math.pow(1 + r, n) - 1) / (r * Math.pow(1 + r, n)))
+      : monthlyPaymentLimit * n;
+
+    const eduYears = Math.max(1, Number(goal.years || 1));
+    const impliedMaxLoanPerYear = impliedMaxTotalLoan / eduYears;
+
+    // Also provide a reference using typical private loan terms: 8% APR, 10 years
+    const privateRatePct = 8;
+    const privateYears = 10;
+    const rp = (privateRatePct / 100) / 12;
+    const np = privateYears * 12;
+    const impliedMaxTotalLoanPrivate = rp > 0
+      ? monthlyPaymentLimit * ((Math.pow(1 + rp, np) - 1) / (rp * Math.pow(1 + rp, np)))
+      : monthlyPaymentLimit * np;
+    const impliedMaxLoanPerYearPrivate = impliedMaxTotalLoanPrivate / eduYears;
+
+    return {
+      monthlyPaymentLimit,
+      impliedMaxTotalLoan,
+      impliedMaxLoanPerYear,
+      termYears: years,
+      ratePct,
+      constraintsUsed: { burden: m1, dtiRoom: m2, surplus },
+      privateRatePct,
+      privateTermYears: privateYears,
+      impliedMaxTotalLoanPrivate,
+      impliedMaxLoanPerYearPrivate,
+    };
+  }, [selectedGoal, profile]);
 
   return (
     <div className="p-4 lg:p-8 max-w-7xl mx-auto">
@@ -380,26 +596,6 @@ export function EducationFundingCenter() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {/* AI Chatbot Button */}
-            <div className="relative group">
-              <Button
-                onClick={() => setShowAIChatbot(true)}
-                variant="ghost"
-                size="sm"
-                className="bg-gradient-to-br from-blue-600 via-purple-600 to-purple-700 hover:from-blue-700 hover:via-purple-700 hover:to-purple-800 text-white border-0 transition-all duration-300 transform hover:scale-105"
-              >
-                <div className="relative">
-                  <Sparkles className="h-5 w-5" />
-                  {/* Glitter effect */}
-                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-blue-300 rounded-full animate-ping"></div>
-                  <div className="absolute -bottom-1 -left-1 w-1.5 h-1.5 bg-purple-300 rounded-full animate-pulse delay-150"></div>
-                </div>
-              </Button>
-              {/* Tooltip */}
-              <div className="absolute -bottom-8 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                Ask Affluvia AI
-              </div>
-            </div>
             <Button
               onClick={() => {
                 setSelectedGoal(null);
@@ -414,10 +610,10 @@ export function EducationFundingCenter() {
         </div>
 
         {/* Key Metrics Row - Following Miller's Law (7±2 items) */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
           <MetricCard
             label="Total Cost"
-            value={`$${totalCost.toLocaleString()} (includes tuition inflation)`}
+            value={`$${totalCost.toLocaleString()}`}
             icon={<DollarSign className="h-5 w-5" />}
             trend="neutral"
           />
@@ -426,6 +622,12 @@ export function EducationFundingCenter() {
             value={`$${totalFunded.toLocaleString()}`}
             icon={<PiggyBank className="h-5 w-5" />}
             trend="positive"
+          />
+          <MetricCard
+            label="Total Loans"
+            value={`$${totalLoans.toLocaleString()}`}
+            icon={<CreditCard className="h-5 w-5" />}
+            trend="neutral"
           />
           <MetricCard
             label="Funding Gap"
@@ -489,18 +691,24 @@ export function EducationFundingCenter() {
           {selectedGoal && (
             <GoalAnalysis
               goal={selectedGoal}
-              whatIfVariables={whatIfVariables}
-              onWhatIfChange={setWhatIfVariables}
               scenarioResult={scenarioResult}
-              onCalculateScenario={calculateScenario}
-              isCalculatingScenario={isCalculatingScenario}
-              onSaveScenario={saveScenario}
-              isSavingScenario={isSavingScenario}
+              optimizerDefaults={optimizerDefaults}
+              optimizerCaps={optimizerCaps}
+              affordabilityHint={affordabilityHint}
+              isSavingOptimization={isSavingOptimization}
+              canGenerateInsights={canGenerateInsights}
+              showInsights={showInsights}
+              onOptimized={(result) => {
+                setScenarioResult(result);
+                toast.success(`Optimized: ${result.probabilityOfSuccess}% success`);
+              }}
+              onSaveOptimization={handleOptimizationSave}
+              onGenerateInsights={() => setShowInsights(true)}
             />
           )}
 
           {/* Personalized Recommendations */}
-          {selectedGoal && (
+          {selectedGoal && showInsights && (
             <PersonalizedRecommendations goalId={selectedGoal.id} />
           )}
         </div>
@@ -526,12 +734,6 @@ export function EducationFundingCenter() {
         />
       )}
 
-      {/* AI Chatbot */}
-      <EducationAIChatbot
-        isOpen={showAIChatbot}
-        onClose={() => setShowAIChatbot(false)}
-        educationGoals={goals || []}
-      />
     </div>
   );
 }
@@ -675,29 +877,121 @@ function GoalCard({
 // Goal Analysis Component
 function GoalAnalysis({
   goal,
-  whatIfVariables,
-  onWhatIfChange,
   scenarioResult,
-  onCalculateScenario,
-  isCalculatingScenario,
-  onSaveScenario,
-  isSavingScenario
+  onOptimized,
+  optimizerDefaults,
+  optimizerCaps,
+  affordabilityHint,
+  isSavingOptimization,
+  canGenerateInsights,
+  showInsights,
+  onSaveOptimization,
+  onGenerateInsights,
 }: {
   goal: EducationGoal;
-  whatIfVariables: any;
-  onWhatIfChange: (variables: any) => void;
   scenarioResult: any;
-  onCalculateScenario: () => void;
-  isCalculatingScenario: boolean;
-  onSaveScenario: () => void;
-  isSavingScenario: boolean;
+  onOptimized: (result: any) => void;
+  optimizerDefaults: OptimizerControls;
+  optimizerCaps: { maxMonthlyContribution: number; maxLoanPerYear: number };
+  affordabilityHint: null | {
+    monthlyPaymentLimit: number;
+    impliedMaxTotalLoan: number;
+    impliedMaxLoanPerYear: number;
+    termYears: number;
+    ratePct: number;
+    constraintsUsed?: { burden: number | null; dtiRoom: number | null; surplus: number | null };
+    privateRatePct?: number;
+    privateTermYears?: number;
+    impliedMaxTotalLoanPrivate?: number;
+    impliedMaxLoanPerYearPrivate?: number;
+  };
+  isSavingOptimization: boolean;
+  canGenerateInsights: boolean;
+  showInsights: boolean;
+  onSaveOptimization: (payload: OptimizerSavePayload) => Promise<void> | void;
+  onGenerateInsights: () => void;
 }) {
-  const successProbability = (goal.projection?.probabilityOfSuccess ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfSuccess ?? 0) as number;
+  const successProbability = (scenarioResult?.probabilityOfSuccess ?? goal.projection?.probabilityOfSuccess ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfSuccess ?? 0) as number;
+
+  // Unified series and totals (prefer scenario result; fall back to baseline projection). Use nullish coalescing so zeros are respected.
+  const years = (scenarioResult?.years ?? goal.projection?.years ?? []) as number[];
+  const costs = (scenarioResult?.costs ?? goal.projection?.costs ?? []) as number[];
+  const fundedSeries = (scenarioResult?.funded ?? goal.projection?.funded ?? []) as number[];
+  const loansSeries = (scenarioResult?.loanAmounts ?? goal.projection?.loanAmounts ?? (costs || []).map(() => 0)) as number[];
+
+  const totalFunded = (scenarioResult?.totalFunded ?? goal.projection?.totalFunded ?? 0) as number;
+  const totalLoans = (scenarioResult?.totalLoans ?? goal.projection?.totalLoans ?? (loansSeries || []).reduce((a, b) => a + (b || 0), 0)) as number;
+  const totalCost = (scenarioResult?.totalCost ?? goal.projection?.totalCost ?? 0) as number;
+
+  const fundingPercentage = (scenarioResult?.fundingPercentage ?? goal.projection?.fundingPercentage ?? 0) as number;
+  const comprehensiveFundingPercentage = (() => {
+    const explicit = scenarioResult?.comprehensiveFundingPercentage ?? goal.projection?.comprehensiveFundingPercentage;
+    if (typeof explicit === 'number') return explicit;
+    return totalCost > 0 ? Math.round(((totalFunded + totalLoans) / totalCost) * 100) : 0;
+  })();
+
+  const recommendedMonthly = (scenarioResult?.monteCarlo?.recommendedMonthlyContribution ?? scenarioResult?.monteCarloAnalysis?.recommendedMonthlyContribution ?? goal.projection?.monteCarloAnalysis?.recommendedMonthlyContribution ?? goal.projection?.monthlyContributionNeeded) as number | undefined;
+  const currentMonthly = (scenarioResult?.variables?.monthlyContribution ?? goal.monthlyContribution ?? 0) as number;
+  const loanCap = (scenarioResult?.variables?.loanPerYear ?? (goal as any)?.loanPerYear ?? 0) as number;
+  const shortfallP50 = (scenarioResult?.monteCarlo?.shortfallPercentiles?.p50 ?? scenarioResult?.monteCarloAnalysis?.shortfallPercentiles?.p50 ?? goal.projection?.monteCarloAnalysis?.shortfallPercentiles?.p50) as number | undefined;
+  const maxGap = costs.length ? Math.max(...costs.map((c, i) => Math.max(0, c - (fundedSeries[i] ?? 0) - (loansSeries[i] ?? 0)))) : 0;
 
   return (
     <div className="space-y-6">
-          {/* 1. Funding Coverage, Charts, and Monte Carlo Success Gauge */}
+          {/* 1. Monte Carlo Gauge, Funding Coverage, and Annual Cost */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Monte Carlo Success Probability Gauge */}
+            <Card className="bg-gray-900/50 border-gray-800">
+              <CardHeader>
+                <CardTitle className="text-white">
+                  Monte Carlo Success Probability
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col items-center py-4">
+                  <Gauge
+                    value={successProbability}
+                    max={100}
+                    size="md"
+                    showValue={true}
+                    valueLabel=""
+                    colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
+                    thresholds={{ medium: 65, high: 80 }}
+                  />
+                  <p className="text-xs text-gray-400 mt-3 text-center">
+                    Probability of meeting education funding goals
+                  </p>
+                  <p className="text-[10px] text-gray-500 text-center mt-1">
+                    Metric: Affordability-constrained coverage (529 + in-year cash + loans; payments ≤8–10% of income; DTI ≤43%; fits monthly cash flow; total loans ≤ starting salary)
+                  </p>
+                  <p className="text-xs text-gray-500 text-center">
+                    Target: 80%+ recommended for confidence
+                  </p>
+                  <div className={`mt-3 px-3 py-1 rounded-full text-xs font-medium ${
+                    successProbability >= 80 ? 'bg-green-900/30 text-green-400' :
+                    successProbability >= 65 ? 'bg-yellow-900/30 text-yellow-400' :
+                    'bg-red-900/30 text-red-400'
+                  }`}>
+                    {successProbability >= 80 ? 'High Confidence' : successProbability >= 65 ? 'Moderate Risk' : 'Needs Improvement'}
+                  </div>
+                  {(scenarioResult?.monteCarlo?.probabilityOfComprehensiveCoverage ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfComprehensiveCoverage) != null && (
+                    <p className="text-xs text-gray-400 mt-2 text-center">
+                      Comprehensive coverage (529 + other + loans): {Math.round((scenarioResult?.monteCarlo?.probabilityOfComprehensiveCoverage ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfComprehensiveCoverage) as number)}%
+                    </p>
+                  )}
+                  {successProbability < 80 && (
+                    <div className="mt-3 text-xs text-gray-300 text-center space-y-1">
+                      {maxGap > 0 && <p>Largest annual gap up to ${maxGap.toLocaleString()} even after loans.</p>}
+                      {typeof recommendedMonthly === 'number' && (
+                        <p>Recommended monthly to reach 80%: ${Math.round(recommendedMonthly).toLocaleString()} (current: ${Math.round(currentMonthly).toLocaleString()}, loan cap: ${Math.round(loanCap).toLocaleString()}/yr)</p>
+                      )}
+                      {typeof shortfallP50 === 'number' && <p>Median shortfall in failed cases: ${Math.round(shortfallP50).toLocaleString()}.</p>}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
             {/* Current Plan - Update with scenario data when available */}
             <Card className="bg-gray-900/50 border-gray-800">
               <CardHeader>
@@ -709,14 +1003,13 @@ function GoalAnalysis({
                 <div className="h-64 max-w-sm mx-auto">
                   <Doughnut
                     data={(() => {
-                      const totalFunded = scenarioResult?.totalFunded || goal.projection?.totalFunded || 0;
-                      const totalCost = scenarioResult?.totalCost || goal.projection?.totalCost || 0;
-                      const fundingGap = Math.max(0, totalCost - totalFunded);
-                      
+                      const covered = Math.max(0, totalFunded + totalLoans);
+                      const gap = Math.max(0, totalCost - covered);
+
                       return {
-                        labels: ['Funded', 'Gap'],
+                        labels: ['Covered (529 + Loans)', 'Gap'],
                         datasets: [{
-                          data: [totalFunded, fundingGap],
+                          data: [covered, gap],
                           backgroundColor: ['#10b981', '#ef4444'],
                           borderWidth: 0
                         }]
@@ -745,10 +1038,13 @@ function GoalAnalysis({
                 </div>
                 <div className="mt-4 text-center">
                   <p className="text-sm text-gray-400">
-                    Funding: {scenarioResult?.fundingPercentage || goal.projection?.fundingPercentage || 0}%
+                    Coverage (incl. loans): {comprehensiveFundingPercentage}%
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Savings-only coverage: {fundingPercentage}%
                   </p>
                   <p className="text-sm text-gray-400">
-                    Monthly needed: ${(goal.projection?.monthlyContributionNeeded || 0).toLocaleString()}
+                    Monthly needed: ${(typeof recommendedMonthly === 'number' ? recommendedMonthly : 0).toLocaleString()}
                   </p>
                 </div>
               </CardContent>
@@ -767,23 +1063,23 @@ function GoalAnalysis({
                   {(scenarioResult || goal.projection) && (
                     <Bar
                       data={{
-                        labels: (scenarioResult?.years || goal.projection?.years || []).map((y: any) => y.toString()),
+                        labels: (years || []).map((y: any) => y.toString()),
                         datasets: [
                           {
                             label: '529/Savings',
-                            data: scenarioResult?.funded || goal.projection?.funded || [],
+                            data: fundedSeries || [],
                             backgroundColor: '#10b981',
                           },
                           {
                             label: 'Loans',
-                            data: scenarioResult?.loanAmounts || goal.projection?.loanAmounts || (scenarioResult?.costs || goal.projection?.costs || []).map(() => 0),
+                            data: loansSeries || [],
                             backgroundColor: '#3b82f6',
                           },
                           {
                             label: 'Gap',
-                            data: (scenarioResult?.costs || goal.projection?.costs || []).map((cost: any, i: number) => {
-                              const funded = (scenarioResult?.funded || goal.projection?.funded || [])[i] || 0;
-                              const loans = (scenarioResult?.loanAmounts || goal.projection?.loanAmounts || [])[i] || 0;
+                            data: (costs || []).map((cost: any, i: number) => {
+                              const funded = (fundedSeries || [])[i] || 0;
+                              const loans = (loansSeries || [])[i] || 0;
                               return Math.max(0, cost - funded - loans);
                             }),
                             backgroundColor: '#ef4444',
@@ -821,315 +1117,65 @@ function GoalAnalysis({
                 </div>
               </CardContent>
             </Card>
-
-            {/* Monte Carlo Success Probability Gauge */}
-            <Card className="bg-gray-900/50 border-gray-800">
-              <CardHeader>
-                <CardTitle className="text-white">
-                  Monte Carlo Success Probability
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col items-center py-4">
-                  <Gauge
-                    value={successProbability}
-                    max={100}
-                    size="md"
-                    showValue={true}
-                    valueLabel=""
-                    colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
-                    thresholds={{ medium: 65, high: 80 }}
-                  />
-                  <p className="text-xs text-gray-400 mt-3 text-center">
-                    Probability of meeting education funding goals
-                  </p>
-                  <p className="text-xs text-gray-500 text-center">
-                    Target: 80%+ recommended for confidence
-                  </p>
-                  <div className={`mt-3 px-3 py-1 rounded-full text-xs font-medium ${
-                    successProbability >= 80 ? 'bg-green-900/30 text-green-400' :
-                    successProbability >= 65 ? 'bg-yellow-900/30 text-yellow-400' :
-                    'bg-red-900/30 text-red-400'
-                  }`}>
-                    {successProbability >= 80 ? 'High Confidence' : successProbability >= 65 ? 'Moderate Risk' : 'Needs Improvement'}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
           </div>
 
-          {/* 2. What-If Scenarios with Dropdown Menus */}
+          {/* 2. Optimization Engine */}
           <Card className="bg-gray-900/50 border-gray-800">
             <CardHeader>
               <CardTitle className="text-white flex items-center gap-2">
                 <Calculator className="h-5 w-5" />
-                What-If Scenarios
-                {(() => {
-                  const fundingGap = Math.max(0, (goal.projection?.totalCost || 0) - (goal.projection?.totalFunded || 0));
-                  if (fundingGap > 0) {
-                    return (
-                      <span className="text-sm font-normal text-gray-400 ml-2">
-                        (Explore scenarios to close your ${fundingGap.toLocaleString()} funding gap)
-                      </span>
-                    );
-                  }
-                  return null;
-                })()}
+                Optimization Engine
               </CardTitle>
               <p className="text-sm text-gray-400 mt-2">
-                Adjust the variables below and click Submit to see how different strategies affect your funding plan
+                Tune the assumptions and let Affluvia search for the highest success probability plan within your guardrails.
               </p>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {/* Annual Cost */}
-                <div>
-                  <label className="text-sm text-gray-400 mb-2 block">Annual Cost</label>
-                  <div className="relative">
-                    <Input
-                      type="number"
-                      value={whatIfVariables.annualCost}
-                      onChange={(e) => onWhatIfChange({ ...whatIfVariables, annualCost: e.target.value })}
-                      placeholder="Enter amount..."
-                      className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400"
-                    />
-                    <Select
-                      value={whatIfVariables.annualCost}
-                      onValueChange={(value) => 
-                        onWhatIfChange({ ...whatIfVariables, annualCost: value })
-                      }
-                    >
-                      <SelectTrigger className="absolute right-0 top-0 w-8 h-full bg-transparent border-none">
-                        <span className="text-gray-400">▼</span>
-                      </SelectTrigger>
-                      <SelectContent className="bg-gray-800 border-gray-700">
-                        <SelectItem value="25000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$25,000</SelectItem>
-                        <SelectItem value="35000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$35,000</SelectItem>
-                        <SelectItem value="45000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$45,000</SelectItem>
-                        <SelectItem value="55000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$55,000</SelectItem>
-                        <SelectItem value="65000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$65,000</SelectItem>
-                        <SelectItem value="75000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$75,000</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Tuition Inflation Rate */}
-                <div>
-                  <label className="text-sm text-gray-400 mb-2 block">Tuition Inflation Rate</label>
-                  <Select
-                    value={whatIfVariables.inflationRate}
-                    onValueChange={(value) => 
-                      onWhatIfChange({ ...whatIfVariables, inflationRate: value })
-                    }
-                  >
-                    <SelectTrigger className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700">
-                      <SelectValue placeholder="Select rate..." className="text-white placeholder:text-white" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-gray-800 border-gray-700">
-                      <SelectItem value="2" className="text-white hover:bg-gray-700 focus:bg-gray-700">2%</SelectItem>
-                      <SelectItem value="3" className="text-white hover:bg-gray-700 focus:bg-gray-700">3%</SelectItem>
-                      <SelectItem value="4" className="text-white hover:bg-gray-700 focus:bg-gray-700">4%</SelectItem>
-                      <SelectItem value="5" className="text-white hover:bg-gray-700 focus:bg-gray-700">5%</SelectItem>
-                      <SelectItem value="6" className="text-white hover:bg-gray-700 focus:bg-gray-700">6%</SelectItem>
-                      <SelectItem value="7" className="text-white hover:bg-gray-700 focus:bg-gray-700">7%</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Scholarships */}
-                <div>
-                  <label className="text-sm text-gray-400 mb-2 block">Annual Scholarships</label>
-                  <Select
-                    value={whatIfVariables.scholarships}
-                    onValueChange={(value) => 
-                      onWhatIfChange({ ...whatIfVariables, scholarships: value })
-                    }
-                  >
-                    <SelectTrigger className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700">
-                      <SelectValue placeholder="Select amount..." className="text-white placeholder:text-white" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-gray-800 border-gray-700">
-                      <SelectItem value="0" className="text-white hover:bg-gray-700 focus:bg-gray-700">$0</SelectItem>
-                      <SelectItem value="5000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$5,000</SelectItem>
-                      <SelectItem value="10000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$10,000</SelectItem>
-                      <SelectItem value="15000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$15,000</SelectItem>
-                      <SelectItem value="20000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$20,000</SelectItem>
-                      <SelectItem value="25000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$25,000</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Monthly Contribution */}
-                <div>
-                  <label className="text-sm text-gray-400 mb-2 block">Monthly Contribution</label>
-                  <div className="relative">
-                    <Input
-                      type="number"
-                      value={whatIfVariables.monthlyContribution}
-                      onChange={(e) => onWhatIfChange({ ...whatIfVariables, monthlyContribution: e.target.value })}
-                      placeholder="Enter amount..."
-                      className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400"
-                    />
-                    <Select
-                      value={whatIfVariables.monthlyContribution}
-                      onValueChange={(value) => 
-                        onWhatIfChange({ ...whatIfVariables, monthlyContribution: value })
-                      }
-                    >
-                      <SelectTrigger className="absolute right-0 top-0 w-8 h-full bg-transparent border-none">
-                        <span className="text-gray-400">▼</span>
-                      </SelectTrigger>
-                      <SelectContent className="bg-gray-800 border-gray-700 max-h-40 overflow-y-auto">
-                        <SelectItem value="200" className="text-white hover:bg-gray-700 focus:bg-gray-700">$200</SelectItem>
-                        <SelectItem value="250" className="text-white hover:bg-gray-700 focus:bg-gray-700">$250</SelectItem>
-                        <SelectItem value="300" className="text-white hover:bg-gray-700 focus:bg-gray-700">$300</SelectItem>
-                        <SelectItem value="350" className="text-white hover:bg-gray-700 focus:bg-gray-700">$350</SelectItem>
-                        <SelectItem value="400" className="text-white hover:bg-gray-700 focus:bg-gray-700">$400</SelectItem>
-                        <SelectItem value="450" className="text-white hover:bg-gray-700 focus:bg-gray-700">$450</SelectItem>
-                        <SelectItem value="500" className="text-white hover:bg-gray-700 focus:bg-gray-700">$500</SelectItem>
-                        <SelectItem value="550" className="text-white hover:bg-gray-700 focus:bg-gray-700">$550</SelectItem>
-                        <SelectItem value="600" className="text-white hover:bg-gray-700 focus:bg-gray-700">$600</SelectItem>
-                        <SelectItem value="650" className="text-white hover:bg-gray-700 focus:bg-gray-700">$650</SelectItem>
-                        <SelectItem value="700" className="text-white hover:bg-gray-700 focus:bg-gray-700">$700</SelectItem>
-                        <SelectItem value="750" className="text-white hover:bg-gray-700 focus:bg-gray-700">$750</SelectItem>
-                        <SelectItem value="800" className="text-white hover:bg-gray-700 focus:bg-gray-700">$800</SelectItem>
-                        <SelectItem value="850" className="text-white hover:bg-gray-700 focus:bg-gray-700">$850</SelectItem>
-                        <SelectItem value="900" className="text-white hover:bg-gray-700 focus:bg-gray-700">$900</SelectItem>
-                        <SelectItem value="950" className="text-white hover:bg-gray-700 focus:bg-gray-700">$950</SelectItem>
-                        <SelectItem value="1000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,000</SelectItem>
-                        <SelectItem value="1050" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,050</SelectItem>
-                        <SelectItem value="1100" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,100</SelectItem>
-                        <SelectItem value="1150" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,150</SelectItem>
-                        <SelectItem value="1200" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,200</SelectItem>
-                        <SelectItem value="1250" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,250</SelectItem>
-                        <SelectItem value="1300" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,300</SelectItem>
-                        <SelectItem value="1350" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,350</SelectItem>
-                        <SelectItem value="1400" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,400</SelectItem>
-                        <SelectItem value="1450" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,450</SelectItem>
-                        <SelectItem value="1500" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,500</SelectItem>
-                        <SelectItem value="1550" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,550</SelectItem>
-                        <SelectItem value="1600" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,600</SelectItem>
-                        <SelectItem value="1650" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,650</SelectItem>
-                        <SelectItem value="1700" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,700</SelectItem>
-                        <SelectItem value="1750" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,750</SelectItem>
-                        <SelectItem value="1800" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,800</SelectItem>
-                        <SelectItem value="1850" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,850</SelectItem>
-                        <SelectItem value="1900" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,900</SelectItem>
-                        <SelectItem value="1950" className="text-white hover:bg-gray-700 focus:bg-gray-700">$1,950</SelectItem>
-                        <SelectItem value="2000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,000</SelectItem>
-                        <SelectItem value="2050" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,050</SelectItem>
-                        <SelectItem value="2100" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,100</SelectItem>
-                        <SelectItem value="2150" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,150</SelectItem>
-                        <SelectItem value="2200" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,200</SelectItem>
-                        <SelectItem value="2250" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,250</SelectItem>
-                        <SelectItem value="2300" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,300</SelectItem>
-                        <SelectItem value="2350" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,350</SelectItem>
-                        <SelectItem value="2400" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,400</SelectItem>
-                        <SelectItem value="2450" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,450</SelectItem>
-                        <SelectItem value="2500" className="text-white hover:bg-gray-700 focus:bg-gray-700">$2,500</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Expected Return */}
-                <div>
-                  <label className="text-sm text-gray-400 mb-2 block">Expected Return</label>
-                  <Select
-                    value={whatIfVariables.expectedReturn}
-                    onValueChange={(value) => 
-                      onWhatIfChange({ ...whatIfVariables, expectedReturn: value })
-                    }
-                  >
-                    <SelectTrigger className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700">
-                      <SelectValue placeholder="Select return..." className="text-white placeholder:text-white" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-gray-800 border-gray-700">
-                      <SelectItem value="4" className="text-white hover:bg-gray-700 focus:bg-gray-700">4%</SelectItem>
-                      <SelectItem value="5" className="text-white hover:bg-gray-700 focus:bg-gray-700">5%</SelectItem>
-                      <SelectItem value="6" className="text-white hover:bg-gray-700 focus:bg-gray-700">6%</SelectItem>
-                      <SelectItem value="7" className="text-white hover:bg-gray-700 focus:bg-gray-700">7%</SelectItem>
-                      <SelectItem value="8" className="text-white hover:bg-gray-700 focus:bg-gray-700">8%</SelectItem>
-                      <SelectItem value="9" className="text-white hover:bg-gray-700 focus:bg-gray-700">9%</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Current Savings */}
-                <div>
-                  <label className="text-sm text-gray-400 mb-2 block">Current Savings</label>
-                  <div className="relative">
-                    <Input
-                      type="number"
-                      value={whatIfVariables.currentSavings}
-                      onChange={(e) => onWhatIfChange({ ...whatIfVariables, currentSavings: e.target.value })}
-                      placeholder="Enter amount..."
-                      className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400"
-                    />
-                    <Select
-                      value={whatIfVariables.currentSavings}
-                      onValueChange={(value) => 
-                        onWhatIfChange({ ...whatIfVariables, currentSavings: value })
-                      }
-                    >
-                      <SelectTrigger className="absolute right-0 top-0 w-8 h-full bg-transparent border-none">
-                        <span className="text-gray-400">▼</span>
-                      </SelectTrigger>
-                      <SelectContent className="bg-gray-800 border-gray-700">
-                        <SelectItem value="0" className="text-white hover:bg-gray-700 focus:bg-gray-700">$0</SelectItem>
-                        <SelectItem value="5000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$5,000</SelectItem>
-                        <SelectItem value="10000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$10,000</SelectItem>
-                        <SelectItem value="25000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$25,000</SelectItem>
-                        <SelectItem value="50000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$50,000</SelectItem>
-                        <SelectItem value="75000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$75,000</SelectItem>
-                        <SelectItem value="100000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$100,000</SelectItem>
-                        <SelectItem value="150000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$150,000</SelectItem>
-                        <SelectItem value="200000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$200,000</SelectItem>
-                        <SelectItem value="250000" className="text-white hover:bg-gray-700 focus:bg-gray-700">$250,000</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </div>
-
-              {/* Submit and Save Buttons */}
-              <div className="flex justify-center gap-4 pt-4">
-                <Button
-                  onClick={onCalculateScenario}
-                  disabled={isCalculatingScenario}
-                  className="bg-purple-600 hover:bg-purple-700 min-w-32"
-                >
-                  {isCalculatingScenario ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Calculating...
-                    </>
-                  ) : (
-                    'Submit'
-                  )}
-                </Button>
-                
-                {scenarioResult && (
-                  <Button
-                    onClick={onSaveScenario}
-                    disabled={isSavingScenario}
-                    variant="outline"
-                    className="border-purple-600 text-purple-600 hover:bg-purple-600 hover:text-white min-w-32"
-                  >
-                    {isSavingScenario ? (
-                      <>
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-600 mr-2"></div>
-                        Saving...
-                      </>
-                    ) : (
-                      'Save'
-                    )}
-                  </Button>
-                )}
-              </div>
+            <CardContent>
+              <EducationOptimizerForm
+                key={goal.id}
+                goalId={Number(goal.id ?? 0)}
+                defaults={{
+                  strategy: optimizerDefaults.strategy,
+                  tuitionInflation: optimizerDefaults.tuitionInflation ?? undefined,
+                  annualScholarships: optimizerDefaults.annualScholarships ?? undefined,
+                  extraYearProbability: optimizerDefaults.extraYearProbability ?? undefined,
+                  maxMonthlyContribution: optimizerDefaults.maxMonthlyContribution ?? undefined,
+                  maxLoanPerYear: optimizerDefaults.maxLoanPerYear ?? undefined,
+                  monthlyContribution: optimizerDefaults.monthlyContribution ?? undefined,
+                  loanPerYear: optimizerDefaults.loanPerYear ?? undefined
+                }}
+                caps={optimizerCaps}
+                affordabilityHint={affordabilityHint || undefined}
+                latestResult={scenarioResult}
+                onOptimized={onOptimized}
+                onSave={onSaveOptimization}
+                isSaving={isSavingOptimization}
+              />
             </CardContent>
           </Card>
+
+          <div className="mt-6 p-4 bg-slate-800/50 border border-slate-700 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="flex items-center justify-center w-8 h-8 bg-purple-600 rounded-full">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-bold text-white uppercase tracking-wide">Insights</h3>
+              </div>
+              <Button
+                onClick={onGenerateInsights}
+                disabled={!canGenerateInsights || isSavingOptimization || showInsights}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 mr-16"
+              >
+                {showInsights ? "Insights Ready" : canGenerateInsights ? "Generate AI Insights" : "Run & Save Optimization to Enable"}
+              </Button>
+            </div>
+            <p className="mt-2 text-sm text-gray-300">
+              AI‑driven insights to strengthen your plan: optimize 529 contributions, surface scholarship/aid opportunities, and balance loan strategy based on your saved optimization and affordability.
+            </p>
+          </div>
 
     </div>
   );
@@ -1137,6 +1183,9 @@ function GoalAnalysis({
 
 // Personalized Recommendations Component
 function PersonalizedRecommendations({ goalId }: { goalId?: string }) {
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = React.useState(false);
+
   const { data: recommendations, isLoading } = useQuery({
     queryKey: [`/api/education/goal-recommendations/${goalId}`],
     queryFn: async () => {
@@ -1148,20 +1197,61 @@ function PersonalizedRecommendations({ goalId }: { goalId?: string }) {
     enabled: !!goalId,
   });
 
+  const handleRefresh = async () => {
+    if (!goalId) return;
+    setRefreshing(true);
+    try {
+      const res = await fetch(`/api/education/goal-recommendations/${goalId}?refresh=true`);
+      const data = await res.json();
+      queryClient.setQueryData([`/api/education/goal-recommendations/${goalId}`], data);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   if (isLoading || !recommendations?.recommendations?.length) {
-    return null;
+    return (
+      <Card className="bg-gray-900/50 border-gray-800">
+        <CardHeader>
+          <CardTitle className="text-white">Insights</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-gray-400">
+            No insights available yet. Run the optimization and save, then click "Generate AI Insights" to see personalized recommendations.
+          </p>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
     <Card className="bg-gray-900/50 border-gray-800">
-      <CardHeader>
-        <CardTitle className="text-white flex items-center gap-2">
-          <Lightbulb className="h-5 w-5 text-yellow-400" />
-          Personalized Action Plan
-        </CardTitle>
-        <p className="text-gray-400 text-sm">
-          Prioritized recommendations to improve your education funding
-        </p>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-white flex items-center gap-2">
+            <Lightbulb className="h-5 w-5 text-yellow-400" />
+            Personalized Action Plan
+          </CardTitle>
+          <p className="text-gray-400 text-sm">
+            Prioritized recommendations to improve your education funding
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {recommendations?.lastGeneratedAt && (
+            <span className="text-xs text-gray-400">
+              Last generated: {new Date(recommendations.lastGeneratedAt).toLocaleString()}
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            title="Refresh insights"
+          >
+            <RefreshCcw className={`h-4 w-4 text-gray-300 ${refreshing ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
@@ -1203,7 +1293,7 @@ function RecommendationCard({
           <h4 className="font-semibold text-white mb-1">{recommendation.title}</h4>
           <p className="text-gray-300 text-sm mb-2">{recommendation.description}</p>
           {recommendation.impact && (
-            <Badge variant="outline" className="mb-2">
+            <Badge variant="outline" className="mb-2 text-white border-gray-500">
               Impact: {recommendation.impact}
             </Badge>
           )}

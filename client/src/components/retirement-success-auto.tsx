@@ -6,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Button } from './ui/button';
 import { LastCalculated } from './ui/last-calculated';
 import { useDashboardSnapshot, pickWidget } from '@/hooks/useDashboardSnapshot';
+import { toast } from 'sonner';
 
 interface MonteCarloResult {
   probabilityOfSuccess: number;
@@ -85,8 +86,8 @@ export function RetirementSuccessAuto() {
     setError(null);
     
     try {
-      // Use the same enhanced Monte Carlo algorithm as the manual widget
-      const response = await fetch('/api/calculate-retirement-score', {
+      // Use the Monte Carlo endpoint that supports skipCache for fresh calculations
+      const response = await fetch('/api/calculate-retirement-monte-carlo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -95,7 +96,7 @@ export function RetirementSuccessAuto() {
       
       if (!response.ok) {
         const errorData = await response.json();
-        if (errorData.requiresStep === 11) {
+        if (errorData.requiresStep === 11 || errorData.message?.includes('intake form')) {
           setMonteCarloResult({
             probabilityOfSuccess: 0,
             message: errorData.message || 'Please complete the retirement planning section in your intake form',
@@ -117,9 +118,10 @@ export function RetirementSuccessAuto() {
               percentile90: 0
             }
           });
+          toast.error('Complete your retirement planning information in the intake form');
           return;
         }
-        throw new Error('Failed to calculate retirement success probability.');
+        throw new Error(errorData.message || 'Failed to calculate retirement success probability.');
       }
       
       const result = await response.json();
@@ -155,12 +157,14 @@ export function RetirementSuccessAuto() {
         setMonteCarloResult(normalizedResult);
         setHasTriggeredCalculation(true);
         setCalculatedAt(result?.calculatedAt || new Date().toISOString());
+        toast.success('Retirement data refreshed successfully');
       } else {
         throw new Error('Invalid simulation results received.');
       }
     } catch (error: any) {
       console.error('Error calculating Monte Carlo simulation:', error);
       setError(error.message || 'An unexpected error occurred. Please try again.');
+      toast.error('Failed to refresh retirement data');
     } finally {
       setIsLoading(false);
     }
@@ -332,17 +336,16 @@ export function RetirementSuccessAuto() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {monteCarloResult && !monteCarloResult.requiresIntakeForm && !error && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={calculateRetirementSuccess}
-              disabled={isLoading}
-              className="h-8 w-8 p-0 text-gray-400 hover:text-white"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={calculateRetirementSuccess}
+            disabled={isLoading}
+            className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+            title="Refresh retirement data"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
           <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-transparent">
@@ -553,10 +556,18 @@ export function RetirementSuccessAuto() {
         ) : (
           <div className="text-center py-8">
             <Target className="w-12 h-12 text-green-400 mx-auto mb-4" />
-            <p className="text-gray-300 mb-2">Waiting for intake form completion</p>
-            <p className="text-gray-400 text-sm">
-              Your retirement success probability will be calculated automatically
+            <p className="text-gray-300 mb-2">Ready to Calculate</p>
+            <p className="text-gray-400 text-sm mb-4">
+              Click refresh to calculate your retirement success probability using your saved intake form data
             </p>
+            <Button 
+              onClick={calculateRetirementSuccess}
+              disabled={isLoading}
+              className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white"
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Calculating...' : 'Calculate Now'}
+            </Button>
           </div>
         )}
       </CardContent>

@@ -159,7 +159,7 @@ export function runMonteCarloSimulation(params, iterations = 1000 // Industry st
 // Enhanced education projection with Monte Carlo
 export async function calculateEducationProjectionWithMonteCarlo(goal, profile) {
     // Basic projection calculation (existing logic)
-    const inflationRate = parseFloat(goal.inflationRate?.toString() || '5') / 100;
+    const inflationRate = parseFloat(goal.inflationRate?.toString() || '2.4') / 100;
     const expectedReturn = parseFloat(goal.expectedReturn?.toString() || '6') / 100;
     const currentYear = new Date().getFullYear();
     // Calculate total cost needed

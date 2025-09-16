@@ -9,7 +9,10 @@ export interface EducationMonteCarloOptions {
 }
 
 export interface EducationMonteCarloSummary {
-  probabilityOfSuccess: number; // percent 0-100
+  // PRIMARY: Affordability-constrained comprehensive coverage
+  probabilityOfSuccess: number; // percent 0-100 (affordability-constrained)
+  probabilityOfComprehensiveCoverage: number; // percent 0-100
+  probabilityNoLoan: number; // percent 0-100
   scenarios: { successful: number; failed: number; total: number };
   shortfallPercentiles: { p10: number; p50: number; p90: number };
   recommendedMonthlyContribution: number; // to reach target success rate
@@ -74,7 +77,81 @@ function drawNetPriceShock(rng: RNG, sigma: number = 0.10): number {
   return Math.exp(m + s * z);
 }
 
-interface PathResult { success: boolean; maxYearShortfall: number; }
+// Amortize a loan (Parent PLUS-like default unless goal overrides)
+function amortizeMonthlyPayment(totalLoan: number, annualRatePct: number, years: number): number {
+  if (totalLoan <= 0 || years <= 0) return 0;
+  const r = (annualRatePct / 100) / 12;
+  const n = years * 12;
+  if (r === 0) return totalLoan / n;
+  return totalLoan * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+}
+
+function getMonthlyIncome(profile: FinancialProfile | null): number {
+  if (!profile) return 0;
+  const a = Number(profile.annualIncome ?? 0);
+  const b = Number(profile.spouseAnnualIncome ?? 0);
+  return (a + b) / 12;
+}
+
+function getExistingMonthlyDebt(profile: FinancialProfile | null): number {
+  if (!profile || !Array.isArray((profile as any).liabilities)) return 0;
+  return ((profile as any).liabilities as any[])
+    .filter(l => l.type === 'mortgage' || l.type === 'auto_loan' || l.type === 'personal_loan')
+    .reduce((sum, l) => sum + (Number(l.monthlyPayment || 0)), 0);
+}
+
+// Expected first-year salary (explicit or default heuristic)
+function getExpectedStartingSalary(goal: EducationGoal, profile: FinancialProfile | null): number {
+  const explicit = Number((goal as any).expectedStartingSalary ?? 0);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const degree = (((goal as any).degreeType) || "undergraduate").toString().toLowerCase();
+  // Simple heuristic defaults; can be replaced with NACE/BLS integration
+  return degree === "masters" ? 75000 : 55000;
+}
+
+// Option C affordability: payment <= 8–10% of gross monthly income AND DTI <= 43%
+// Also enforce total loans <= expected first-year salary and be supportable by household monthly cash flow
+function isAffordable(totalLoans: number, goal: EducationGoal, profile: FinancialProfile | null): boolean {
+  if (totalLoans <= 0) return true;
+  const monthlyIncome = getMonthlyIncome(profile);
+  if (monthlyIncome <= 0) return false;
+  // Salary-based soft cap
+  const startingSalary = getExpectedStartingSalary(goal, profile);
+  if (startingSalary > 0 && totalLoans > startingSalary) return false;
+  const rate = Number((goal as any).loanInterestRate ?? 10);
+  const years = Number((goal as any).loanRepaymentTerm ?? 10);
+  const pay = amortizeMonthlyPayment(totalLoans, rate, years);
+  const existingDebt = getExistingMonthlyDebt(profile);
+  const dti = (existingDebt + pay) / monthlyIncome;
+  const burden = pay / monthlyIncome;
+  const burdenMax = Math.min(0.10, Number((goal as any).loanBurdenMaxPct ?? 0.10));
+  // Cash flow margin check: payment must fit within surplus cash if known
+  let hasCashflowInfo = false;
+  let monthlyExpenses = 0;
+  if (profile && profile.totalMonthlyExpenses != null) {
+    monthlyExpenses = Number(profile.totalMonthlyExpenses || 0);
+    hasCashflowInfo = true;
+  } else if ((profile as any)?.monthlyExpenses && typeof (profile as any).monthlyExpenses === 'object') {
+    try {
+      const me: any = (profile as any).monthlyExpenses;
+      monthlyExpenses = Object.values(me).reduce((s: number, v: any) => s + (Number(v || 0)), 0);
+      hasCashflowInfo = true;
+    } catch {}
+  }
+  const surplus = hasCashflowInfo ? Math.max(0, monthlyIncome - monthlyExpenses) : null;
+  const cashflowOk = surplus == null ? true : pay <= surplus;
+  return burden <= burdenMax && dti <= 0.43 && cashflowOk;
+}
+
+interface PathResult {
+  // strict path (legacy) used for shortfall percentiles only
+  success: boolean;
+  maxYearShortfall: number;
+  // comprehensive coverage path (uses all in-year cash before 529/loans)
+  successComprehensive: boolean;
+  totalLoansComprehensive: number;
+  noLoanComprehensive: boolean;
+}
 
 function simulatePath(
   goal: EducationGoal,
@@ -95,8 +172,10 @@ function simulatePath(
   const loanPerYear = Math.max(0, Number(goal.loanPerYear ?? 0));
   const allowLoans = opts.allowLoans || loanPerYear > 0;
 
+  // No hard per-year caps; use requested loanPerYear and let affordability checks govern feasibility
+
   const { mu, sigma } = getReturnParams(goal.riskProfile);
-  const eduInflMean = (Number(goal.inflationRate ?? 5) || 5) / 100; // long-run education inflation mean
+  const eduInflMean = (Number(goal.inflationRate ?? 2.4) || 2.4) / 100; // long-run education inflation mean
 
   // MAGI and filing for AOTC
   const filingStatus = (profile?.taxFilingStatus as ("single" | "married" | "head_of_household") | undefined) ??
@@ -105,12 +184,18 @@ function simulatePath(
 
   // Growth before start year (annual step approximation)
   let balance = Math.max(0, Number(goal.currentSavings ?? 0));
+  // Independent state for comprehensive coverage path
+  let balanceComp = balance;
+  let totalLoansComp = 0;
+  let noLoanComp = true;
   const yearsUntilStart = Math.max(0, goal.startYear - currentYear);
   for (let y = 0; y < yearsUntilStart; y++) {
     const annualReturn = mu + sigma * rng.normal();
     // Contributions assumed spread across the year. Approximate by adding then applying return.
     balance = (balance + monthlyContribution0 * 12) * (1 + annualReturn);
     balance = Math.max(0, balance);
+    balanceComp = (balanceComp + monthlyContribution0 * 12) * (1 + annualReturn);
+    balanceComp = Math.max(0, balanceComp);
   }
 
   // Time-to-degree slip: +1 year with probability
@@ -124,7 +209,9 @@ function simulatePath(
   let aotcYearsUsed = 0;
 
   let success = true;
+  let successComp = true;
   let maxYearShortfall = 0;
+  // Track variables only for reporting
 
   // Iterate each academic year
   for (let y = 0; y < totalYears; y++) {
@@ -160,12 +247,10 @@ function simulatePath(
     balance -= from529;
     let remaining = fundingNeed - from529;
 
-    // Loan fallback if allowed
-    if (remaining > 0) {
-      if (allowLoans && loanPerYear > 0) {
-        const loanUsed = Math.min(loanPerYear, remaining);
-        remaining -= loanUsed;
-      }
+    // Loan fallback if allowed (strict path used only for shortfall stats)
+    if (remaining > 0 && allowLoans && loanPerYear > 0) {
+      const loanUsed = Math.min(loanPerYear, remaining);
+      remaining -= loanUsed;
     }
 
     if (remaining > 0) {
@@ -183,9 +268,39 @@ function simulatePath(
     balance = Math.max(0, balance);
 
     // Note: We do not apply aotcCredit as direct funding; it improves after-tax outcome but does not change success test here.
+
+    // ===== Comprehensive coverage path (Option B/C base): use all annual cash first =====
+    {
+      const cashThisYear = monthlyContribution0 * 12;
+      const reservedForComp = Math.min(netCost, cashThisYear);
+      const fundingNeedComp = Math.max(0, netCost - reservedForComp);
+      const from529Comp = Math.min(balanceComp, fundingNeedComp);
+      balanceComp -= from529Comp;
+      let remainingComp = fundingNeedComp - from529Comp;
+      if (remainingComp > 0 && allowLoans && loanPerYear > 0) {
+        const loanUsedComp = Math.min(loanPerYear, remainingComp);
+        remainingComp -= loanUsedComp;
+        totalLoansComp += loanUsedComp;
+        if (loanUsedComp > 0) noLoanComp = false;
+      }
+      if (remainingComp > 0) {
+        successComp = false;
+      }
+      // Any leftover cash goes into 529 in the comprehensive state
+      const leftoverCash = Math.max(0, cashThisYear - reservedForComp);
+      const annualReturnComp = mu + sigma * rng.normal();
+      balanceComp = (balanceComp + leftoverCash) * (1 + annualReturnComp);
+      balanceComp = Math.max(0, balanceComp);
+    }
   }
 
-  return { success, maxYearShortfall: Math.round(maxYearShortfall) };
+  return {
+    success,
+    maxYearShortfall: Math.round(maxYearShortfall),
+    successComprehensive: successComp,
+    totalLoansComprehensive: Math.round(totalLoansComp),
+    noLoanComprehensive: successComp && noLoanComp,
+  };
 }
 
 function estimateSuccessRate(
@@ -194,9 +309,11 @@ function estimateSuccessRate(
   baseSeed: number,
   monthlyContributionOverride: number | null,
   opts: Required<EducationMonteCarloOptions>
-): { successPct: number; shortfalls: number[] } {
+): { successPct: number; successPctComprehensive: number; successPctNoLoan: number; shortfalls: number[] } {
   const iterations = opts.iterations;
   let successes = 0;
+  let successesComp = 0;
+  let successesNoLoan = 0;
   const shortfalls: number[] = [];
 
   // Create deterministic per-path seeds so repeated calls are comparable
@@ -206,11 +323,20 @@ function estimateSuccessRate(
     const goalCopy: EducationGoal = { ...goal };
     if (monthlyContributionOverride != null) goalCopy.monthlyContribution = monthlyContributionOverride;
     const res = simulatePath(goalCopy, profile, rng, opts);
-    if (res.success) successes += 1;
+    // Option C: success = comprehensive coverage AND affordability of total loans
+    const affordable = res.successComprehensive && isAffordable(res.totalLoansComprehensive, goalCopy, profile);
+    if (affordable) successes += 1;
+    if (res.successComprehensive) successesComp += 1;
+    if (res.noLoanComprehensive) successesNoLoan += 1;
     if (!res.success) shortfalls.push(res.maxYearShortfall);
   }
 
-  return { successPct: (successes / iterations) * 100, shortfalls };
+  return {
+    successPct: (successes / iterations) * 100,
+    successPctComprehensive: (successesComp / iterations) * 100,
+    successPctNoLoan: (successesNoLoan / iterations) * 100,
+    shortfalls,
+  };
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -232,7 +358,7 @@ export function runEducationMonteCarlo(
   };
 
   const baseSeed = hash32(`edu|goal:${goal.id ?? "na"}|user:${goal.userId ?? "na"}|v1`);
-  const { successPct, shortfalls } = estimateSuccessRate(goal, profile, baseSeed, null, opts);
+  const { successPct, successPctComprehensive, successPctNoLoan, shortfalls } = estimateSuccessRate(goal, profile, baseSeed, null, opts);
 
   // Shortfall percentiles across failed scenarios
   shortfalls.sort((a, b) => a - b);
@@ -270,10 +396,11 @@ export function runEducationMonteCarlo(
   }
 
   return {
-    probabilityOfSuccess: Math.round(successPct * 10) / 10, // 0.1% precision
+    probabilityOfSuccess: Math.round(successPct * 10) / 10, // Option C (affordability-constrained)
+    probabilityOfComprehensiveCoverage: Math.round(successPctComprehensive * 10) / 10,
+    probabilityNoLoan: Math.round(successPctNoLoan * 10) / 10,
     scenarios: { successful: Math.round((successPct / 100) * opts.iterations), failed: opts.iterations - Math.round((successPct / 100) * opts.iterations), total: opts.iterations },
     shortfallPercentiles: { p10, p50, p90 },
     recommendedMonthlyContribution: recommended,
   };
 }
-

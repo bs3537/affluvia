@@ -511,7 +511,7 @@ export async function calculateEducationProjectionWithMonteCarlo(
   profile: FinancialProfile | null
 ): Promise<any> {
   // Basic projection calculation (existing logic)
-  const inflationRate = parseFloat(goal.inflationRate?.toString() || '5') / 100;
+  const inflationRate = parseFloat(goal.inflationRate?.toString() || '2.4') / 100;
   const expectedReturn = parseFloat(goal.expectedReturn?.toString() || '6') / 100;
   const currentYear = new Date().getFullYear();
   
@@ -537,12 +537,24 @@ export async function calculateEducationProjectionWithMonteCarlo(
   }
   
   // Run Education-specific tax/aid-aware Monte Carlo for success probability and contribution target
-  const eduMC = runEducationMonteCarlo(goal, profile, { iterations: 1000, targetSuccessRate: 80 });
+  const eduMC = runEducationMonteCarlo(
+    goal,
+    profile,
+    {
+      iterations: 1000,
+      targetSuccessRate: 80,
+      allowLoans: Number((goal as any)?.loanPerYear ?? 0) > 0,
+      extraYearProbability: Number((goal as any)?.extraYearProbability ?? 0),
+    }
+  );
   const monthlyContribution = parseFloat(goal.monthlyContribution?.toString() || '0');
   const targetMonthlyContribution = eduMC.recommendedMonthlyContribution ?? monthlyContribution;
   
   // Generate glide path projection data for dashboard
   let glidePathProjection = null;
+  // Define missing variables for glide path projection
+  const currentSavings = parseFloat(goal.currentSavings?.toString() || '0');
+  const yearsUntilStart = Math.max(0, goal.startYear - currentYear);
   if (goal.riskProfile === 'glide') {
     const glideData = project529GrowthWithGlidePath(
       currentSavings,
@@ -586,10 +598,14 @@ export async function calculateEducationProjectionWithMonteCarlo(
   return {
     totalCostNeeded: Math.round(totalCostNeeded),
     currentProjectedValue: undefined,
+    // Primary metric now reflects Option C
     probabilityOfSuccess: Math.round(eduMC.probabilityOfSuccess),
+    comprehensiveCoverageProbability: Math.round(eduMC.probabilityOfComprehensiveCoverage),
     monthlyContributionNeeded: targetMonthlyContribution,
     glidePathProjection,
     monteCarloAnalysis: {
+      probabilityOfComprehensiveCoverage: Math.round(eduMC.probabilityOfComprehensiveCoverage),
+      probabilityNoLoan: Math.round(eduMC.probabilityNoLoan),
       scenarios: eduMC.scenarios,
       shortfallPercentiles: eduMC.shortfallPercentiles,
       recommendedMonthlyContribution: targetMonthlyContribution,

@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { AlertTriangle, Info, Shield } from 'lucide-react';
+import { AlertTriangle, Info, Shield, RefreshCcw } from 'lucide-react';
 import { Gauge } from './ui/gauge';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { useDashboardSnapshot, pickWidget } from '@/hooks/useDashboardSnapshot';
 import { LastCalculated } from './ui/last-calculated';
+import { toast } from 'sonner';
 
 interface MonteCarloResult {
   probabilityOfSuccess: number;
@@ -22,6 +23,7 @@ interface RetirementBaselineWidgetProps {
 export function RetirementBaselineWidget({ className = '' }: RetirementBaselineWidgetProps) {
   const [monteCarloResult, setMonteCarloResult] = useState<MonteCarloResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [loadingSeconds, setLoadingSeconds] = useState(0);
@@ -90,6 +92,45 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
     }
   };
 
+  // Refresh function that triggers fresh Monte Carlo calculation
+  const refreshData = async () => {
+    setIsRefreshing(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/calculate-retirement-monte-carlo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipCache: true })
+      });
+
+      if (response.ok) {
+        const freshData = await response.json();
+        const probability = typeof freshData.probabilityDecimal === 'number'
+          ? freshData.probabilityDecimal * 100
+          : (typeof freshData.probabilityOfSuccess === 'number' ? freshData.probabilityOfSuccess : 0);
+
+        setMonteCarloResult({
+          probabilityOfSuccess: Math.round(probability * 10) / 10,
+          medianEndingBalance: freshData.medianEndingBalance || freshData.medianFinalValue || 0,
+          message: freshData.message,
+          requiresIntakeForm: freshData.requiresStep === 11 ? true : undefined
+        });
+        setHasLoaded(true);
+        toast.success('Retirement data refreshed successfully');
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        const msg = errorData?.message || `Server error: ${response.status}`;
+        throw new Error(msg);
+      }
+    } catch (err: any) {
+      console.error('Error refreshing retirement data:', err);
+      setError(`Failed to refresh data: ${err?.message || 'Unknown error'}`);
+      toast.error('Failed to refresh retirement data');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   // Trigger fetch only if snapshot didn't hydrate us
   useEffect(() => {
     if (!hasLoaded && !isLoading) {
@@ -144,6 +185,16 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={refreshData}
+            disabled={isRefreshing}
+            title="Refresh latest data"
+            className="h-8 w-8 p-0 hover:bg-gray-700/50"
+          >
+            <RefreshCcw className={`w-4 h-4 text-gray-300 hover:text-white ${isRefreshing ? 'animate-spin' : ''}`} />
+          </Button>
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-transparent">
@@ -244,9 +295,18 @@ export function RetirementBaselineWidget({ className = '' }: RetirementBaselineW
           <div className="text-center py-6">
             <Shield className="w-8 h-8 text-blue-400 mx-auto mb-3" />
             <p className="text-gray-300 text-sm mb-1">Ready to Calculate</p>
-            <p className="text-gray-400 text-xs">
-              Baseline will load automatically
+            <p className="text-gray-400 text-xs mb-3">
+              Click refresh to get the latest retirement data
             </p>
+            <Button 
+              onClick={refreshData}
+              size="sm"
+              disabled={isRefreshing}
+              className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white"
+            >
+              <RefreshCcw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+              {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
+            </Button>
           </div>
         )}
       </CardContent>

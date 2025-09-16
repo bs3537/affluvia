@@ -443,6 +443,7 @@ const LifeGoalsComponent = () => {
         collegeId: (goalData as any).collegeId,
         collegeName: goalData.collegeName || null,
         costPerYear: goalData.costPerYear || fallbackCost,
+        inflationRate: (goalData as any).inflationRate ?? 2.4,
         includeRoomBoard: (goalData as any).includeRoomBoard,
         isInState: (goalData as any).isInState,
         // Server aggregates these but include sane inputs
@@ -823,7 +824,37 @@ const LifeGoalsComponent = () => {
           {allGoals.map((goal, index) => {
           const config = goalTypeConfig[goal.goalType];
           const Icon = config.icon;
-          
+          const isEducationGoal = goal.goalType === 'education';
+          const educationMeta: any = isEducationGoal ? goal.metadata : null;
+          const educationProjection = educationMeta?.projection;
+          const baselineEducationProb = isEducationGoal
+            ? Math.round(Math.min(100, Math.max(0, Number(educationProjection?.probabilityOfSuccess ?? 0))))
+            : 0;
+          const optimizedEducationProbRaw = isEducationGoal
+            ? (educationMeta?.savedOptimization?.result?.optimizedProbabilityOfSuccess ??
+               educationMeta?.savedOptimization?.result?.probabilityOfSuccess ??
+               baselineEducationProb)
+            : 0;
+          const optimizedEducationProb = isEducationGoal
+            ? Math.round(Math.min(100, Math.max(0, Number(optimizedEducationProbRaw))))
+            : 0;
+          const educationDelta = isEducationGoal ? optimizedEducationProb - baselineEducationProb : 0;
+          const educationTotalCost = isEducationGoal ? Number(educationProjection?.totalCost ?? 0) : 0;
+          const educationTotalFunded = isEducationGoal ? Number(educationProjection?.totalFunded ?? 0) : 0;
+          const educationTotalLoans = isEducationGoal ? Number(educationProjection?.totalLoans ?? 0) : 0;
+          const educationShortfall = isEducationGoal
+            ? Math.max(0, educationTotalCost - educationTotalFunded - educationTotalLoans)
+            : 0;
+          const educationTargetLabel = isEducationGoal
+            ? (() => {
+                const start = educationMeta?.startYear;
+                const end = educationMeta?.endYear;
+                if (start && end) return `${start}–${end}`;
+                if (start) return `${start}`;
+                return 'Not set';
+              })()
+            : '';
+
           return (
             <motion.div
               key={goal.id || index}
@@ -935,8 +966,62 @@ const LifeGoalsComponent = () => {
                     </div>
                   )}
 
+                  {/* Education Goal Overview (specialized) */}
+                  {isEducationGoal && (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3">
+                        <Gauge
+                          value={baselineEducationProb}
+                          max={100}
+                          size="sm"
+                          showValue
+                          colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
+                          thresholds={{ medium: 65, high: 80 }}
+                        />
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-white font-semibold text-lg">{baselineEducationProb}%</span>
+                            <span className={`text-[11px] px-2 py-0.5 rounded-full border ${baselineEducationProb >= 80 ? 'bg-emerald-900/40 text-emerald-300 border-emerald-700/60' : baselineEducationProb >= 60 ? 'bg-amber-900/40 text-amber-300 border-amber-700/60' : 'bg-red-900/40 text-red-300 border-red-700/60'}`}>
+                              {baselineEducationProb >= 80 ? 'On track' : baselineEducationProb >= 60 ? 'Work in progress' : 'Needs attention'}
+                            </span>
+                          </div>
+                          {educationMeta?.savedOptimization ? (
+                            <p className={`text-xs ${educationDelta >= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                              {educationDelta >= 0 ? `+${educationDelta}` : educationDelta} pts with optimized plan
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400">Run the optimizer to improve Monte Carlo success</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="bg-gray-700/30 p-3 rounded">
+                          <p className="text-xs text-gray-400">Total Cost</p>
+                          <p className="text-sm font-semibold text-white">{formatCurrency(educationTotalCost)}</p>
+                        </div>
+                        <div className="bg-gray-700/30 p-3 rounded">
+                          <p className="text-xs text-gray-400">Funding Shortfall</p>
+                          <p className={`text-sm font-semibold ${educationShortfall > 0 ? 'text-red-400' : 'text-emerald-300'}`}>
+                            {educationShortfall > 0 ? formatCurrency(educationShortfall) : 'Fully funded'}
+                          </p>
+                        </div>
+                        <div className="bg-gray-700/30 p-3 rounded">
+                          <p className="text-xs text-gray-400">Target Years</p>
+                          <p className="text-sm font-semibold text-white">{educationTargetLabel}</p>
+                        </div>
+                        <div className="bg-gray-700/30 p-3 rounded">
+                          <p className="text-xs text-gray-400">Optimized Success</p>
+                          <p className="text-sm font-semibold text-white">
+                            {educationMeta?.savedOptimization ? `${optimizedEducationProb}%` : 'Not saved yet'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Progress Bar (non-retirement generic) */}
-                  {goal.goalType !== 'retirement' && (() => {
+                  {!['retirement', 'education'].includes(goal.goalType) && (() => {
                     const fundingPercent = calculateFundingPercentage(goal);
                     if (fundingPercent > 0 || goal.targetAmount) {
                       return (
@@ -960,10 +1045,10 @@ const LifeGoalsComponent = () => {
                   })()}
                   
                   {/* Key Metrics (non-retirement generic) */}
-                  {goal.goalType !== 'retirement' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    {goal.targetAmount && (
-                      <div className="bg-gray-700/30 p-2 rounded">
+                  {!['retirement', 'education'].includes(goal.goalType) && (
+                    <div className="grid grid-cols-2 gap-3">
+                      {goal.targetAmount && (
+                        <div className="bg-gray-700/30 p-2 rounded">
                         <p className="text-xs text-gray-400">Target</p>
                         <p className="text-sm font-semibold text-white">
                           {formatCurrency(goal.targetAmount)}

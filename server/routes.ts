@@ -36,8 +36,19 @@ import { enqueuePostProfileCalcs } from './jobs/post-profile-calcs';
 import { PlaidDataAggregator } from './services/plaid-data-aggregator';
 import { cacheService } from './services/cache.service';
 import { setupDashboardSnapshotRoutes } from './routes/dashboard-snapshot';
+import type { DatabaseError } from 'pg';
+import { mapStrategyToRisk, optimizeEducationGoal } from "./education-optimizer";
+
+const PG_UNDEFINED_TABLE = '42P01';
+
+function isMissingEducationScenarioTable(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const pgError = error as Partial<DatabaseError> & { code?: string };
+  return pgError.code === PG_UNDEFINED_TABLE;
+}
 
 // Parse estate planning document using Gemini API
+
 async function parseEstateDocument(
   pdfBuffer: Buffer,
   documentType: string
@@ -2130,7 +2141,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         return res.status(400).json({ 
           error: "Retirement planning data incomplete. Please complete Step 11 of the intake form to enable Monte Carlo simulations.",
-          message: "Complete the retirement planning section (Step 11) of your intake form to calculate your retirement confidence score.",
+          message: "Click refresh to calculate your retirement confidence score using your saved intake form data.",
           missingFields,
           requiresStep: 11
         });
@@ -2832,7 +2843,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (missingFields.length > 0) {
         return res.status(400).json({ 
           error: "Retirement planning data incomplete.",
-          message: "Complete the retirement planning section (Step 11) of your intake form to calculate your retirement confidence score.",
+          message: "Click refresh to calculate your retirement confidence score using your saved intake form data.",
           missingFields,
           requiresStep: 11
         });
@@ -6866,10 +6877,10 @@ Return ONLY valid JSON like:
       const goalsWithProjections = await Promise.all(
         goals.map(async (goal) => {
           const projection = await calculateEducationProjection(goal, req.user!.id);
-          
+
           // Use stored funding sources if available, otherwise reconstruct from legacy fields
           const fundingSources = goal.fundingSources || [];
-          
+
           // For backward compatibility, add scholarships and loans if not in fundingSources
           if (fundingSources.length === 0) {
             if (goal.scholarshipPerYear && Number(goal.scholarshipPerYear) > 0) {
@@ -6885,8 +6896,29 @@ Return ONLY valid JSON like:
               });
             }
           }
-          
-          return { ...goal, projection, fundingSources };
+
+          let savedOptimization: any = null;
+          try {
+            const scenarios = await storage.getEducationScenariosByGoal(req.user!.id, goal.id);
+            const savedScenario = scenarios
+              .slice()
+              .reverse()
+              .find((scenario) => scenario.scenarioType === 'optimization_engine_saved');
+
+            if (savedScenario) {
+              savedOptimization = {
+                savedAt: savedScenario.createdAt,
+                variables: savedScenario.parameters,
+                result: savedScenario.results,
+              };
+            }
+          } catch (scenarioError) {
+            if (!isMissingEducationScenarioTable(scenarioError)) {
+              throw scenarioError;
+            }
+          }
+
+          return { ...goal, projection, fundingSources, savedOptimization };
         })
       );
       
@@ -7324,26 +7356,80 @@ Return ONLY valid JSON like:
     }
   });
 
-  // Get personalized recommendations for a specific education goal
+  // Get personalized recommendations for a specific education goal (permissive even if scenarios table is missing)
   app.get("/api/education/goal-recommendations/:goalId", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
       
       const { goalId } = req.params;
-      const goal = await storage.getEducationGoal(req.user!.id, parseInt(goalId));
-      
+      const goalIdNumber = Number(goalId);
+      if (!Number.isFinite(goalIdNumber)) {
+        return res.status(400).json({ error: "goalId must be numeric" });
+      }
+      const userId = req.user!.id;
+
+      const goal = await storage.getEducationGoal(userId, goalIdNumber);
       if (!goal) {
         return res.status(404).json({ error: "Education goal not found" });
       }
-      
-      const profile = await storage.getFinancialProfile(req.user!.id);
-      const projection = await calculateEducationProjection(goal, req.user!.id);
+
+      // Load saved optimization scenario if table exists; proceed if missing
+      let savedScenario: any | null = null;
+      try {
+        const scenarios = await storage.getEducationScenariosByGoal(userId, goalIdNumber);
+        savedScenario = scenarios.find((s) => s.scenarioType === "optimization_engine_saved") ?? null;
+      } catch (scenarioError) {
+        if (!isMissingEducationScenarioTable(scenarioError)) throw scenarioError;
+        console.warn("[Education] education_scenarios table missing; proceeding with goal/projection for insights");
+      }
+
+      const profile = await storage.getFinancialProfile(userId);
+      const projection = await calculateEducationProjection(goal, userId);
       const goalWithProjection = { ...goal, projection };
-      
-      // Generate personalized recommendations for this specific goal
-      const recommendations = await generatePersonalizedGoalRecommendations(goalWithProjection, profile);
-      
-      res.json({ recommendations });
+
+      // Cache by goal + key dependencies so we persist and can show timestamp
+      const { widgetCacheManager } = await import("./widget-cache-manager");
+      const refresh = req.query.refresh === "true";
+      const cachedOnly = req.query.cachedOnly === "true";
+      const dependencies = {
+        goalId: goalIdNumber,
+        goalUpdatedAt: goal.updatedAt,
+        projectionSummary: {
+          totalCost: projection.totalCost,
+          totalFunded: projection.totalFunded,
+          fundingPercentage: projection.fundingPercentage,
+          probabilityOfSuccess: projection.probabilityOfSuccess,
+          monthlyContributionNeeded: projection.monthlyContributionNeeded,
+        },
+        variables: savedScenario?.parameters || null,
+        monthlyContribution: goal.monthlyContribution,
+        scholarshipPerYear: goal.scholarshipPerYear,
+        loanPerYear: goal.loanPerYear,
+        profileLastUpdated: profile?.lastUpdated,
+      };
+      const inputHash = widgetCacheManager.generateInputHash("education_goal_insights", dependencies);
+
+      const cached = await widgetCacheManager.getCachedWidget(userId, "education_goal_insights", inputHash);
+      if (cached?.data) {
+        const payload = {
+          recommendations: cached.data.recommendations || [],
+          lastGeneratedAt: cached.calculatedAt,
+          cached: true,
+        };
+        if (cachedOnly || !refresh) {
+          return res.json(payload);
+        }
+      } else if (cachedOnly) {
+        return res.sendStatus(204);
+      }
+
+      const recommendations = await generatePersonalizedGoalRecommendations(goalWithProjection, profile, savedScenario || undefined);
+      await widgetCacheManager.cacheWidget(userId, "education_goal_insights", inputHash, { recommendations }, 24);
+      return res.json({
+        recommendations,
+        lastGeneratedAt: new Date().toISOString(),
+        cached: false,
+      });
     } catch (error) {
       next(error);
     }
@@ -7449,6 +7535,221 @@ Return ONLY valid JSON like:
     }
   });
 
+  // Education optimization endpoint
+  app.post("/api/education/optimize", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) return res.sendStatus(401);
+
+      const { goalId, constraints, overrides, targetSuccessRate } = req.body || {};
+      if (goalId == null) {
+        return res.status(400).json({ error: "goalId is required" });
+      }
+
+      const goalIdNumber = Number(goalId);
+      if (!Number.isFinite(goalIdNumber)) {
+        return res.status(400).json({ error: "goalId must be numeric" });
+      }
+
+      const goal = await storage.getEducationGoal(req.user!.id, goalIdNumber);
+      if (!goal) {
+        return res.status(404).json({ error: "Education goal not found" });
+      }
+
+      const profile = await storage.getFinancialProfile(req.user!.id);
+
+      let result: any;
+      try {
+        const { educationOptimizerPool } = await import('./services/education-optimizer-pool');
+        result = await educationOptimizerPool.run({
+          type: 'education-optimize',
+          payload: {
+            goal,
+            profile,
+            constraints,
+            overrides,
+            targetSuccessRate,
+          },
+        });
+      } catch (poolError) {
+        console.warn('[Education] Optimizer pool unavailable; falling back to inline execution:', (poolError as any)?.message || poolError);
+        result = await optimizeEducationGoal({
+          goal,
+          profile,
+          constraints,
+          overrides,
+          targetSuccessRate,
+        });
+      }
+
+      try {
+        const existing = await storage.getEducationScenariosByGoal(req.user!.id, goalIdNumber);
+        for (const scenario of existing) {
+          if (scenario.scenarioType === "optimization_engine") {
+            await storage.deleteEducationScenario(req.user!.id, scenario.id);
+          }
+        }
+      } catch (scenarioError) {
+        if (!isMissingEducationScenarioTable(scenarioError)) {
+          throw scenarioError;
+        }
+        console.warn('[Education] education_scenarios table missing; skipping optimization history cleanup');
+      }
+
+      try {
+        await storage.createEducationScenario(req.user!.id, {
+          educationGoalId: goalIdNumber,
+          scenarioName: "Education Optimization Plan",
+          scenarioType: "optimization_engine",
+          parameters: result.variables,
+          results: result
+        });
+      } catch (scenarioError) {
+        if (!isMissingEducationScenarioTable(scenarioError)) {
+          throw scenarioError;
+        }
+        console.warn('[Education] education_scenarios table missing; skipping optimization persistence');
+      }
+
+      return res.json(result);
+    } catch (error) {
+      console.error('Error optimizing education goal:', error);
+      res.status(500).json({ error: "Failed to optimize education goal" });
+    }
+  });
+
+  // Optimization status endpoint (permissive when scenarios table is missing)
+  app.get("/api/education/optimization-status/:goalId", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) return res.sendStatus(401);
+
+      const goalId = Number(req.params.goalId);
+      if (!Number.isFinite(goalId)) {
+        return res.status(400).json({ error: "goalId must be numeric" });
+      }
+
+      const goal = await storage.getEducationGoal(req.user!.id, goalId);
+      if (!goal) {
+        return res.status(404).json({ error: "Education goal not found" });
+      }
+
+      let scenarios: any[] = [];
+      let missingScenarioTable = false;
+      try {
+        scenarios = await storage.getEducationScenariosByGoal(req.user!.id, goalId);
+      } catch (scenarioError) {
+        if (!isMissingEducationScenarioTable(scenarioError)) {
+          throw scenarioError;
+        }
+        missingScenarioTable = true;
+        scenarios = [];
+      }
+
+      const savedScenario = scenarios.find((s) => s.scenarioType === "optimization_engine_saved");
+
+      return res.json({
+        hasSavedOptimization: !!savedScenario || missingScenarioTable,
+        savedAt: savedScenario?.createdAt ?? null,
+        savedVariables: savedScenario?.parameters ?? null,
+        savedResult: savedScenario?.results ?? null,
+        currentProbabilityOfSuccess:
+          goal?.projectionData?.probabilityOfSuccess ??
+          goal?.probabilityOfSuccess ??
+          goal?.projection?.probabilityOfSuccess ??
+          null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Persist optimization result and update base goal settings
+  app.post("/api/education/optimize/save", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) return res.sendStatus(401);
+
+      const { goalId, optimizerControls, optimizerResult } = req.body || {};
+      if (goalId == null || !optimizerResult?.variables) {
+        return res.status(400).json({ error: "goalId and optimizer result are required" });
+      }
+
+      const goalIdNumber = Number(goalId);
+      if (!Number.isFinite(goalIdNumber)) {
+        return res.status(400).json({ error: "goalId must be numeric" });
+      }
+
+      const goal = await storage.getEducationGoal(req.user!.id, goalIdNumber);
+      if (!goal) {
+        return res.status(404).json({ error: "Education goal not found" });
+      }
+
+      const baselineProjection = await calculateEducationProjection(goal, req.user!.id);
+
+      const mappedStrategy = mapStrategyToRisk(optimizerResult.variables.investmentStrategy);
+      const tuitionInflation = typeof optimizerControls?.tuitionInflation === 'number'
+        ? optimizerControls.tuitionInflation
+        : Number(goal.inflationRate ?? 5);
+
+      const updatedGoal = await storage.updateEducationGoal(req.user!.id, goalIdNumber, {
+        // Preserve user's exact entries when provided; fall back to optimized values
+        monthlyContribution: (typeof optimizerControls?.maxMonthlyContribution === 'number'
+          ? optimizerControls.maxMonthlyContribution
+          : optimizerResult.variables.monthlyContribution),
+        loanPerYear: (typeof optimizerControls?.maxLoanPerYear === 'number'
+          ? optimizerControls.maxLoanPerYear
+          : optimizerResult.variables.loanPerYear),
+        scholarshipPerYear: (typeof optimizerControls?.annualScholarships === 'number'
+          ? optimizerControls.annualScholarships
+          : optimizerResult.variables.annualScholarships),
+        inflationRate: tuitionInflation,
+        riskProfile: mappedStrategy,
+        probabilityOfSuccess: optimizerResult.probabilityOfSuccess,
+        fundingPercentage: optimizerResult.fundingPercentage,
+      });
+
+      const projection = await calculateEducationProjection(updatedGoal, req.user!.id);
+      const finalGoal = await storage.updateEducationGoal(req.user!.id, goalIdNumber, {
+        projection,
+        projectionData: projection,
+        probabilityOfSuccess: projection.probabilityOfSuccess,
+        fundingPercentage: projection.fundingPercentage,
+        monthlyContributionNeeded: projection.monthlyContributionNeeded,
+      });
+
+      try {
+        await storage.createEducationScenario(req.user!.id, {
+          educationGoalId: goalIdNumber,
+          scenarioName: "Saved Optimization Plan",
+          scenarioType: "optimization_engine_saved",
+          parameters: optimizerResult.variables,
+          results: {
+            ...optimizerResult,
+            baselineProbabilityOfSuccess: baselineProjection?.probabilityOfSuccess ?? null,
+            optimizedProbabilityOfSuccess: projection?.probabilityOfSuccess ?? null,
+            baselineProjection,
+            optimizedProjection: projection,
+          },
+        });
+      } catch (scenarioError) {
+        if (!isMissingEducationScenarioTable(scenarioError)) {
+          throw scenarioError;
+        }
+        console.warn('[Education] education_scenarios table missing; skipping saved optimization persistence');
+      }
+
+      res.json({
+        goal: { ...finalGoal, projection },
+        optimizerResult: {
+          ...optimizerResult,
+          baselineProbabilityOfSuccess: baselineProjection?.probabilityOfSuccess ?? null,
+          optimizedProbabilityOfSuccess: projection?.probabilityOfSuccess ?? null,
+        },
+      });
+    } catch (error) {
+      console.error('Error saving optimization result:', error);
+      res.status(500).json({ error: "Failed to save optimization result" });
+    }
+  });
+
   // Education scenario calculation endpoint
   app.post("/api/education/calculate-scenario", async (req, res, next) => {
     try {
@@ -7490,37 +7791,72 @@ Return ONLY valid JSON like:
       }
 
       // Delete existing scenario for this goal (if any) to keep only the latest
-      const existingScenarios = await storage.getEducationScenariosByGoal(req.user!.id, goalId);
-      for (const scenario of existingScenarios) {
-        await storage.deleteEducationScenario(req.user!.id, scenario.id);
+      try {
+        const existingScenarios = await storage.getEducationScenariosByGoal(req.user!.id, goalId);
+        for (const scenario of existingScenarios) {
+          await storage.deleteEducationScenario(req.user!.id, scenario.id);
+        }
+      } catch (scenarioError) {
+        if (!isMissingEducationScenarioTable(scenarioError)) {
+          throw scenarioError;
+        }
+        console.warn('[Education] education_scenarios table missing; skipping scenario cleanup');
       }
 
       // Save scenario to database
-      const savedScenario = await storage.createEducationScenario(req.user!.id, {
-        educationGoalId: goalId,
-        scenarioName: "Current What-If Scenario",
-        scenarioType: "what_if_analysis",
-        parameters: variables,
-        results: result
-      });
-      
-      res.json({ success: true, message: "Scenario saved successfully", scenario: savedScenario });
+      try {
+        const savedScenario = await storage.createEducationScenario(req.user!.id, {
+          educationGoalId: goalId,
+          scenarioName: "Current What-If Scenario",
+          scenarioType: "what_if_analysis",
+          parameters: variables,
+          results: result
+        });
+        return res.json({ success: true, message: "Scenario saved successfully", scenario: savedScenario });
+      } catch (scenarioError) {
+        if (!isMissingEducationScenarioTable(scenarioError)) {
+          throw scenarioError;
+        }
+        console.warn('[Education] education_scenarios table missing; scenario persistence disabled');
+        return res.json({ success: false, message: "Scenario persistence temporarily unavailable" });
+      }
     } catch (error) {
       console.error('Error saving education scenario:', error);
       res.status(500).json({ error: "Failed to save scenario" });
     }
   });
 
-  // Get saved education what-if scenario endpoint
+  // Get saved education what-if scenario endpoint (prefers saved optimization)
   app.get("/api/education/saved-scenario/:goalId", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
       
       const goalId = parseInt(req.params.goalId);
       
-      // Get saved scenario from database
-      const scenarios = await storage.getEducationScenariosByGoal(req.user!.id, goalId);
-      
+      let scenarios: Awaited<ReturnType<typeof storage.getEducationScenariosByGoal>> = [];
+      try {
+        scenarios = await storage.getEducationScenariosByGoal(req.user!.id, goalId);
+      } catch (scenarioError) {
+        if (isMissingEducationScenarioTable(scenarioError)) {
+          console.warn('[Education] education_scenarios table missing; returning empty scenario list');
+          return res.status(404).json({ error: "No saved scenario found" });
+        }
+        throw scenarioError;
+      }
+      // Prefer the latest saved optimization scenario if available
+      const savedOptimizations = scenarios
+        .filter((s: any) => s.scenarioType === 'optimization_engine_saved');
+      const latestSavedOpt = savedOptimizations.length > 0 ? savedOptimizations[savedOptimizations.length - 1] : null;
+
+      if (latestSavedOpt) {
+        return res.json({
+          goalId: latestSavedOpt.educationGoalId,
+          variables: latestSavedOpt.parameters,
+          result: latestSavedOpt.results,
+          savedAt: latestSavedOpt.createdAt
+        });
+      }
+
       if (!scenarios || scenarios.length === 0) {
         return res.status(404).json({ error: "No saved scenario found" });
       }
@@ -9190,11 +9526,30 @@ async function calculateEducationProjection(goal: EducationGoal, userId: number)
     }
   }
   
+  // Include saved extra-year probability from the latest saved optimization (if any)
+  try {
+    let scenarios: Awaited<ReturnType<typeof storage.getEducationScenariosByGoal>> = [];
+    try {
+      scenarios = await storage.getEducationScenariosByGoal(userId, (enhancedGoal as any).id);
+    } catch (scenarioError) {
+      if (!isMissingEducationScenarioTable(scenarioError)) {
+        throw scenarioError;
+      }
+    }
+    const savedScenario = (scenarios || []).slice().reverse().find((s) => s.scenarioType === "optimization_engine_saved");
+    const savedExtra = typeof (savedScenario as any)?.parameters?.extraYearProbability === 'number'
+      ? (savedScenario as any).parameters.extraYearProbability
+      : null;
+    if (savedExtra != null) {
+      (enhancedGoal as any).extraYearProbability = savedExtra;
+    }
+  } catch {}
+
   // Use Monte Carlo enhanced projection
   const monteCarloProjection = await calculateEducationProjectionWithMonteCarlo(enhancedGoal as any, profile);
   
   // Also calculate traditional projection for backward compatibility
-  const inflationRate = parseFloat(enhancedGoal.inflationRate?.toString() || '5') / 100;
+  const inflationRate = parseFloat(enhancedGoal.inflationRate?.toString() || '2.4') / 100;
   const expectedReturn = parseFloat(enhancedGoal.expectedReturn?.toString() || '6') / 100;
   const currentYear = new Date().getFullYear();
   
@@ -9555,7 +9910,8 @@ function generateDefaultEducationRecommendations(goals: any[], fundingPercentage
 // Generate personalized recommendations for a specific education goal
 async function generatePersonalizedGoalRecommendations(
   goal: any,
-  profile: FinancialProfile | null
+  profile: FinancialProfile | null,
+  savedScenario?: any
 ): Promise<any[]> {
   try {
     const { GoogleGenerativeAI } = await import("@google/generative-ai");
@@ -9575,62 +9931,83 @@ async function generatePersonalizedGoalRecommendations(
     const yearsUntilStart = goal.startYear - currentYear;
     const fundingGap = goal.projection.totalCost - goal.projection.totalFunded;
     const monthlyIncreaseNeeded = goal.projection.monthlyContributionNeeded - (goal.monthlyContribution || 0);
-    
+
+    const baselineSuccess = savedScenario?.results?.baselineProbabilityOfSuccess ?? null;
+    const optimizedSuccess = savedScenario?.results?.optimizedProbabilityOfSuccess ?? goal.projection.probabilityOfSuccess ?? null;
+    const optimizerVariables = savedScenario?.parameters ?? {};
+
+    const optimizationContext = savedScenario ? `
+
+Optimization Engine (saved plan):
+- Baseline Monte Carlo success probability: ${baselineSuccess ?? 'N/A'}%
+- Optimized Monte Carlo success probability: ${optimizedSuccess ?? 'N/A'}%
+- Selected variables:
+  • Monthly 529 contribution: ${optimizerVariables.monthlyContribution ?? 'N/A'}
+  • Annual scholarships: ${optimizerVariables.annualScholarships ?? 'N/A'}
+  • Loan per year: ${optimizerVariables.loanPerYear ?? 'N/A'}
+  • Tuition inflation assumption: ${optimizerVariables.tuitionInflationRate ?? 'N/A'}
+  • Investment strategy: ${optimizerVariables.investmentStrategy ?? 'N/A'}
+  • Extra year probability: ${optimizerVariables.extraYearProbability ?? 'N/A'}
+` : '';
+
     const prompt = `
-    As a certified financial planner, analyze this specific education goal and provide 5-7 highly personalized recommendations.
-    
-    Student Information:
-    - Name: ${goal.studentName}
-    - Relationship: ${goal.relationship || 'child'}
-    - Education Type: ${goal.goalType === 'college' ? 'College' : 'Pre-K-12'}
-    - Years: ${goal.startYear} to ${goal.endYear} (${goal.years} years)
-    ${goal.collegeName ? `- School: ${goal.collegeName}` : ''}
-    
-    Financial Details:
-    - Total Projected Cost: $${goal.projection.totalCost.toLocaleString()}
-    - Annual Cost: $${(goal.costPerYear || 0).toLocaleString()}
-    - Currently Funded: $${goal.projection.totalFunded.toLocaleString()} (${goal.projection.fundingPercentage}%)
-    - Funding Gap: $${fundingGap.toLocaleString()}
-    - Current Monthly Savings: $${(goal.monthlyContribution || 0).toLocaleString()}
-    - Monthly Savings Needed: $${goal.projection.monthlyContributionNeeded.toLocaleString()}
-    - Probability of Success: ${goal.projection.probabilityOfSuccess}%
-    - Years Until Start: ${yearsUntilStart}
-    - Expected Return: ${goal.expectedReturn}%
-    - Risk Profile: ${goal.riskProfile || 'moderate'}
-    - Scholarships/Grants: $${(goal.scholarshipPerYear || 0).toLocaleString()}/year
-    - Account Type: ${goal.accountType || '529'}
-    
-    Family Context:
-    - State of Residence: ${userState}
-    - Annual Income: $${(profile?.annualIncome || 0).toLocaleString()}
-    ${profile?.spouseAnnualIncome ? `- Spouse Income: $${profile.spouseAnnualIncome.toLocaleString()}` : ''}
-    
-    Create 5-7 specific recommendations in JSON format, each with:
-    {
-      "title": "Short, actionable title",
-      "description": "Detailed explanation specific to ${goal.studentName}'s situation",
-      "category": "One of: savings strategy, tax planning, financial aid, investment strategy, funding sources, risk management",
-      "priority": 1-5 (1 being most important),
-      "actionSteps": ["Step 1", "Step 2", "Step 3"] // 3-5 specific action items
-    }
-    
-    Prioritize based on:
-    1. Critical issues (very low funding percentage, starting soon)
-    2. High-impact opportunities (tax savings, aid eligibility)
-    3. Time-sensitive actions (deadlines, age-based considerations)
-    4. Quick wins (easy to implement with good results)
-    5. Long-term optimization
-    
-    Be specific about:
-    - Dollar amounts for savings increases
-    - Specific deadlines and timeframes
-    - ${userState} state-specific benefits and programs
-    - Age-appropriate investment changes
-    - Financial aid strategies based on income level
-    - Alternative funding sources specific to ${goal.goalType}
-    
-    Return ONLY the JSON array of recommendations, no other text.
-    `;
+You are an expert CFP. Think hard before you answer.
+
+Analyze this specific education goal and provide 5–7 highly personalized recommendations, returned ONLY as JSON.
+
+Student Information:
+- Name: ${goal.studentName}
+- Relationship: ${goal.relationship || 'child'}
+- Education Type: ${goal.goalType === 'college' ? 'College' : 'Pre-K-12'}
+- Years: ${goal.startYear} to ${goal.endYear} (${goal.years} years)
+${goal.collegeName ? `- School: ${goal.collegeName}` : ''}
+
+Financial Details:
+- Total Projected Cost: $${goal.projection.totalCost.toLocaleString()}
+- Annual Cost: $${(goal.costPerYear || 0).toLocaleString()}
+- Currently Funded: $${goal.projection.totalFunded.toLocaleString()} (${goal.projection.fundingPercentage}%)
+- Funding Gap: $${fundingGap.toLocaleString()}
+- Current Monthly Savings: $${(goal.monthlyContribution || 0).toLocaleString()}
+- Monthly Savings Needed: $${goal.projection.monthlyContributionNeeded.toLocaleString()} (${monthlyIncreaseNeeded > 0 ? `increase of $${monthlyIncreaseNeeded.toLocaleString()}` : 'no increase required'})
+- Probability of Success (current projection): ${goal.projection.probabilityOfSuccess}%
+- Years Until Start: ${yearsUntilStart}
+- Expected Return: ${goal.expectedReturn}%
+- Risk Profile: ${goal.riskProfile || 'moderate'}
+- Scholarships/Grants: $${(goal.scholarshipPerYear || 0).toLocaleString()}/year
+- Account Type: ${goal.accountType || '529'}
+${optimizationContext}
+
+Household Context:
+- State of Residence: ${userState}
+- Annual Income: $${(profile?.annualIncome || 0).toLocaleString()}
+${profile?.spouseAnnualIncome ? `- Spouse Income: $${profile.spouseAnnualIncome.toLocaleString()}` : ''}
+
+Return a JSON array of 5–7 recommendations, ranked by priority (1 = highest). Each item must follow:
+{
+  "title": "Short, actionable title",
+  "description": "150–220 chars, specific to ${goal.studentName}",
+  "category": "One of: savings strategy, tax planning, financial aid, investment strategy, funding sources, risk management",
+  "priority": 1-5 (1 = most urgent),
+  "impact": "Brief expected impact (e.g., +$${Math.max(0, Math.round(monthlyIncreaseNeeded))}/mo savings; +10% success)",
+  "actionSteps": ["Step 1", "Step 2", "Step 3"] // 3-5 specific actions with dollar amounts or deadlines where applicable
+}
+
+Prioritize based on:
+1. Critical funding gaps and time horizon
+2. High-impact levers (tax savings, scholarships, cash flow adjustments)
+3. Time-sensitive actions (deadlines, application windows)
+4. Quick wins vs. structural changes
+5. Risk management and contingency planning
+
+Be explicit about:
+- Dollar changes for savings/investments or scholarships
+- Timing (immediate, next 6 months, annually)
+- ${userState}-specific 529 or grant programs
+- Investment mix adjustments given ${optimizerVariables.investmentStrategy ?? goal.riskProfile}
+- Loan planning and repayment considerations if loans are included
+- Family financial milestones tied to this goal
+
+  Return ONLY the JSON array with no extra text.`;
     
     const result = await model.generateContent(prompt);
     const response = await result.response;
