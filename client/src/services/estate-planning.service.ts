@@ -305,58 +305,63 @@ class EstatePlanningService {
       illiquidAssets: homeEquity.toString(),
     });
 
-    // Create initial documents based on intake form
-    if (profile.hasWill) {
-      await this.createEstateDocument({
-        estatePlanId: estatePlan.id,
-        documentType: 'will',
-        documentName: 'Last Will and Testament',
-        status: 'executed',
-        description: 'Current will on file',
-      });
+    // Create initial documents based on intake form (best-effort; don't fail plan creation if these fail)
+    try {
+      if (profile.hasWill) {
+        await this.createEstateDocument({
+          estatePlanId: estatePlan.id,
+          documentType: 'will',
+          documentName: 'Last Will and Testament',
+          status: 'executed',
+          description: 'Current will on file',
+        });
+      }
+      if (profile.hasTrust) {
+        await this.createEstateDocument({
+          estatePlanId: estatePlan.id,
+          documentType: 'trust',
+          documentName: 'Revocable Living Trust',
+          status: 'executed',
+          description: 'Current trust on file',
+        });
+      }
+      if (profile.hasPowerOfAttorney) {
+        await this.createEstateDocument({
+          estatePlanId: estatePlan.id,
+          documentType: 'poa',
+          documentName: 'Financial Power of Attorney',
+          status: 'executed',
+          description: 'Current POA on file',
+        });
+      }
+      if (profile.hasHealthcareProxy) {
+        await this.createEstateDocument({
+          estatePlanId: estatePlan.id,
+          documentType: 'healthcare_directive',
+          documentName: 'Healthcare Directive/Living Will',
+          status: 'executed',
+          description: 'Current healthcare directive on file',
+        });
+      }
+    } catch (e) {
+      console.warn('[Estate] Optional document creation failed:', (e as any)?.message || e);
     }
 
-    if (profile.hasTrust) {
-      await this.createEstateDocument({
-        estatePlanId: estatePlan.id,
-        documentType: 'trust',
-        documentName: 'Revocable Living Trust',
-        status: 'executed',
-        description: 'Current trust on file',
-      });
-    }
-
-    if (profile.hasPowerOfAttorney) {
-      await this.createEstateDocument({
-        estatePlanId: estatePlan.id,
-        documentType: 'poa',
-        documentName: 'Financial Power of Attorney',
-        status: 'executed',
-        description: 'Current POA on file',
-      });
-    }
-
-    if (profile.hasHealthcareProxy) {
-      await this.createEstateDocument({
-        estatePlanId: estatePlan.id,
-        documentType: 'healthcare_directive',
-        documentName: 'Healthcare Directive/Living Will',
-        status: 'executed',
-        description: 'Current healthcare directive on file',
-      });
-    }
-
-    // Create spouse as primary beneficiary if married
-    if (profile.maritalStatus === 'married' && profile.spouseName) {
-      await this.createEstateBeneficiary({
-        estatePlanId: estatePlan.id,
-        beneficiaryType: 'individual',
-        name: profile.spouseName,
-        relationship: 'spouse',
-        distributionType: 'percentage',
-        distributionPercentage: '100',
-        isPrimary: true,
-      });
+    // Create spouse as primary beneficiary if married (best-effort)
+    try {
+      if (profile.maritalStatus === 'married' && profile.spouseName) {
+        await this.createEstateBeneficiary({
+          estatePlanId: estatePlan.id,
+          beneficiaryType: 'individual',
+          name: profile.spouseName,
+          relationship: 'spouse',
+          distributionType: 'percentage',
+          distributionPercentage: '100',
+          isPrimary: true,
+        });
+      }
+    } catch (e) {
+      console.warn('[Estate] Optional beneficiary creation failed:', (e as any)?.message || e);
     }
 
     return estatePlan;

@@ -538,6 +538,32 @@ export function EstateOverview({ estatePlan }: EstateOverviewProps) {
                               ))}
                             </div>
                           )}
+
+                          {/* Add joint/unspecified owner financial assets (e.g., brokerage, cash) */}
+                          {(() => {
+                            const jointFinancialAssets = (profile?.assets || []).filter((asset: any) => 
+                              asset.owner === 'joint' || asset.owner === 'Joint' || (isMarried && !asset.owner)
+                            );
+                            if (jointFinancialAssets.length === 0) return null;
+                            return (
+                              <div className="mt-3">
+                                <p className="text-sm font-medium text-gray-400 mb-2">Financial Assets</p>
+                                {jointFinancialAssets.map((asset: any, idx: number) => (
+                                  <div key={`joint-asset-${idx}`} className="bg-gray-700/30 rounded-lg p-3 mb-2">
+                                    <div className="flex justify-between items-start">
+                                      <div className="flex-1">
+                                        <p className="text-white text-sm font-medium">{asset.description || asset.type || 'Asset'}</p>
+                                        <p className="text-gray-400 text-xs capitalize">{asset.type || 'asset'}</p>
+                                      </div>
+                                      <p className="text-green-400 font-medium text-sm">
+                                        {formatCurrency(asset.value || 0)}
+                                      </p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
                           
                           {jointAssets.length === 0 && jointLiabilities.length === 0 && (
                             <p className="text-gray-500 text-sm text-center py-8">No joint assets</p>
