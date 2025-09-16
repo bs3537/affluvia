@@ -407,24 +407,46 @@ export class DatabaseStorage implements IStorage {
       }
     };
 
-    // Proactively trim/shape large Monte Carlo/optimization trees
+    // Proactively trim/shape large Monte Carlo/optimization trees, and merge with existing to prevent clobbering
     if ((preparedData as any).monteCarloSimulation) {
-      const m: any = (preparedData as any).monteCarloSimulation;
-      // Drop large arrays if present
-      if (m.yearlyCashFlows) delete m.yearlyCashFlows;
-      if (m.withdrawalRates) delete m.withdrawalRates;
-      if (m.successByYear) delete m.successByYear;
-      if (m.retirementSimulation?.results) {
-        // For cached results, avoid embedding mega arrays
-        const r = m.retirementSimulation.results;
+      const incoming: any = (preparedData as any).monteCarloSimulation;
+
+      // Drop large arrays if present in incoming
+      if (incoming.yearlyCashFlows) delete incoming.yearlyCashFlows;
+      if (incoming.withdrawalRates) delete incoming.withdrawalRates;
+      if (incoming.successByYear) delete incoming.successByYear;
+      if (incoming.retirementSimulation?.results) {
+        const r = incoming.retirementSimulation.results;
         if (r.yearlyCashFlows) r.yearlyCashFlows = [];
         if (Array.isArray(r.percentileData) && r.percentileData.length > 1000) {
           r.percentileData = { truncated: true };
         }
       }
-      // Keep percentileData compact if present
-      if (m.percentileData) m.percentileData = ensureSafe(m.percentileData);
-      (preparedData as any).monteCarloSimulation = ensureSafe(m);
+      if (incoming.percentileData) incoming.percentileData = ensureSafe(incoming.percentileData);
+
+      // Merge with existing to avoid wiping saved results when incoming is partial
+      const existingProfile = await this.getFinancialProfile(userId);
+      const currentMC: any = (existingProfile as any)?.monteCarloSimulation || {};
+      const merged: any = {
+        ...currentMC,
+        ...incoming,
+        retirementSimulation: {
+          ...(currentMC?.retirementSimulation || {}),
+          ...(incoming?.retirementSimulation || {}),
+        }
+      };
+      if (!incoming?.retirementSimulation?.results && currentMC?.retirementSimulation?.results) {
+        merged.retirementSimulation.results = currentMC.retirementSimulation.results;
+      }
+
+      const safe = ensureSafe(merged);
+      if ((safe as any)?.truncated) {
+        console.warn('[Storage] monteCarloSimulation payload exceeded size limits; preserving existing value');
+        // Keep existing value rather than overwriting with truncated stub
+        (preparedData as any).monteCarloSimulation = currentMC;
+      } else {
+        (preparedData as any).monteCarloSimulation = safe;
+      }
     }
 
     if ((preparedData as any).optimizationVariables) {

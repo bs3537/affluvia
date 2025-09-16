@@ -478,18 +478,61 @@ export function EducationFundingCenter() {
 
 
   // Calculate aggregated metrics (guard for undefined goals)
-  const totalCost = (goals || []).reduce((sum: number, goal: EducationGoal) => 
-    sum + (goal.projection?.totalCost || 0), 0
-  );
-  const totalFunded = (goals || []).reduce((sum: number, goal: EducationGoal) => 
-    sum + (goal.projection?.totalFunded || 0), 0
-  );
-  const totalLoans = (goals || []).reduce((sum: number, goal: EducationGoal) => 
-    sum + (goal.projection?.totalLoans || 0), 0
-  );
-  const totalGap = totalCost - totalFunded - totalLoans;
-  const overallFundingPercentage = totalCost > 0 
-    ? Math.round((totalFunded / totalCost) * 100) 
+  // Prefer saved optimized projection if available; otherwise use baseline projection
+  const getOptimizedProjection = (goal: EducationGoal) => {
+    const savedOpt = (goal as any)?.savedOptimization?.result;
+    return (savedOpt?.optimizedProjection ?? goal.projection) as any;
+  };
+  const totalCost = (goals || []).reduce((sum: number, goal: EducationGoal) => {
+    const p = getOptimizedProjection(goal);
+    return sum + Number(p?.totalCost || 0);
+  }, 0);
+  const totalFundedFromProjections = (goals || []).reduce((sum: number, goal: EducationGoal) => {
+    const p = getOptimizedProjection(goal);
+    return sum + Number(p?.totalFunded || 0);
+  }, 0);
+  // Form-based savings across all goals: current 529 savings + asset funding sources (exclude loans and scholarships)
+  const totalSavingsSources = (goals || []).reduce((sum: number, goal: EducationGoal) => {
+    const currentSavings = Number(goal.currentSavings || 0);
+    const sources = Array.isArray(goal.fundingSources) ? goal.fundingSources : [];
+    const otherAssets = sources.reduce((s, src) => {
+      const t = String((src as any)?.type || '').toLowerCase();
+      const amt = Number((src as any)?.amount || 0);
+      if (!Number.isFinite(amt)) return s;
+      if (t === 'student_loan' || t === 'scholarships') return s;
+      return s + amt;
+    }, 0);
+    return sum + currentSavings + otherAssets;
+  }, 0);
+  // Total loans from saved optimized plan when available; otherwise from projection or planned per-year loans
+  const totalLoansFromPlan = (goals || []).reduce((sum: number, goal: EducationGoal) => {
+    const savedOpt = (goal as any)?.savedOptimization?.result;
+    const optProjLoans = Number(savedOpt?.optimizedProjection?.totalLoans ?? savedOpt?.optimizedTotalLoans);
+    let loans = 0;
+    if (Number.isFinite(optProjLoans)) {
+      loans = optProjLoans;
+    } else {
+      const varLoanPerYear = Number(savedOpt?.variables?.loanPerYear ?? savedOpt?.variables?.maxLoanPerYear);
+      const yrs = Number(goal.years || 0);
+      if (Number.isFinite(varLoanPerYear) && yrs > 0) {
+        loans = varLoanPerYear * yrs;
+      } else {
+        const p = getOptimizedProjection(goal);
+        const projLoans = Number(p?.totalLoans || 0);
+        if (Number.isFinite(projLoans) && projLoans > 0) {
+          loans = projLoans;
+        } else {
+          const perYear = Number((goal as any)?.loanPerYear || 0);
+          loans = (Number.isFinite(perYear) && yrs > 0) ? perYear * yrs : 0;
+        }
+      }
+    }
+    return sum + (Number.isFinite(loans) ? loans : 0);
+  }, 0);
+  // Aggregate gap and coverage from projections
+  const totalGap = Math.max(0, totalCost - totalFundedFromProjections - totalLoansFromPlan);
+  const overallComprehensiveFundingPercentage = totalCost > 0
+    ? Math.round(Math.min(100, Math.max(0, ((totalFundedFromProjections + totalLoansFromPlan) / totalCost) * 100)))
     : 0;
 
   const optimizerCaps = React.useMemo(() => {
@@ -615,33 +658,33 @@ export function EducationFundingCenter() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
           <MetricCard
             label="Total Cost"
-            value={`$${totalCost.toLocaleString()}`}
+            value={`$${Math.round(totalCost).toLocaleString()}`}
             icon={<DollarSign className="h-5 w-5" />}
             trend="neutral"
           />
           <MetricCard
             label="Total Savings"
-            value={`$${totalFunded.toLocaleString()}`}
+            value={`$${Math.round(totalSavingsSources).toLocaleString()}`}
             icon={<PiggyBank className="h-5 w-5" />}
             trend="positive"
           />
           <MetricCard
             label="Total Loans"
-            value={`$${totalLoans.toLocaleString()}`}
+            value={`$${Math.round(totalLoansFromPlan).toLocaleString()}`}
             icon={<CreditCard className="h-5 w-5" />}
             trend="neutral"
           />
           <MetricCard
             label="Funding Gap"
-            value={`$${totalGap.toLocaleString()}`}
+            value={`$${Math.round(totalGap).toLocaleString()}`}
             icon={<AlertTriangle className="h-5 w-5" />}
             trend={totalGap > 0 ? "negative" : "positive"}
           />
           <MetricCard
             label="Funding %"
-            value={`${overallFundingPercentage}%`}
+            value={`${overallComprehensiveFundingPercentage}%`}
             icon={<Target className="h-5 w-5" />}
-            trend={overallFundingPercentage >= 80 ? "positive" : "negative"}
+            trend={overallComprehensiveFundingPercentage >= 80 ? "positive" : "negative"}
           />
           <MetricCard
             label="Active Goals"

@@ -1,4 +1,7 @@
-When you make a frontend change, you must use browser_container tool to inspect the change is implementing correctly, if that tool doesn't work use Playwright or any other simialr tool. If you need to login to app use email: bhav@gmail.com and password 1234
+Affluvia Financial Planning Application
+
+For every user instruction, search entire codebase, think step by step and prepare a plan for user how you will best solve the issue raised  by user. No code edits unless user approves your plan.
+
 # Repository Guidelines
 
 ## Project Structure & Module Organization

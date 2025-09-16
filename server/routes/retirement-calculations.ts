@@ -114,17 +114,25 @@ router.get('/api/retirement-score', async (req, res, next) => {
     
     // Do not auto-recompute here to keep dashboard fast; return saved value only
     
-    // Check if we have saved Monte Carlo results
+    // Check if we have saved Monte Carlo results; fall back to compact fields if detailed results missing
     const monteCarlo = profile.monteCarloSimulation as any;
-    if (!monteCarlo?.retirementSimulation?.results) {
+    let probabilityRaw: number = 0;
+    let results: any = monteCarlo?.retirementSimulation?.results;
+    if (results) {
+      probabilityRaw = results.probabilityOfSuccess || results.successProbability || 0;
+    } else if (monteCarlo?.retirementSimulation?.probabilityOfSuccess != null) {
+      probabilityRaw = monteCarlo.retirementSimulation.probabilityOfSuccess; // decimal
+    } else if (monteCarlo?.probabilityOfSuccess != null) {
+      probabilityRaw = monteCarlo.probabilityOfSuccess; // may be decimal or percentage; normalized below
+    } else if ((profile as any)?.calculations?.retirementScore != null) {
+      // Fallback to older calculations snapshot (percentage)
+      probabilityRaw = Number((profile as any).calculations.retirementScore) || 0;
+    } else {
       return res.status(404).json({ 
         needsCalculation: true,
         message: 'No saved retirement score found' 
       });
     }
-    
-    const results = monteCarlo.retirementSimulation.results;
-    const probabilityRaw = results.probabilityOfSuccess || results.successProbability || 0;
     
     // STANDARDIZED: Handle legacy data that might be in percentage format
     const probabilityDecimal = ProbabilityUtils.toDecimal(probabilityRaw);
@@ -161,8 +169,8 @@ router.get('/api/retirement-score', async (req, res, next) => {
       probabilityDecimal: probabilityDecimal,
       message,
       cached: true,
-      calculatedAt: monteCarlo.retirementSimulation.calculatedAt,
-      medianEndingBalance: results.medianFinalValue || monteCarlo.medianEndingBalance
+      calculatedAt: monteCarlo?.retirementSimulation?.calculatedAt,
+      medianEndingBalance: (results && results.medianFinalValue) || monteCarlo?.retirementSimulation?.medianEndingBalance || monteCarlo?.medianEndingBalance || 0
     });
     
   } catch (error) {

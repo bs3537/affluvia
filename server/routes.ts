@@ -2779,23 +2779,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log('[Redis Cache] Cached Monte Carlo results for 1 hour');
       }
       
-      // Save the calculated result to the database for caching
+      // Save a compact result to the database to avoid oversized JSON and preserve persistence
       try {
+        const totalScenarios = Number(enhancedResult?.scenarios?.total || 1000);
+        const successfulScenarios = Math.round(Number(enhancedResult?.probabilityOfSuccess || 0) * totalScenarios / 100);
+        const compactResults = {
+          successProbability: Number(enhancedResult?.probabilityOfSuccess || 0) / 100, // store decimal
+          probabilityOfSuccess: Number(enhancedResult?.probabilityOfSuccess || 0) / 100, // decimal
+          totalScenarios,
+          successfulScenarios,
+          medianFinalValue: Number(enhancedResult?.medianEndingBalance || 0),
+          percentile10: Number(enhancedResult?.confidenceIntervals?.percentile10 || 0),
+          percentile90: Number(enhancedResult?.confidenceIntervals?.percentile90 || 0),
+          yearlyCashFlows: []
+        };
         await storage.updateFinancialProfile(userId, {
           monteCarloSimulation: {
             retirementSimulation: {
               calculatedAt: resultWithTimestamp.calculatedAt,
               parameters: params,
               // Include key fields at wrapper level for backward compatibility
-              probabilityOfSuccess: enhancedResult.probabilityOfSuccess,
-              medianEndingBalance: enhancedResult.medianEndingBalance,
-              scenarios: enhancedResult.scenarios,
-              // Full results nested for detailed access
-              results: enhancedResult
+              probabilityOfSuccess: compactResults.probabilityOfSuccess,
+              medianEndingBalance: compactResults.medianFinalValue,
+              scenarios: { total: totalScenarios, successful: successfulScenarios },
+              // Compact results only
+              results: compactResults,
             }
           }
         });
-        console.log('Monte Carlo results saved to database for caching');
+        console.log('Monte Carlo compact results saved to database for caching');
       } catch (saveError) {
         console.error('Failed to save Monte Carlo results for caching:', saveError);
         // Don't fail the request if caching fails
@@ -4161,18 +4173,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Monte Carlo simulation state route
+  // Monte Carlo simulation state route (merge-safe, prevents clobbering saved results)
   app.put("/api/monte-carlo-simulation", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
-      
       const userId = req.user!.id;
-      
-      // Update Monte Carlo simulation results and state
+
+      const existing = await storage.getFinancialProfile(userId);
+      const incoming = req.body || {};
+      const currentMC: any = (existing as any)?.monteCarloSimulation || {};
+
+      // Deep merge with guard: keep existing retirementSimulation.results if incoming doesn't provide it
+      const merged: any = {
+        ...currentMC,
+        ...incoming,
+        retirementSimulation: {
+          ...(currentMC?.retirementSimulation || {}),
+          ...(incoming?.retirementSimulation || {}),
+        },
+      };
+      if (!incoming?.retirementSimulation?.results && currentMC?.retirementSimulation?.results) {
+        merged.retirementSimulation.results = currentMC.retirementSimulation.results;
+      }
+
       const updatedProfile = await storage.updateFinancialProfile(userId, {
-        monteCarloSimulation: req.body
+        monteCarloSimulation: merged,
       });
-      
       res.json(updatedProfile);
     } catch (error) {
       next(error);
@@ -6311,21 +6337,34 @@ Return ONLY valid JSON like:
     }
   });
 
-  // Monte Carlo simulation for What-If Sandbox
+  // Monte Carlo simulation for What-If Sandbox (merge-safe, prevents clobbering)
   app.put("/api/monte-carlo-simulation", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
-      
+
       const profile = await storage.getFinancialProfile(req.user!.id);
       if (!profile) {
         return res.status(404).json({ error: "Financial profile not found" });
       }
-      
-      // Update the simulation state in the profile
+
+      const incoming = req.body || {};
+      const currentMC: any = (profile as any)?.monteCarloSimulation || {};
+      const merged: any = {
+        ...currentMC,
+        ...incoming,
+        retirementSimulation: {
+          ...(currentMC?.retirementSimulation || {}),
+          ...(incoming?.retirementSimulation || {}),
+        },
+      };
+      if (!incoming?.retirementSimulation?.results && currentMC?.retirementSimulation?.results) {
+        merged.retirementSimulation.results = currentMC.retirementSimulation.results;
+      }
+
       await storage.updateFinancialProfile(req.user!.id, {
-        monteCarloSimulation: req.body
+        monteCarloSimulation: merged,
       });
-      
+
       res.json({ message: "Simulation state updated successfully" });
     } catch (error) {
       next(error);
