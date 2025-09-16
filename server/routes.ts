@@ -6918,6 +6918,22 @@ Return ONLY valid JSON like:
             }
           }
 
+          // Fallback: if scenarios table is missing or no saved scenario found,
+          // synthesize savedOptimization from cached projectionData summary if present.
+          if (!savedOptimization) {
+            const summary = (goal as any)?.projectionData?.savedOptimizationSummary;
+            if (summary && (summary.optimizedProbabilityOfSuccess != null)) {
+              savedOptimization = {
+                savedAt: summary.savedAt ?? null,
+                variables: null,
+                result: {
+                  baselineProbabilityOfSuccess: summary.baselineProbabilityOfSuccess ?? null,
+                  optimizedProbabilityOfSuccess: summary.optimizedProbabilityOfSuccess ?? null,
+                },
+              };
+            }
+          }
+
           return { ...goal, projection, fundingSources, savedOptimization };
         })
       );
@@ -6971,7 +6987,41 @@ Return ONLY valid JSON like:
         }
       }
       
-      res.json({ ...goal, projection, fundingSources });
+      // Attach savedOptimization if available, or synthesize from projectionData summary
+      let savedOptimization: any = null;
+      try {
+        const scenarios = await storage.getEducationScenariosByGoal(req.user!.id, goalId);
+        const savedScenario = scenarios
+          .slice()
+          .reverse()
+          .find((scenario) => scenario.scenarioType === 'optimization_engine_saved');
+        if (savedScenario) {
+          savedOptimization = {
+            savedAt: savedScenario.createdAt,
+            variables: savedScenario.parameters,
+            result: savedScenario.results,
+          };
+        }
+      } catch (scenarioError) {
+        if (!isMissingEducationScenarioTable(scenarioError)) {
+          throw scenarioError;
+        }
+      }
+      if (!savedOptimization) {
+        const summary = (goal as any)?.projectionData?.savedOptimizationSummary;
+        if (summary && (summary.optimizedProbabilityOfSuccess != null)) {
+          savedOptimization = {
+            savedAt: summary.savedAt ?? null,
+            variables: null,
+            result: {
+              baselineProbabilityOfSuccess: summary.baselineProbabilityOfSuccess ?? null,
+              optimizedProbabilityOfSuccess: summary.optimizedProbabilityOfSuccess ?? null,
+            },
+          };
+        }
+      }
+
+      res.json({ ...goal, projection, fundingSources, savedOptimization });
     } catch (error) {
       next(error);
     }
@@ -7028,7 +7078,17 @@ Return ONLY valid JSON like:
       const goal = await storage.createEducationGoal(req.user!.id, goalData);
       const projection = await calculateEducationProjection(goal, req.user!.id);
       
-      res.json({ ...goal, projection, fundingSources });
+      // Persist baseline projection and key summary fields for fast retrieval
+      const goalWithProjection = await storage.updateEducationGoal(req.user!.id, goal.id, {
+        projection,
+        projectionData: projection,
+        probabilityOfSuccess: projection.probabilityOfSuccess,
+        fundingPercentage: projection.fundingPercentage,
+        monthlyContributionNeeded: projection.monthlyContributionNeeded,
+        lastCalculatedAt: new Date() as any,
+      } as any);
+      
+      res.json({ ...goalWithProjection, projection, fundingSources });
     } catch (error) {
       next(error);
     }
@@ -7086,7 +7146,17 @@ Return ONLY valid JSON like:
       const goal = await storage.updateEducationGoal(req.user!.id, goalId, goalData);
       const projection = await calculateEducationProjection(goal, req.user!.id);
       
-      res.json({ ...goal, projection, fundingSources });
+      // Persist latest projection and summary fields on update as well
+      const updatedWithProjection = await storage.updateEducationGoal(req.user!.id, goalId, {
+        projection,
+        projectionData: projection,
+        probabilityOfSuccess: projection.probabilityOfSuccess,
+        fundingPercentage: projection.fundingPercentage,
+        monthlyContributionNeeded: projection.monthlyContributionNeeded,
+        lastCalculatedAt: new Date() as any,
+      } as any);
+      
+      res.json({ ...updatedWithProjection, projection, fundingSources });
     } catch (error) {
       next(error);
     }
@@ -7707,9 +7777,24 @@ Return ONLY valid JSON like:
       });
 
       const projection = await calculateEducationProjection(updatedGoal, req.user!.id);
+
+      // Persist a lightweight summary inside projectionData so the UI can render
+      // optimized vs baseline labels and delta after reloads even if scenarios table is unavailable.
+      const savedOptimizationSummary = {
+        baselineProbabilityOfSuccess: baselineProjection?.probabilityOfSuccess ?? null,
+        optimizedProbabilityOfSuccess: projection?.probabilityOfSuccess ?? null,
+        delta: (projection?.probabilityOfSuccess ?? 0) - (baselineProjection?.probabilityOfSuccess ?? 0),
+        savedAt: new Date().toISOString(),
+        labelsVersion: 1,
+      };
+      const projectionWithSummary = {
+        ...projection,
+        savedOptimizationSummary,
+      };
+
       const finalGoal = await storage.updateEducationGoal(req.user!.id, goalIdNumber, {
-        projection,
-        projectionData: projection,
+        projection: projectionWithSummary,
+        projectionData: projectionWithSummary,
         probabilityOfSuccess: projection.probabilityOfSuccess,
         fundingPercentage: projection.fundingPercentage,
         monthlyContributionNeeded: projection.monthlyContributionNeeded,
@@ -7726,7 +7811,7 @@ Return ONLY valid JSON like:
             baselineProbabilityOfSuccess: baselineProjection?.probabilityOfSuccess ?? null,
             optimizedProbabilityOfSuccess: projection?.probabilityOfSuccess ?? null,
             baselineProjection,
-            optimizedProjection: projection,
+            optimizedProjection: projectionWithSummary,
           },
         });
       } catch (scenarioError) {
@@ -7737,7 +7822,7 @@ Return ONLY valid JSON like:
       }
 
       res.json({
-        goal: { ...finalGoal, projection },
+        goal: { ...finalGoal, projection: projectionWithSummary },
         optimizerResult: {
           ...optimizerResult,
           baselineProbabilityOfSuccess: baselineProjection?.probabilityOfSuccess ?? null,

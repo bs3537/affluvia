@@ -1,5 +1,4 @@
-
-
+When you make a frontend change, you must use browser_container tool to inspect the change is implementing correctly, if that tool doesn't work use Playwright or any other simialr tool. If you need to login to app use email: bhav@gmail.com and password 1234
 # Repository Guidelines
 
 ## Project Structure & Module Organization

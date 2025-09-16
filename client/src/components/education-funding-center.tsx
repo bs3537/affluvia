@@ -341,6 +341,8 @@ export function EducationFundingCenter() {
         loanPerYear: payload.controls.maxLoanPerYear,
       }));
       await queryClient.invalidateQueries({ queryKey: ['/api/education/goals'] });
+      // Notify other views (e.g., Life Goals) to refresh immediately
+      window.dispatchEvent(new CustomEvent('educationOptimizationUpdated'));
       setCanGenerateInsights(true);
       toast.success('Optimization saved successfully.');
     } catch (error) {
@@ -911,7 +913,83 @@ function GoalAnalysis({
   onSaveOptimization: (payload: OptimizerSavePayload) => Promise<void> | void;
   onGenerateInsights: () => void;
 }) {
-  const successProbability = (scenarioResult?.probabilityOfSuccess ?? goal.projection?.probabilityOfSuccess ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfSuccess ?? 0) as number;
+  const savedOptimization = (goal as any)?.savedOptimization;
+  const savedOptimizationResult = savedOptimization?.result;
+
+  const pickProbability = (...values: Array<number | string | null | undefined>) => {
+    for (const value of values) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === 'string') {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+    }
+    return null;
+  };
+  const normalizeProbability = (value: number | null) => {
+    if (value == null) return null;
+    const pct = value > 1 ? value : value * 100;
+    const clamped = Math.max(0, Math.min(100, pct));
+    return Math.round(clamped);
+  };
+  const baselineSuccessProbability = normalizeProbability(
+    pickProbability(
+      scenarioResult?.baselineProbabilityOfSuccess,
+      scenarioResult?.baselineProjection?.probabilityOfSuccess,
+      savedOptimizationResult?.baselineProbabilityOfSuccess,
+      savedOptimizationResult?.baselineProjection?.probabilityOfSuccess,
+      goal.projection?.probabilityOfSuccess,
+      (goal.projection as any)?.monteCarloAnalysis?.probabilityOfSuccess,
+      (goal as any)?.probabilityOfSuccess
+    )
+  ) ?? 0;
+  const optimizedSuccessProbability = normalizeProbability(
+    pickProbability(
+      scenarioResult?.optimizedProbabilityOfSuccess,
+      scenarioResult?.probabilityOfSuccess,
+      scenarioResult?.monteCarlo?.probabilityOfSuccess,
+      scenarioResult?.monteCarloAnalysis?.probabilityOfSuccess,
+      savedOptimizationResult?.optimizedProbabilityOfSuccess,
+      savedOptimizationResult?.probabilityOfSuccess,
+      savedOptimizationResult?.monteCarlo?.probabilityOfSuccess,
+      savedOptimizationResult?.monteCarloAnalysis?.probabilityOfSuccess
+    )
+  );
+  const successProbabilityDelta = optimizedSuccessProbability != null
+    ? optimizedSuccessProbability - baselineSuccessProbability
+    : null;
+  const probabilityForWarnings = optimizedSuccessProbability ?? baselineSuccessProbability;
+  // When an optimized probability exists, show it on the gauge and adjust labels accordingly
+  const gaugeValue = optimizedSuccessProbability ?? baselineSuccessProbability;
+  const isOptimizedShown = optimizedSuccessProbability != null;
+  const baselineConfidenceLabel = baselineSuccessProbability >= 80
+    ? 'High Confidence'
+    : baselineSuccessProbability >= 65
+      ? 'Moderate Risk'
+      : 'Needs Improvement';
+  const baselineConfidenceClass = baselineSuccessProbability >= 80
+    ? 'bg-green-900/30 text-green-400'
+    : baselineSuccessProbability >= 65
+      ? 'bg-yellow-900/30 text-yellow-400'
+      : 'bg-red-900/30 text-red-400';
+  const optimizedConfidenceLabel = optimizedSuccessProbability != null
+    ? optimizedSuccessProbability >= 80
+      ? 'High Confidence'
+      : optimizedSuccessProbability >= 65
+        ? 'Moderate Risk'
+        : 'Needs Improvement'
+    : null;
+  const optimizedConfidenceClass = optimizedSuccessProbability != null
+    ? (optimizedSuccessProbability >= 80
+        ? 'bg-green-900/30 text-green-400'
+        : optimizedSuccessProbability >= 65
+          ? 'bg-yellow-900/30 text-yellow-400'
+          : 'bg-red-900/30 text-red-400')
+    : '';
 
   // Unified series and totals (prefer scenario result; fall back to baseline projection). Use nullish coalescing so zeros are respected.
   const years = (scenarioResult?.years ?? goal.projection?.years ?? []) as number[];
@@ -948,39 +1026,64 @@ function GoalAnalysis({
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="flex flex-col items-center py-4">
-                  <Gauge
-                    value={successProbability}
-                    max={100}
-                    size="md"
-                    showValue={true}
-                    valueLabel=""
-                    colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
-                    thresholds={{ medium: 65, high: 80 }}
-                  />
-                  <p className="text-xs text-gray-400 mt-3 text-center">
-                    Probability of meeting education funding goals
-                  </p>
-                  <p className="text-[10px] text-gray-500 text-center mt-1">
-                    Metric: Affordability-constrained coverage (529 + in-year cash + loans; payments ≤8–10% of income; DTI ≤43%; fits monthly cash flow; total loans ≤ starting salary)
-                  </p>
-                  <p className="text-xs text-gray-500 text-center">
-                    Target: 80%+ recommended for confidence
-                  </p>
-                  <div className={`mt-3 px-3 py-1 rounded-full text-xs font-medium ${
-                    successProbability >= 80 ? 'bg-green-900/30 text-green-400' :
-                    successProbability >= 65 ? 'bg-yellow-900/30 text-yellow-400' :
-                    'bg-red-900/30 text-red-400'
-                  }`}>
-                    {successProbability >= 80 ? 'High Confidence' : successProbability >= 65 ? 'Moderate Risk' : 'Needs Improvement'}
+                <div className="py-4 space-y-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex flex-col items-center flex-1">
+                      <Gauge
+                        value={gaugeValue}
+                        max={100}
+                        size="md"
+                        showValue={true}
+                        valueLabel=""
+                        colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
+                        thresholds={{ medium: 65, high: 80 }}
+                      />
+                      <p className="text-xs text-gray-400 mt-3 text-center">
+                        {isOptimizedShown ? 'Optimized success probability' : 'Baseline probability of meeting education funding goals'}
+                      </p>
+                      <p className="text-[10px] text-gray-500 text-center mt-1">
+                        Metric: Affordability-constrained coverage (529 + in-year cash + loans; payments ≤8–10% of income; DTI ≤43%; fits monthly cash flow; total loans ≤ starting salary)
+                      </p>
+                      <p className="text-xs text-gray-500 text-center">
+                        Target: 80%+ recommended for confidence
+                      </p>
+                      <div className={`mt-3 px-3 py-1 rounded-full text-xs font-medium ${isOptimizedShown ? optimizedConfidenceClass : baselineConfidenceClass}`}>
+                        {isOptimizedShown
+                          ? `Optimized plan outlook: ${optimizedConfidenceLabel ?? baselineConfidenceLabel}`
+                          : `Baseline outlook: ${baselineConfidenceLabel}`}
+                      </div>
+                    </div>
+                    <div className="text-right flex-1 min-w-[160px]">
+                      {optimizedSuccessProbability != null && successProbabilityDelta !== null ? (
+                        <div className="space-y-1">
+                          <div className="text-xs uppercase tracking-wide text-gray-400">vs Baseline</div>
+                          <div className={`text-xl font-semibold ${
+                            successProbabilityDelta > 0
+                              ? 'text-emerald-300'
+                              : successProbabilityDelta < 0
+                                ? 'text-red-300'
+                                : 'text-purple-300'
+                          }`}>
+                            {successProbabilityDelta > 0 ? '+' : ''}{Math.round(successProbabilityDelta)}%
+                          </div>
+                          <div className="text-xs text-gray-400">
+                            Improvement from optimization
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-400 leading-snug max-w-[220px] ml-auto">
+                          Save an optimized plan to compare against your baseline probability.
+                        </p>
+                      )}
+                    </div>
                   </div>
                   {(scenarioResult?.monteCarlo?.probabilityOfComprehensiveCoverage ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfComprehensiveCoverage) != null && (
-                    <p className="text-xs text-gray-400 mt-2 text-center">
+                    <p className="text-xs text-gray-400 text-center">
                       Comprehensive coverage (529 + other + loans): {Math.round((scenarioResult?.monteCarlo?.probabilityOfComprehensiveCoverage ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfComprehensiveCoverage) as number)}%
                     </p>
                   )}
-                  {successProbability < 80 && (
-                    <div className="mt-3 text-xs text-gray-300 text-center space-y-1">
+                  {probabilityForWarnings < 80 && (
+                    <div className="text-xs text-gray-300 text-center space-y-1">
                       {maxGap > 0 && <p>Largest annual gap up to ${maxGap.toLocaleString()} even after loans.</p>}
                       {typeof recommendedMonthly === 'number' && (
                         <p>Recommended monthly to reach 80%: ${Math.round(recommendedMonthly).toLocaleString()} (current: ${Math.round(currentMonthly).toLocaleString()}, loan cap: ${Math.round(loanCap).toLocaleString()}/yr)</p>

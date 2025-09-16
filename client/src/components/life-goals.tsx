@@ -30,11 +30,13 @@ import {
   Sparkles,
   Calculator,
   BarChart3,
+  Info,
   X
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Progress } from "@/components/ui/progress";
 import { Gauge } from "@/components/ui/gauge";
+import { Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import DebouncedInvalidation from '@/utils/debounced-invalidation';
@@ -186,6 +188,15 @@ const LifeGoalsComponent = () => {
   // Create debounced invalidation instance
   const debouncedInvalidation = useMemo(() => new DebouncedInvalidation(queryClient), [queryClient]);
 
+  // Refresh education goals immediately after optimization is saved elsewhere
+  useEffect(() => {
+    const onEduOpt = () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/education/goals'] });
+    };
+    window.addEventListener('educationOptimizationUpdated', onEduOpt as any);
+    return () => window.removeEventListener('educationOptimizationUpdated', onEduOpt as any);
+  }, [queryClient]);
+
   // Profile + retirement score for Retirement Readiness tile
   const { data: profile } = useQuery({
     queryKey: ['/api/financial-profile'],
@@ -243,10 +254,19 @@ const LifeGoalsComponent = () => {
   })();
 
   const optimizedProb = (() => {
-    const op = Number(profile?.optimizationVariables?.optimizedScore?.probabilityOfSuccess || 0);
-    return op > 1 ? Math.round(op) : Math.round(op * 100);
+    const raw = (
+      profile?.optimizationVariables?.optimizedScore?.probabilityOfSuccess ??
+      (profile as any)?.retirementPlanningData?.optimizedScore ??
+      null
+    );
+    if (raw == null) return null as number | null;
+    const op = Number(raw);
+    if (!Number.isFinite(op)) return null as number | null;
+    const pct = op > 1 ? op : op * 100;
+    return Math.max(0, Math.min(100, Math.round(pct)));
   })();
-  const deltaPts = optimizedProb ? (optimizedProb - baselineProb) : 0;
+  const hasSavedRetOptimization = optimizedProb !== null;
+  const deltaPts = hasSavedRetOptimization ? (optimizedProb! - baselineProb) : null;
 
   const monthlyExp = Number(profile?.expectedMonthlyExpensesRetirement || 0);
   const annualExpenses = monthlyExp * 12;
@@ -337,7 +357,7 @@ const LifeGoalsComponent = () => {
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000,   // 10 minutes
     refetchOnWindowFocus: false,
-    refetchOnMount: false
+    refetchOnMount: 'always'
   });
 
   // Normalize to an array for downstream logic
@@ -827,18 +847,39 @@ const LifeGoalsComponent = () => {
           const isEducationGoal = goal.goalType === 'education';
           const educationMeta: any = isEducationGoal ? goal.metadata : null;
           const educationProjection = educationMeta?.projection;
+          const savedEducationOptimization = isEducationGoal ? educationMeta?.savedOptimization : null;
+          const normalizeProbability = (value: unknown): number | null => {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return null;
+            const pct = num > 1 ? num : num * 100;
+            const clamped = Math.max(0, Math.min(100, pct));
+            return Math.round(clamped);
+          };
+          const savedOptimizationResult = savedEducationOptimization?.result;
           const baselineEducationProb = isEducationGoal
-            ? Math.round(Math.min(100, Math.max(0, Number(educationProjection?.probabilityOfSuccess ?? 0))))
+            ? normalizeProbability(
+                savedOptimizationResult?.baselineProbabilityOfSuccess ??
+                savedOptimizationResult?.baselineProjection?.probabilityOfSuccess ??
+                educationProjection?.probabilityOfSuccess ??
+                educationMeta?.probabilityOfSuccess ??
+                educationMeta?.projectionData?.probabilityOfSuccess ??
+                0
+              ) ?? 0
             : 0;
           const optimizedEducationProbRaw = isEducationGoal
-            ? (educationMeta?.savedOptimization?.result?.optimizedProbabilityOfSuccess ??
-               educationMeta?.savedOptimization?.result?.probabilityOfSuccess ??
-               baselineEducationProb)
-            : 0;
-          const optimizedEducationProb = isEducationGoal
-            ? Math.round(Math.min(100, Math.max(0, Number(optimizedEducationProbRaw))))
-            : 0;
-          const educationDelta = isEducationGoal ? optimizedEducationProb - baselineEducationProb : 0;
+            ? normalizeProbability(
+                savedOptimizationResult?.optimizedProbabilityOfSuccess ??
+                savedOptimizationResult?.probabilityOfSuccess ??
+                savedOptimizationResult?.monteCarlo?.probabilityOfSuccess ??
+                savedOptimizationResult?.monteCarloAnalysis?.probabilityOfSuccess
+              )
+            : null;
+          const hasOptimizationProbability = typeof optimizedEducationProbRaw === 'number';
+          const optimizedEducationProb = hasOptimizationProbability
+            ? optimizedEducationProbRaw!
+            : baselineEducationProb;
+          const educationDelta = hasOptimizationProbability ? optimizedEducationProb - baselineEducationProb : 0;
+          const hasSavedEduOptimization = Boolean(savedEducationOptimization?.result);
           const educationTotalCost = isEducationGoal ? Number(educationProjection?.totalCost ?? 0) : 0;
           const educationTotalFunded = isEducationGoal ? Number(educationProjection?.totalFunded ?? 0) : 0;
           const educationTotalLoans = isEducationGoal ? Number(educationProjection?.totalLoans ?? 0) : 0;
@@ -863,7 +904,7 @@ const LifeGoalsComponent = () => {
               transition={{ delay: index * 0.1 }}
             >
               <Card 
-                className={`bg-gray-800/50 border-gray-700 hover:border-gray-600 transition-all cursor-pointer`}
+                className={`bg-gray-800/50 border-gray-700 hover:border-gray-600 transition-all cursor-pointer min-h-[360px]`}
                 onClick={() => {
                   // Only show detail view for non-system goals (custom life goals)
                   if (!['retirement', 'education', 'debt-free'].includes(goal.goalType)) {
@@ -910,48 +951,54 @@ const LifeGoalsComponent = () => {
                         />
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className="text-white font-semibold text-lg">{baselineProb}%</span>
                             <span className={`text-[11px] px-2 py-0.5 rounded-full border ${readinessChip.cls}`}>{readinessChip.label}</span>
+                            <TooltipProvider>
+                              <UITooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-4 w-4 text-gray-400/80 hover:text-gray-300 cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-sm p-3 !bg-gray-900 !border-gray-600 !text-gray-200">
+                                  <div className="text-xs space-y-1">
+                                    <p><span className="font-semibold">Gauge</span>: Baseline success probability (current plan)</p>
+                                    <p><span className="font-semibold">Number</span>: Saved optimized success probability</p>
+                                  </div>
+                                </TooltipContent>
+                              </UITooltip>
+                            </TooltipProvider>
                           </div>
-                          {deltaPts !== 0 && (
-                            <p className="text-xs text-gray-400">{deltaPts > 0 ? `+${deltaPts}` : `${deltaPts}`} pts with optimized plan</p>
-                          )}
                         </div>
                       </div>
 
-                      {/* Secondary metric: Funding progress */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-gray-400">Funding Progress</span>
-                          <span className="text-xs text-gray-300">{fundingProgress}%</span>
-                        </div>
-                        <div className="w-full bg-gray-700 rounded-full h-2">
-                          <div className={`h-2 rounded-full ${fundingProgress >= 100 ? 'bg-emerald-500' : fundingProgress >= 80 ? 'bg-blue-500' : fundingProgress >= 60 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${fundingProgress}%` }} />
-                        </div>
+                      {/* Optimized summary under the gauge for consistent height */}
+                      <div className="mt-2">
+                        {hasSavedRetOptimization ? (
+                          <div className="space-y-1">
+                            <div>
+                              <span className="text-white font-semibold text-xl">{optimizedProb}%</span>
+                            </div>
+                            <p className="text-xs text-purple-300">
+                              After optimization: {deltaPts !== null && deltaPts !== 0 ? `${deltaPts > 0 ? '+' : ''}${Math.round(deltaPts)}%` : '+0%'}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-400">Visit retirement planning to optimize</p>
+                        )}
                       </div>
 
-                      {/* Risk signals */}
-                      <div className="flex flex-wrap gap-2">
-                        <span className={`text-[11px] px-2 py-0.5 rounded-full border ${gapCheck?.funded ? 'bg-emerald-900/30 text-emerald-300 border-emerald-700/50' : 'bg-amber-900/30 text-amber-300 border-amber-700/50'}`}>
-                          Gap years {gapCheck?.funded ? 'funded' : 'needs plan'}{gapCheck?.first && gapCheck?.last ? ` (${gapCheck.first}-${gapCheck.last})` : ''}
-                        </span>
-                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-blue-900/30 text-blue-200 border-blue-700/50">
-                          SS ages: You {profile?.socialSecurityClaimAge || '—'}{profile?.maritalStatus === 'married' && profile?.spouseSocialSecurityClaimAge ? ` / Sp ${profile.spouseSocialSecurityClaimAge}` : ''}
-                        </span>
-                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-purple-900/30 text-purple-200 border-purple-700/50">
-                          Cash buffer: {yearsCash.toFixed(1)} yrs
-                        </span>
-                      </div>
 
                       {/* CTA row */}
                       <div className="flex gap-2 pt-1">
-                        <Button onClick={() => navigateToPlanningCenter('retirement')} className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white" size="sm">
+                        <Button
+                          onClick={() => navigateToPlanningCenter('retirement')}
+                          className="bg-purple-600 hover:bg-purple-700 text-white shadow-[0_0_10px_rgba(168,85,247,0.35)]"
+                          size="sm"
+                        >
                           Planning Center
                         </Button>
                         {(baselineProb < 80 || fundingProgress < 100) && (
                           <Button
                             onClick={() => navigateToPlanningCenter('retirement')}
-                            className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
+                            className="bg-purple-600 hover:bg-purple-700 text-white shadow-[0_0_10px_rgba(168,85,247,0.35)]"
                             size="sm"
                           >
                             Optimize variables
@@ -969,6 +1016,7 @@ const LifeGoalsComponent = () => {
                   {/* Education Goal Overview (specialized) */}
                   {isEducationGoal && (
                     <div className="space-y-4">
+                      {/* Primary metric: Education success probability gauge */}
                       <div className="flex items-center gap-3">
                         <Gauge
                           value={baselineEducationProb}
@@ -980,19 +1028,40 @@ const LifeGoalsComponent = () => {
                         />
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className="text-white font-semibold text-lg">{baselineEducationProb}%</span>
                             <span className={`text-[11px] px-2 py-0.5 rounded-full border ${baselineEducationProb >= 80 ? 'bg-emerald-900/40 text-emerald-300 border-emerald-700/60' : baselineEducationProb >= 60 ? 'bg-amber-900/40 text-amber-300 border-amber-700/60' : 'bg-red-900/40 text-red-300 border-red-700/60'}`}>
-                              {baselineEducationProb >= 80 ? 'On track' : baselineEducationProb >= 60 ? 'Work in progress' : 'Needs attention'}
+                              {baselineEducationProb >= 80 ? 'On track' : baselineEducationProb >= 60 ? 'Caution' : 'Behind'}
                             </span>
+                            <TooltipProvider>
+                              <UITooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-4 w-4 text-gray-400/80 hover:text-gray-300 cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-sm p-3 !bg-gray-900 !border-gray-600 !text-gray-200">
+                                  <div className="text-xs space-y-1">
+                                    <p><span className="font-semibold">Gauge</span>: Baseline education success probability</p>
+                                    <p><span className="font-semibold">Right side</span>: Saved optimized probability (if available)</p>
+                                  </div>
+                                </TooltipContent>
+                              </UITooltip>
+                            </TooltipProvider>
                           </div>
-                          {educationMeta?.savedOptimization ? (
-                            <p className={`text-xs ${educationDelta >= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
-                              {educationDelta >= 0 ? `+${educationDelta}` : educationDelta} pts with optimized plan
-                            </p>
-                          ) : (
-                            <p className="text-xs text-gray-400">Run the optimizer to improve Monte Carlo success</p>
-                          )}
                         </div>
+                      </div>
+
+                      {/* Optimized summary under the gauge for consistent height */}
+                      <div className="mt-2">
+                        {hasSavedEduOptimization ? (
+                          <div className="space-y-1">
+                            <div>
+                              <span className="text-white font-semibold text-xl">{optimizedEducationProb}%</span>
+                            </div>
+                            <p className="text-xs text-purple-300">
+                              After optimization: {educationDelta > 0 ? `+${Math.round(educationDelta)}%` : educationDelta < 0 ? `${Math.round(educationDelta)}%` : '+0%'}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-400">Visit Education Funding to optimize</p>
+                        )}
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 text-sm">
@@ -1011,9 +1080,9 @@ const LifeGoalsComponent = () => {
                           <p className="text-sm font-semibold text-white">{educationTargetLabel}</p>
                         </div>
                         <div className="bg-gray-700/30 p-3 rounded">
-                          <p className="text-xs text-gray-400">Optimized Success</p>
+                          <p className="text-xs text-gray-400">After optimization</p>
                           <p className="text-sm font-semibold text-white">
-                            {educationMeta?.savedOptimization ? `${optimizedEducationProb}%` : 'Not saved yet'}
+                            {hasSavedEduOptimization ? `${optimizedEducationProb}%` : 'Not saved yet'}
                           </p>
                         </div>
                       </div>
