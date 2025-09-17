@@ -25,7 +25,8 @@ import {
   ChevronDown,
   ChevronUp,
   Lightbulb,
-  XCircle
+  XCircle,
+  RefreshCw
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { TaxOverview } from "./tax-overview";
@@ -189,6 +190,7 @@ function TaxReductionCenterContent() {
   const [analysisTimer, setAnalysisTimer] = useState(0);
   const [showRecommendations, setShowRecommendations] = useState(false);
   const [aiAnalysisResult, setAiAnalysisResult] = useState<AIRothAnalysisResult | null>(null);
+  const [lastCalculatedAt, setLastCalculatedAt] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   // Readiness assessment removed: no detailed tests UI
@@ -420,6 +422,7 @@ function TaxReductionCenterContent() {
     },
     onSuccess: (data) => {
       setAiAnalysisResult(data);
+      setLastCalculatedAt(new Date().toISOString());
       setAnalysisError(null);
       setIsAnalyzing(false);
       
@@ -459,6 +462,8 @@ function TaxReductionCenterContent() {
   useEffect(() => {
     if (storedRothAnalysis && storedRothAnalysis.hasAnalysis && !aiAnalysisResult) {
       setAiAnalysisResult(storedRothAnalysis.results);
+      const ts = storedRothAnalysis.calculatedAt || storedRothAnalysis.results?.calculatedAt;
+      if (ts) setLastCalculatedAt(ts);
     }
   }, [storedRothAnalysis, aiAnalysisResult]);
 
@@ -1464,12 +1469,35 @@ function TaxReductionCenterContent() {
                   {aiAnalysisResult.recommendation?.implementationPlan?.nextFiveYears && 
                    aiAnalysisResult.recommendation.implementationPlan.nextFiveYears.length > 0 && (
                     <Card className="bg-gray-800/50 border-gray-600">
-                      <CardHeader>
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
                         <CardTitle className="text-white flex items-center">
                           <Target className="h-5 w-5 mr-2 text-[#8A00C4]" />
                           5-Year Roth Conversion Plan
                         </CardTitle>
-                      </CardHeader>
+                        <div className="flex items-center gap-3">
+                          {lastCalculatedAt && (
+                            <span className="text-xs text-gray-400">
+                              Last calculated: {new Date(lastCalculatedAt).toLocaleString()}
+                            </span>
+                          )}
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white"
+                            onClick={handleAIAnalysis}
+                            disabled={isAnalyzing || aiRothAnalysisMutation.isPending}
+                            title="Recalculate analysis"
+                          >
+                            {isAnalyzing || aiRothAnalysisMutation.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
                       <CardContent>
                         <div className="space-y-3">
                           {aiAnalysisResult.recommendation.implementationPlan.nextFiveYears.map((year, index) => (
