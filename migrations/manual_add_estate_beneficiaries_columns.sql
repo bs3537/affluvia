@@ -15,7 +15,9 @@ ALTER TABLE IF EXISTS estate_beneficiaries
   ADD COLUMN IF NOT EXISTS trustee text,
   ADD COLUMN IF NOT EXISTS age_restriction integer,
   ADD COLUMN IF NOT EXISTS is_primary boolean DEFAULT true,
-  ADD COLUMN IF NOT EXISTS contingent_beneficiary_id integer;
+  ADD COLUMN IF NOT EXISTS contingent_beneficiary_id integer,
+  ADD COLUMN IF NOT EXISTS created_at timestamp DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT now();
 
 -- Optional: add FK for contingent_beneficiary_id if not present (commented to avoid duplicate errors)
 -- ALTER TABLE estate_beneficiaries
