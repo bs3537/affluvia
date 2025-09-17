@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { estatePlanningService } from "@/services/estate-planning.service";
 import {
@@ -153,6 +153,7 @@ function extractAssumptions(estatePlan: any, profile: any, monteCarlo: MonteCarl
 
 export function useEstatePlanningNew(): EstatePlanningNewData {
   const queryClient = useQueryClient();
+  const [creatingPlan, setCreatingPlan] = useState(false);
 
   const {
     data: profile,
@@ -198,6 +199,27 @@ export function useEstatePlanningNew(): EstatePlanningNewData {
   const monteCarlo = useMemo(() => parseMonteCarlo(profile), [profile]);
   const strategies = useMemo(() => extractStrategies(estatePlan), [estatePlan]);
   const assumptions = useMemo(() => extractAssumptions(estatePlan, profile, monteCarlo), [estatePlan, profile, monteCarlo]);
+
+  // Auto-create an estate plan when missing so the new section has no dependency on the legacy view
+  useEffect(() => {
+    if (!creatingPlan && !planLoading && !estatePlan && profile) {
+      setCreatingPlan(true);
+      estatePlanningService
+        .createInitialEstatePlanFromProfile(profile)
+        .then((created) => {
+          if (created) {
+            queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
+            queryClient.invalidateQueries({ queryKey: ["estate-documents", created.id] });
+            queryClient.invalidateQueries({ queryKey: ["estate-beneficiaries", created.id] });
+            queryClient.invalidateQueries({ queryKey: ["/api/financial-profile"] });
+          }
+        })
+        .catch((e) => {
+          console.warn("[Estate-New] Failed to auto-create estate plan:", (e as any)?.message || e);
+        })
+        .finally(() => setCreatingPlan(false));
+    }
+  }, [creatingPlan, planLoading, estatePlan, profile, queryClient]);
 
   const projectedEstateValue = useMemo(
     () => deriveBaseEstateValue(profile, estatePlan, assetComposition, monteCarlo),
