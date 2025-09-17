@@ -1465,81 +1465,86 @@ function TaxReductionCenterContent() {
                     );
                   })()}
 
-                  {/* Implementation Plan - 5 Year Conversion Schedule */}
-                  {aiAnalysisResult.recommendation?.implementationPlan?.nextFiveYears && 
-                   aiAnalysisResult.recommendation.implementationPlan.nextFiveYears.length > 0 && (
-                    <Card className="bg-gray-800/50 border-gray-600">
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-white flex items-center">
-                          <Target className="h-5 w-5 mr-2 text-[#8A00C4]" />
-                          5-Year Roth Conversion Plan
-                        </CardTitle>
-                        <div className="flex items-center gap-3">
-                          {lastCalculatedAt && (
-                            <span className="text-xs text-gray-400">
-                              Last calculated: {new Date(lastCalculatedAt).toLocaleString()}
-                            </span>
-                          )}
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white"
-                            onClick={handleAIAnalysis}
-                            disabled={isAnalyzing || aiRothAnalysisMutation.isPending}
-                            title="Recalculate analysis"
-                          >
-                            {isAnalyzing || aiRothAnalysisMutation.isPending ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <RefreshCw className="h-4 w-4" />
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                    </CardHeader>
-                      <CardContent>
-                        <div className="space-y-3">
-                          {aiAnalysisResult.recommendation.implementationPlan.nextFiveYears.map((year, index) => (
-                            <Card key={index} className="bg-gray-700/50 border-gray-600">
-                              <CardContent className="pt-4">
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                  <div>
-                                    <p className="text-sm text-gray-400">Year {year.year} (Age {year.age})</p>
-                                    <p className="text-lg font-semibold text-white">
-                                      ${Math.round(year.conversionAmount).toLocaleString()}
-                                    </p>
-                                    <p className="text-xs text-gray-400">Conversion Amount</p>
+                  {/* Implementation Plan - Full Conversion Schedule */}
+                  {(() => {
+                    const fullPlan = (aiAnalysisResult as any)?.conversionPlan || aiAnalysisResult.recommendation?.implementationPlan?.nextFiveYears || [];
+                    const planYears = Array.isArray(fullPlan) ? fullPlan : [];
+                    if (planYears.length === 0) return null;
+                    return (
+                      <Card className="bg-gray-800/50 border-gray-600">
+                        <CardHeader>
+                          <div className="flex items-center justify-between">
+                            <CardTitle className="text-white flex items-center">
+                              <Target className="h-5 w-5 mr-2 text-[#8A00C4]" />
+                              Roth Conversion Plan
+                              <span className="ml-2 text-xs text-gray-400">({planYears.length} year{planYears.length>1?'s':''})</span>
+                            </CardTitle>
+                            <div className="flex items-center gap-3">
+                              {lastCalculatedAt && (
+                                <span className="text-xs text-gray-400">
+                                  Last calculated: {new Date(lastCalculatedAt).toLocaleString()}
+                                </span>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white"
+                                onClick={handleAIAnalysis}
+                                disabled={isAnalyzing || aiRothAnalysisMutation.isPending}
+                                title="Recalculate analysis"
+                              >
+                                {isAnalyzing || aiRothAnalysisMutation.isPending ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-3">
+                            {planYears.map((year: any, index: number) => (
+                              <Card key={index} className="bg-gray-700/50 border-gray-600">
+                                <CardContent className="pt-4">
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div>
+                                      <p className="text-sm text-gray-400">Year {year.year} (Age {year.age})</p>
+                                      <p className="text-lg font-semibold text-white">
+                                        ${Math.round(year.conversionAmount).toLocaleString()}
+                                      </p>
+                                      <p className="text-xs text-gray-400">Conversion Amount</p>
+                                    </div>
+                                    <div>
+                                      <p className="text-lg font-semibold text-orange-400">
+                                        ${Math.round(year.taxOwed).toLocaleString()}
+                                      </p>
+                                      <p className="text-xs text-gray-400">Tax Owed</p>
+                                    </div>
+                                    <div>
+                                      <p className="text-sm text-green-400">{year.taxPaymentSource || year.paymentSource}</p>
+                                      <p className="text-xs text-gray-400">Payment Source</p>
+                                    </div>
                                   </div>
-                                  <div>
-                                    <p className="text-lg font-semibold text-orange-400">
-                                      ${Math.round(year.taxOwed).toLocaleString()}
-                                    </p>
-                                    <p className="text-xs text-gray-400">Tax Owed</p>
+                                  <div className="mt-3">
+                                    <h5 className="text-sm font-medium text-white mb-1">Actions:</h5>
+                                    <ul className="space-y-1">
+                                      {year.actions?.map((action: string, actionIndex: number) => (
+                                        <li key={actionIndex} className="text-xs text-gray-300">
+                                          <CheckCircle className="h-3 w-3 inline mr-1 text-green-400" />
+                                          {action}
+                                        </li>
+                                      ))}
+                                    </ul>
                                   </div>
-                                  <div>
-                                    <p className="text-sm text-green-400">{year.taxPaymentSource}</p>
-                                    <p className="text-xs text-gray-400">Payment Source</p>
-                                  </div>
-                                </div>
-                                <div className="mt-3">
-                                  <h5 className="text-sm font-medium text-white mb-1">Actions:</h5>
-                                  <ul className="space-y-1">
-                                    {year.actions?.map((action, actionIndex) => (
-                                      <li key={actionIndex} className="text-xs text-gray-300">
-                                        <CheckCircle className="h-3 w-3 inline mr-1 text-green-400" />
-                                        {action}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              </CardContent>
-                            </Card>
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )}
+                                </CardContent>
+                              </Card>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })()}
 
                   {/* Disclaimer */}
                   <Alert className="border-yellow-500 bg-yellow-900/20">

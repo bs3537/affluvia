@@ -1451,7 +1451,6 @@ export class RothConversionEngine {
   private createConversionPlan(projection: ProjectionYear[]) {
     return projection
       .filter(year => year.conversionAmount > 0)
-      .slice(0, 5)
       .map(year => {
         const federalRate = year.marginalTaxRate;
         const stateRate = this.calculateStateTax(1000) / 1000;
