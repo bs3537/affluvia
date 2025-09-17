@@ -199,12 +199,15 @@ export function calculateEstateProjection(input: EstateCalculationInput): Estate
   const ilitDeathBenefit = Math.max(0, Number(strategies?.ilitDeathBenefit) || 0);
 
   const grossEstateBeforeAdjustments = appreciatedValue;
+  // Apply lifetime/annual gifts and trust funding; treat charitable bequests as deductible (not reducing gross)
   const grossEstate = Math.max(
     0,
-    grossEstateBeforeAdjustments - lifetimeGifts - annualGifts - trustFunding - charitableBequest
+    grossEstateBeforeAdjustments - lifetimeGifts - annualGifts - trustFunding
   );
 
-  const deductions = grossEstate * 0.03;
+  // Deductions: administrative expenses plus charitable bequests (estate-tax deductible)
+  const adminExpenses = grossEstate * 0.03;
+  const deductions = Math.min(grossEstate, adminExpenses + charitableBequest);
   let taxableEstate = Math.max(0, grossEstate - deductions);
 
   const portability = Boolean(assumptions?.portability ?? (profile?.maritalStatus === "married"));
@@ -246,10 +249,13 @@ export function calculateEstateProjection(input: EstateCalculationInput): Estate
     } catch {}
     return 0;
   })();
-  const availableLiquidity = Math.max(
+  const availableLiquidityPreReserve = Math.max(
     0,
     assetComposition.taxable + assetComposition.roth + ilitDeathBenefit + userLifeCoverage + spouseLifeCoverage
   );
+  // Reserve charitable bequest from available liquidity to reflect funds earmarked for charity
+  const charitableReserve = Math.max(0, Math.min(charitableBequest, availableLiquidityPreReserve));
+  const availableLiquidity = Math.max(0, availableLiquidityPreReserve - charitableReserve);
   // Settlement expenses per guidance: probate costs at 5% of gross estate + $10,000 per spouse
   const probateCosts = Math.round(grossEstate * 0.05);
   const funeralCost = 10000 * ((String(profile?.maritalStatus || '').toLowerCase() === 'married') ? 2 : 1);
@@ -281,6 +287,7 @@ export function calculateEstateProjection(input: EstateCalculationInput): Estate
       probateCosts,
       funeralCost,
       settlementExpenses,
+      charitableReserve,
     },
     heirTaxEstimate: {
       taxDeferredBalance: assetComposition.taxDeferred,

@@ -4767,19 +4767,19 @@ function IntakeFormContent({ onSubmissionStart }: { onSubmissionStart?: () => vo
               </div>
             )}
             
-            {/* Legacy Planning */}
+            {/* Charitable Planning */}
             <div className="bg-gray-800 p-6 rounded-lg space-y-4">
-              <h4 className="text-lg font-medium text-white mb-4">Legacy Planning</h4>
+              <h4 className="text-lg font-medium text-white mb-4">Charitable Planning</h4>
               
               <div>
-                <Label className="text-white">Legacy Goal ($)</Label>
+                <Label className="text-white">Charitable Goal ($)</Label>
                 <Input
                   type="number"
                   {...register("legacyGoal", { valueAsNumber: true })}
                   placeholder="0"
                   className="bg-gray-700 border-gray-600 text-white"
                 />
-                <p className="text-xs text-gray-400 mt-1">Amount you wish to leave as inheritance</p>
+                <p className="text-xs text-gray-400 mt-1">Amount you wish to leave for charitable purposes (future dollars at time of death)</p>
               </div>
             </div>
             

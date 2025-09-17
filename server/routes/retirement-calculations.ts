@@ -279,6 +279,8 @@ router.post('/api/calculate-retirement-score', async (req, res, next) => {
     // Real dollars for consistency with prior behavior
     (params as any).useNominalDollars = false;
     (params as any).displayInTodaysDollars = true;
+    // Integrate charitable goal into success probability
+    (params as any).includeLegacyGoalInSuccess = true;
     
     // Split work across multiple workers
     const tasks = Array.from({ length: threads }, (_, i) => per + (i < remainder ? 1 : 0))
@@ -705,6 +707,7 @@ router.post('/api/retirement/optimization-refresh', async (req, res, next) => {
 
     // Optimized run
     const optParams = profileToRetirementParams(optimizedProfile);
+    (optParams as any).includeLegacyGoalInSuccess = true;
     const optimizedResult: any = await mcPool.run({ params: optParams, simulationCount: runs, type: 'bands' });
 
     // Bands (optimized)
@@ -774,6 +777,7 @@ router.post('/api/retirement/optimization-refresh', async (req, res, next) => {
 
     // Baseline bands (fresh)
     const baselineParams = profileToRetirementParams(profile);
+    (baselineParams as any).includeLegacyGoalInSuccess = true;
     const baselineEnhanced: any = await mcPool.run({ params: baselineParams, simulationCount: runs, type: 'bands' });
     const baselineBands = buildBands(baselineParams, baselineEnhanced);
 
@@ -942,6 +946,8 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
     // Align with enhanced endpoint behavior: run in nominal dollars and display in today's dollars
     (params as any).useNominalDollars = false;
     (params as any).displayInTodaysDollars = true;
+    // Integrate charitable goal into success probability
+    (params as any).includeLegacyGoalInSuccess = true;
     
     // Log Monte Carlo parameters to detect conversion issues
     console.log('🎯 Monte Carlo parameters:', {

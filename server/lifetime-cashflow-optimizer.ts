@@ -80,7 +80,7 @@ export class LifetimeCashFlowOptimizer {
     this.spouseCurrentAge = profile.spouseDateOfBirth ? this.calculateAge(profile.spouseDateOfBirth) : undefined;
     this.retirementAge = profile.desiredRetirementAge || 65;
     this.spouseRetirementAge = profile.spouseDesiredRetirementAge;
-    this.lifeExpectancy = profile.userLifeExpectancy || 90;
+    this.lifeExpectancy = profile.userLifeExpectancy || 93;
     this.spouseLifeExpectancy = profile.spouseLifeExpectancy;
   }
 

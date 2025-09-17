@@ -107,8 +107,12 @@ function deriveBaseEstateValue(
   return assetComposition.taxable + assetComposition.taxDeferred + assetComposition.roth + assetComposition.illiquid;
 }
 
-function extractStrategies(estatePlan: any): EstateStrategyInputs {
-  if (!estatePlan) return {};
+function extractStrategies(estatePlan: any, profile?: any): EstateStrategyInputs {
+  if (!estatePlan) {
+    // Fallback to intake charitable goal when no plan exists
+    const fromIntake = Number(profile?.legacyGoal || 0) || undefined;
+    return fromIntake && fromIntake > 0 ? { charitableBequest: fromIntake } : {};
+  }
 
   const trustStrategies = Array.isArray(estatePlan.trustStrategies) ? estatePlan.trustStrategies : [];
   const trustFunding = trustStrategies.map((strategy: any) => ({
@@ -119,12 +123,16 @@ function extractStrategies(estatePlan: any): EstateStrategyInputs {
   const gifting = estatePlan.analysisResults?.gifting || {};
   const insurance = estatePlan.analysisResults?.insurance || {};
   const charitable = estatePlan.charitableGifts || estatePlan.analysisResults?.charitable || {};
+  // Resolve charitable bequest with fallback to intake legacyGoal when plan lacks a value
+  const fromPlan = Number(charitable?.plannedTotal || charitable?.amount || charitable?.bequestAmount || 0) || undefined;
+  const fromIntake = Number(profile?.legacyGoal || 0) || undefined;
+  const resolvedCharity = (fromPlan && fromPlan > 0) ? fromPlan : (fromIntake && fromIntake > 0 ? fromIntake : undefined);
 
   return {
     lifetimeGifts: Number(gifting?.lifetimeGifts || estatePlan?.lifetimeGiftAmount || 0) || undefined,
     annualGiftAmount: Number(gifting?.annualGiftAmount || estatePlan?.annualGiftAmount || 0) || undefined,
     trustFunding: trustFunding.length ? trustFunding : undefined,
-    charitableBequest: Number(charitable?.plannedTotal || charitable?.amount || charitable?.bequestAmount || 0) || undefined,
+    charitableBequest: resolvedCharity,
     ilitDeathBenefit: Number(insurance?.ilitDeathBenefit || insurance?.deathBenefit || 0) || undefined,
     bypassTrust: Boolean(
       estatePlan?.analysisResults?.strategies?.bypassTrust ||
@@ -197,7 +205,7 @@ export function useEstatePlanningNew(): EstatePlanningNewData {
 
   const assetComposition = useMemo(() => buildAssetCompositionFromProfile(profile || {}), [profile]);
   const monteCarlo = useMemo(() => parseMonteCarlo(profile), [profile]);
-  const strategies = useMemo(() => extractStrategies(estatePlan), [estatePlan]);
+  const strategies = useMemo(() => extractStrategies(estatePlan, profile), [estatePlan, profile]);
   const assumptions = useMemo(() => extractAssumptions(estatePlan, profile, monteCarlo), [estatePlan, profile, monteCarlo]);
 
   // Helper to derive current ages from profile DOBs if present

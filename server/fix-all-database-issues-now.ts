@@ -117,6 +117,7 @@ async function fixAllDatabaseIssuesNow() {
         ADD COLUMN IF NOT EXISTS monthly_income DECIMAL(12,2) DEFAULT 0,
         ADD COLUMN IF NOT EXISTS monthly_expenses DECIMAL(12,2) DEFAULT 0,
         ADD COLUMN IF NOT EXISTS monthly_cash_flow DECIMAL(12,2) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS monthly_net_cash_flow DECIMAL(12,2) DEFAULT 0,
         ADD COLUMN IF NOT EXISTS expense_categories JSONB DEFAULT '{}'::jsonb,
         ADD COLUMN IF NOT EXISTS account_summary JSONB DEFAULT '{}'::jsonb,
         ADD COLUMN IF NOT EXISTS institution_summary JSONB DEFAULT '{}'::jsonb,

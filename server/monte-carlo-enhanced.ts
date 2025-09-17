@@ -6097,9 +6097,26 @@ function runSingleRightCapitalStyleIteration(
 
   // Calculate final metrics
   const finalPortfolioValue = Math.max(0, portfolioValue);
-  // Success = no cash flow shortfalls during retirement; legacy tracked separately
-  const success = totalShortfall === 0;
+  // Base success = no cash flow shortfalls during retirement
+  const baseSuccess = totalShortfall === 0;
   
+  // Treat legacyGoal as future (nominal-at-death) dollars when comparing against
+  // real-dollar portfolio values produced by the real-dollar model. Convert the
+  // future nominal legacy goal to today's dollars using the inflation rate and
+  // years elapsed in this simulation.
+  const lastYearEntry = yearlyData.length > 0 ? yearlyData[yearlyData.length - 1] : undefined;
+  const yearsFromNow = Math.max(0, Math.round((lastYearEntry?.age ?? currentUserAge) - currentAge));
+  const legacyGoalFuture = Number(legacyGoal || 0);
+  const inf = Number(inflationRate || 0);
+  const legacyGoalInRealDollars = inf > 0 && yearsFromNow > 0
+    ? legacyGoalFuture / Math.pow(1 + inf, yearsFromNow)
+    : legacyGoalFuture;
+
+  // If requested, require charitable/legacy goal to be met (future dollars converted to real)
+  const success = (params as any).includeLegacyGoalInSuccess
+    ? (baseSuccess && finalPortfolioValue >= legacyGoalInRealDollars)
+    : baseSuccess;
+
   const result: SimulationIteration = {
     iteration: iterationNumber,
     success,
@@ -6111,7 +6128,7 @@ function runSingleRightCapitalStyleIteration(
     totalShortfall: totalShortfall || undefined,
     maxAnnualShortfall: maxShortfall || undefined,
     yearlyData,
-    legacyGoalMet: finalPortfolioValue >= (legacyGoal || 0),
+    legacyGoalMet: finalPortfolioValue >= legacyGoalInRealDollars,
     // LTC Analysis Data
     ltcData: {
       hasLTCEpisode: ltcEpisode.hasEpisode,

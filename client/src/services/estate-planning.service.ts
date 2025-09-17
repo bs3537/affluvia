@@ -299,10 +299,19 @@ class EstatePlanningService {
     const totalEstateValue = totalAssets + homeEquity - totalLiabilities;
 
     // Create initial estate plan
+    const charitableGoal = Number(profile?.legacyGoal || 0) || 0;
     const estatePlan = await this.createEstatePlan({
       totalEstateValue: totalEstateValue.toString(),
       liquidAssets: totalAssets.toString(),
       illiquidAssets: homeEquity.toString(),
+      // Seed charitable plan from intake legacy goal when available
+      ...(charitableGoal > 0 ? {
+        charitableGifts: {
+          plannedTotal: charitableGoal,
+          source: 'intake',
+          note: 'Seeded from intake charitable goal (future dollars)'
+        }
+      } : {})
     });
 
     // Create initial documents based on intake form (best-effort; don't fail plan creation if these fail)

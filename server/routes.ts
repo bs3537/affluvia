@@ -2447,6 +2447,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use real dollars for consistency with prior behavior
       (params as any).useNominalDollars = false;
       (params as any).displayInTodaysDollars = true;
+      // Integrate charitable goal into success probability
+      (params as any).includeLegacyGoalInSuccess = true;
       // Seed handshake: accept client seed or derive from input hash
       const { seed: clientSeed, randomSeed: clientRandomSeed } = req.body || {};
       const { hash32 } = await import('./rng');
@@ -8569,7 +8571,7 @@ Response format:
         spouse_retirement_age: completeProfile.spouseDateOfBirth ? getRetirementAge(optimizationVars.spouseRetirementAge, completeProfile.spouseDesiredRetirementAge) : undefined,
         user_ss_claim_age: getSocialSecurityAge(optimizationVars.socialSecurityAge, completeProfile.socialSecurityClaimAge),
         spouse_ss_claim_age: completeProfile.spouseDateOfBirth ? getSocialSecurityAge(optimizationVars.spouseSocialSecurityAge, completeProfile.spouseSocialSecurityClaimAge) : undefined,
-        longevity_age: Number(completeProfile.userLifeExpectancy) || 90,
+        longevity_age: Number(completeProfile.userLifeExpectancy) || 93,
         
         // Income Information
         user_gross_income: Number(completeProfile.annualIncome) || 0,

@@ -203,6 +203,7 @@ async function syncDatabaseWithDrizzle() {
           monthly_income DECIMAL(12,2) DEFAULT 0,
           monthly_expenses DECIMAL(12,2) DEFAULT 0,
           monthly_cash_flow DECIMAL(12,2) DEFAULT 0,
+          monthly_net_cash_flow DECIMAL(12,2) DEFAULT 0,
           expense_categories JSONB DEFAULT '{}'::jsonb,
           account_summary JSONB DEFAULT '{}'::jsonb,
           institution_summary JSONB DEFAULT '{}'::jsonb,

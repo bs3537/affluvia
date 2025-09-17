@@ -1551,10 +1551,10 @@ export function profileToRetirementParams(profileData) {
     const retirementAge = Number(profileData.desiredRetirementAge) || 65;
     const spouseDesiredRetirementAge = Number(profileData.spouseDesiredRetirementAge);
     // Use longer life expectancy for married couples
-    let lifeExpectancy = Number(profileData.userLifeExpectancy) || 90;
+    let lifeExpectancy = Number(profileData.userLifeExpectancy) || 93;
     let spouseLifeExpectancy = undefined;
     if (isMarriedOrPartnered && profileData.spouseLifeExpectancy) {
-        spouseLifeExpectancy = Number(profileData.spouseLifeExpectancy) || 90;
+        spouseLifeExpectancy = Number(profileData.spouseLifeExpectancy) || 93;
         lifeExpectancy = Math.max(lifeExpectancy, spouseLifeExpectancy);
     }
     // FIXED: Calculate ALL liquid assets available for retirement (CFP-compliant approach)

@@ -167,6 +167,11 @@ export interface RetirementMonteCarloParams {
   // Legacy goal
   legacyGoal: number; // Amount desired to leave as legacy/inheritance
   
+  // Success criteria options
+  // If true, scenario success requires BOTH no retirement shortfall AND
+  // meeting the charitable/legacy goal at death (treated as future dollars).
+  includeLegacyGoalInSuccess?: boolean;
+  
   // Long-term care considerations
   hasLongTermCareInsurance?: boolean;
   
@@ -2236,11 +2241,11 @@ export function profileToRetirementParams(profileData: any): RetirementMonteCarl
   const spouseDesiredRetirementAge = Number(profileData.spouseDesiredRetirementAge);
   
   // Use longer life expectancy for married couples
-  let lifeExpectancy = Number(profileData.userLifeExpectancy) || 90;
+  let lifeExpectancy = Number(profileData.userLifeExpectancy) || 93;
   let spouseLifeExpectancy = undefined;
   
   if (isMarriedOrPartnered && profileData.spouseLifeExpectancy) {
-    spouseLifeExpectancy = Number(profileData.spouseLifeExpectancy) || 90;
+    spouseLifeExpectancy = Number(profileData.spouseLifeExpectancy) || 93;
     lifeExpectancy = Math.max(lifeExpectancy, spouseLifeExpectancy);
   }
   

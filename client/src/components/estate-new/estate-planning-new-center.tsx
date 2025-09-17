@@ -563,6 +563,13 @@ export function EstatePlanningNewCenter() {
                             <span>Settlement expenses (probate + funeral)</span>
                             <span className="text-white">{formatCurrency(Number((summary as any).liquidity?.settlementExpenses || 0))}</span>
                           </div>
+                          {/* Charitable reserve (earmarked funds not counted toward available liquidity) */}
+                          {((summary as any).liquidity?.charitableReserve || 0) > 0 && (
+                            <div className="flex items-center justify-between">
+                              <span>Charitable reserve (earmarked)</span>
+                              <span className="text-white">{formatCurrency(Number((summary as any).liquidity?.charitableReserve || 0))}</span>
+                            </div>
+                          )}
                           <div className="text-xs text-gray-500">
                             Probate (5%): {formatCurrency(Number((summary as any).liquidity?.probateCosts || 0))} · Funeral: {formatCurrency(Number((summary as any).liquidity?.funeralCost || 0))}
                           </div>
