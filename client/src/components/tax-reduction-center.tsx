@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -466,6 +466,28 @@ function TaxReductionCenterContent() {
       if (ts) setLastCalculatedAt(ts);
     }
   }, [storedRothAnalysis, aiAnalysisResult]);
+
+  // Auto-run analysis on first visit if nothing is persisted
+  const autoRunTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (
+      user?.id &&
+      !isLoadingStoredRoth &&
+      (!storedRothAnalysis || storedRothAnalysis.hasAnalysis === false) &&
+      !isAnalyzing &&
+      !aiRothAnalysisMutation.isPending &&
+      !autoRunTriggeredRef.current
+    ) {
+      autoRunTriggeredRef.current = true;
+      handleAIAnalysis();
+    }
+  }, [
+    user?.id,
+    isLoadingStoredRoth,
+    storedRothAnalysis,
+    isAnalyzing,
+    aiRothAnalysisMutation.isPending
+  ]);
 
   // Handle AI analysis trigger
   const handleAIAnalysis = async () => {
@@ -1390,7 +1412,7 @@ function TaxReductionCenterContent() {
                     // Generate recommendation rating
                     const getRating = () => {
                       if (lifetimeTaxSavings > 100000 && estateValueBenefit > 200000 && hasLiquidity) {
-                        return { rating: "CONVERT NOW", color: "text-green-400", bgColor: "from-green-900/40 to-green-800/30", borderColor: "border-green-600/40", description: "Excellent opportunity with significant benefits" };
+                        return { rating: "CONVERT", color: "text-green-400", bgColor: "from-green-900/40 to-green-800/30", borderColor: "border-green-600/40", description: "Excellent opportunity with significant benefits" };
                       } else if (lifetimeTaxSavings > 50000 && estateValueBenefit > 100000) {
                         return { rating: "CONVERT", color: "text-green-300", bgColor: "from-green-900/30 to-green-800/20", borderColor: "border-green-600/30", description: "Good opportunity with solid benefits" };
                       } else if (lifetimeTaxSavings > 25000 || estateValueBenefit > 50000) {
@@ -1474,11 +1496,14 @@ function TaxReductionCenterContent() {
                       <Card className="bg-gray-800/50 border-gray-600">
                         <CardHeader>
                           <div className="flex items-center justify-between">
-                            <CardTitle className="text-white flex items-center">
-                              <Target className="h-5 w-5 mr-2 text-[#8A00C4]" />
-                              Roth Conversion Plan
-                              <span className="ml-2 text-xs text-gray-400">({planYears.length} year{planYears.length>1?'s':''})</span>
-                            </CardTitle>
+                            <div className="flex flex-col">
+                              <div className="text-xs uppercase tracking-wide text-purple-300 mb-1">Tax Bracket Filling Strategy</div>
+                              <CardTitle className="text-white flex items-center">
+                                <Target className="h-5 w-5 mr-2 text-[#8A00C4]" />
+                                Roth Conversion Plan
+                                <span className="ml-2 text-xs text-gray-400">({planYears.length} year{planYears.length>1?'s':''})</span>
+                              </CardTitle>
+                            </div>
                             <div className="flex items-center gap-3">
                               {lastCalculatedAt && (
                                 <span className="text-xs text-gray-400">
@@ -1488,15 +1513,15 @@ function TaxReductionCenterContent() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                className="border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white"
+                                className="group border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white"
                                 onClick={handleAIAnalysis}
                                 disabled={isAnalyzing || aiRothAnalysisMutation.isPending}
                                 title="Recalculate analysis"
                               >
                                 {isAnalyzing || aiRothAnalysisMutation.isPending ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  <Loader2 className="h-4 w-4 animate-spin text-gray-300" />
                                 ) : (
-                                  <RefreshCw className="h-4 w-4" />
+                                  <RefreshCw className="h-4 w-4 text-[#8A00C4] transition-colors group-hover:text-white" />
                                 )}
                               </Button>
                             </div>
@@ -1513,7 +1538,7 @@ function TaxReductionCenterContent() {
                                       <p className="text-lg font-semibold text-white">
                                         ${Math.round(year.conversionAmount).toLocaleString()}
                                       </p>
-                                      <p className="text-xs text-gray-400">Conversion Amount</p>
+                                      <p className="text-xs text-gray-400">Convert</p>
                                     </div>
                                     <div>
                                       <p className="text-lg font-semibold text-orange-400">
@@ -1526,17 +1551,7 @@ function TaxReductionCenterContent() {
                                       <p className="text-xs text-gray-400">Payment Source</p>
                                     </div>
                                   </div>
-                                  <div className="mt-3">
-                                    <h5 className="text-sm font-medium text-white mb-1">Actions:</h5>
-                                    <ul className="space-y-1">
-                                      {year.actions?.map((action: string, actionIndex: number) => (
-                                        <li key={actionIndex} className="text-xs text-gray-300">
-                                          <CheckCircle className="h-3 w-3 inline mr-1 text-green-400" />
-                                          {action}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  </div>
+                                  
                                 </CardContent>
                               </Card>
                             ))}
@@ -1554,17 +1569,7 @@ function TaxReductionCenterContent() {
                     </AlertDescription>
                   </Alert>
 
-                  {/* Action Button */}
-                  <div className="text-center">
-                    <Button 
-                      onClick={handleAIAnalysis}
-                      disabled={isAnalyzing || aiRothAnalysisMutation.isPending}
-                      className="bg-purple-600 hover:bg-purple-700 text-white border border-purple-500 hover:border-purple-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-600 disabled:border-gray-500 disabled:text-gray-300 transition-all duration-200 shadow-lg hover:shadow-purple-500/30"
-                    >
-                      <Brain className="h-4 w-4 mr-2" />
-                      Run New Analysis
-                    </Button>
-                  </div>
+                  
                 </div>
               )}
             </CardContent>

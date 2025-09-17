@@ -8860,6 +8860,8 @@ Response format:
             riskMitigation: analysisResult.warnings
           }
         },
+        // Provide the full schedule so the UI can show all years
+        conversionPlan: analysisResult.conversionPlan,
         disclaimer: "This analysis is for educational purposes only and should not replace personalized advice from a qualified financial advisor. Tax laws are complex and subject to change. Please consult with a tax professional before implementing any Roth conversion strategy."
       };
 
