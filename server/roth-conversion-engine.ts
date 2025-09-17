@@ -510,8 +510,12 @@ export class RothConversionEngine {
         conversionAmount = this.calculateOptimalConversionAmount(
           baselineForConversionAnalysis, // Uses only natural income (wages, dividends, SS, RMDs)
           traditionalBalance - rmdAmount - retirementWithdrawal, // Available after RMD and withdrawal
-          currentUserAge, 
-          year
+          currentUserAge,
+          year,
+          savingsBalance,
+          taxableBalance,
+          traditionalBalance,
+          currentSpouseAge
         );
       }
       
@@ -612,36 +616,24 @@ export class RothConversionEngine {
   
   /**
    * Determines if the current year qualifies for Roth conversions
-   * FIXED: Conversions during FULL gap period (retirement to Social Security claim age)
-   * This is the golden window for tax-efficient conversions
+   * New window: from retirement until age 72 (pre‑RMD), regardless of Social Security status.
    */
   private isConversionYear(userAge: number, spouseAge: number | undefined, year: number): boolean {
-    // FIXED: Check if user is in FULL gap years (retired but not yet claiming Social Security)
-    // This captures the entire golden window opportunity
-    const userInGapYears = userAge >= this.inputs.user_retirement_age && 
-                          userAge < this.inputs.user_ss_claim_age;
-    
-    // FIXED: Also check spouse gap years if applicable
-    const spouseInGapYears = spouseAge && this.inputs.spouse_retirement_age && this.inputs.spouse_ss_claim_age ?
-                            spouseAge >= this.inputs.spouse_retirement_age && 
-                            spouseAge < this.inputs.spouse_ss_claim_age : false;
-    
-    // ENHANCED: Conversion window is active if EITHER spouse is in gap years
-    // This maximizes the conversion opportunity window
-    // Disallow conversions at/after RMD age (73) for either spouse
-    const rmdNotStarted = userAge < 73 && (spouseAge ? spouseAge < 73 : true);
-    const inGapYears = (userInGapYears || spouseInGapYears) && rmdNotStarted;
-    
-    // Debug logging for gap year detection
-    if (inGapYears) {
+    const userRetiredPreRmd = userAge >= this.inputs.user_retirement_age && userAge < 73;
+    const spouseRetiredPreRmd = spouseAge && this.inputs.spouse_retirement_age
+      ? (spouseAge >= this.inputs.spouse_retirement_age && spouseAge < 73)
+      : false;
+    const inWindow = userRetiredPreRmd || spouseRetiredPreRmd;
+
+    if (inWindow) {
       console.log(`Year ${year}: IN CONVERSION WINDOW`);
-      console.log(`  User: Age ${userAge}, Retired: ${userAge >= this.inputs.user_retirement_age}, SS at: ${this.inputs.user_ss_claim_age}`);
+      console.log(`  User: Age ${userAge}, Retired: ${userAge >= this.inputs.user_retirement_age}, Pre‑RMD: ${userAge < 73}`);
       if (spouseAge) {
-        console.log(`  Spouse: Age ${spouseAge}, Retired: ${spouseAge >= (this.inputs.spouse_retirement_age || 999)}, SS at: ${this.inputs.spouse_ss_claim_age || 'N/A'}`);
+        console.log(`  Spouse: Age ${spouseAge}, Retired: ${spouseAge >= (this.inputs.spouse_retirement_age || 999)}, Pre‑RMD: ${spouseAge < 73}`);
       }
     }
-    
-    return inGapYears;
+
+    return inWindow;
   }
   
   /**
@@ -650,10 +642,14 @@ export class RothConversionEngine {
    * This follows classic CFP/CPA bracket filling methodology
    */
   private calculateOptimalConversionAmount(
-    baselineTaxableIncome: number, 
-    availableToConvert: number, 
-    age: number, 
-    year: number
+    baselineTaxableIncome: number,
+    availableToConvert: number,
+    age: number,
+    year: number,
+    savingsNow: number,
+    taxableNow: number,
+    traditionalNow: number,
+    spouseAge?: number
   ): number {
     // Hard stop once RMDs begin
     if (age >= 73) return 0;
@@ -705,12 +701,35 @@ export class RothConversionEngine {
     console.log(`Target Income (95% of width from lower): $${Math.round(targetIncome95).toLocaleString()}`);
     console.log(`Capacity to target: $${Math.round(capacityToTarget).toLocaleString()}`);
     
-    // Apply constraints
-    let conversionAmount = Math.max(0, Math.min(
+    // Constraint 1: Liquidity cap (ensure taxes can be paid from savings + taxable today)
+    const stateRate = this.calculateStateTax(1000) / 1000;
+    const combinedMarginalRate = targetBracket.rate + stateRate;
+    const capByLiquidity = combinedMarginalRate > 0
+      ? Math.floor((savingsNow + taxableNow) / combinedMarginalRate)
+      : capacityToTarget;
+
+    // Constraint 2: TDA pacing through age 72 (preserve for future conversions)
+    const userSpan = (age >= this.inputs.user_retirement_age && age < 73) ? Math.max(0, 72 - age) : 0;
+    const spouseSpan = (spouseAge && this.inputs.spouse_retirement_age && spouseAge >= this.inputs.spouse_retirement_age && spouseAge < 73)
+      ? Math.max(0, 72 - spouseAge) : 0;
+    const yearsLeft = Math.max(userSpan, spouseSpan);
+    const pacingSafety = 0.9;
+    const perYearAllotment = traditionalNow > 0 ? (traditionalNow / (yearsLeft + 1)) : 0;
+    const capByTda = Math.floor(perYearAllotment * pacingSafety);
+
+    // Constraint 3: Inventory (cannot exceed remaining traditional balance this year)
+    const capByInventory = Math.max(0, Math.floor(availableToConvert));
+
+    const rawCap = Math.min(
       capacityToTarget,
-      availableToConvert,
+      capByLiquidity,
+      capByTda,
+      capByInventory,
       this.getMaxConversionConstraints(age, actualTaxableIncome, year)
-    ));
+    );
+
+    // Apply constraints
+    let conversionAmount = Math.max(0, rawCap);
     
     // Round down to nearest $1,000
     conversionAmount = Math.floor(conversionAmount / 1000) * 1000;
