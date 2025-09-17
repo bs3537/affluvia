@@ -8988,66 +8988,120 @@ function calculateNetWorth(profile: any): number {
 async function calculateEstateAnalysis(plan: EstatePlan, userId: number): Promise<any> {
   const profile = await storage.getFinancialProfile(userId);
   if (!profile) return {};
-  
   const currentYear = new Date().getFullYear();
-  const totalEstateValue = parseFloat(plan.totalEstateValue?.toString() || '0');
-  
-  // 2024 Federal estate tax exemption
-  const federalExemption = 13610000; // $13.61M per person for 2024
-  const isMarried = profile.maritalStatus === 'married';
-  const totalExemption = isMarried ? federalExemption * 2 : federalExemption;
-  
-  // Federal estate tax calculation
-  const federalTaxableEstate = Math.max(0, totalEstateValue - totalExemption);
-  const federalEstateTax = federalTaxableEstate * 0.40; // 40% federal estate tax rate
-  
-  // State estate tax (varies by state)
-  const state = profile.state || 'CA';
-  const stateExemptions: Record<string, number> = {
-    'CT': 13610000,
-    'DC': 4254800,
-    'HI': 5490000,
-    'IL': 4000000,
-    'ME': 5800000,
-    'MD': 5000000,
-    'MA': 2000000,
-    'MN': 3000000,
-    'NY': 6580000,
-    'OR': 1000000,
-    'RI': 1733264,
-    'VT': 5000000,
-    'WA': 2193000
+  const inputEstateValue = parseFloat(plan.totalEstateValue?.toString() || '0');
+
+  // Derive current and spouse ages (fallbacks included)
+  const parseAge = (iso?: string) => {
+    try {
+      if (!iso) return undefined as number | undefined;
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return undefined;
+      const diff = Date.now() - d.getTime();
+      return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)));
+    } catch { return undefined as number | undefined; }
   };
-  
-  const stateExemption = stateExemptions[state] || 0;
-  const stateTaxableEstate = Math.max(0, totalEstateValue - stateExemption);
+  const userAge = (profile as any).currentAge ?? parseAge((profile as any).dateOfBirth) ?? 55;
+  const spouseAge = (profile as any).spouseCurrentAge ?? parseAge((profile as any).spouseDateOfBirth);
+  const elderAge = typeof spouseAge === 'number' ? Math.max(userAge, spouseAge) : userAge;
+  const deathAge = 93;
+  const yearsUntilDeath = Math.max(0, deathAge - elderAge);
+  const yearOfDeath = currentYear + yearsUntilDeath;
+
+  // Project retirement assets at age 93 (prefer optimized impact cache, fallback to baseline Monte Carlo)
+  let retirementAt93 = 0;
+  try {
+    const impact: any = (profile as any)?.retirementPlanningData?.impactOnPortfolioBalance;
+    const hasOptimized = Boolean((profile as any)?.optimizationVariables?.optimizedScore);
+    if (impact?.projectionData && Array.isArray(impact.projectionData)) {
+      const row = impact.projectionData.find((r: any) => Math.floor(r.age) === 93);
+      if (row) retirementAt93 = hasOptimized ? Number(row.optimized || 0) : Number(row.baseline || 0);
+    }
+    if (!retirementAt93 || retirementAt93 < 0) {
+      const flows: any[] = (profile as any)?.monteCarloSimulation?.retirementSimulation?.results?.yearlyCashFlows
+        || (profile as any)?.monteCarloSimulation?.retirementSimulation?.yearlyCashFlows
+        || [];
+      const r = Array.isArray(flows) && flows.length
+        ? (flows.find((y: any) => Math.floor(y.age || 0) === 93) || flows[flows.length - 1])
+        : null;
+      if (r) retirementAt93 = Number(r.portfolioValue || r.portfolioBalance || 0) || 0;
+    }
+  } catch {}
+
+  // Project real estate at 3% CAGR to age 93 (assume mortgage paid off by 93)
+  let realEstateAt93 = 0;
+  try {
+    const primaryMV = Number((profile as any)?.primaryResidence?.marketValue || 0);
+    const additional = Array.isArray((profile as any)?.additionalProperties)
+      ? (profile as any).additionalProperties.reduce((sum: number, p: any) => sum + Number(p?.marketValue || 0), 0)
+      : 0;
+    const currentRE = Math.max(0, primaryMV + additional);
+    const factor = Math.pow(1.03, yearsUntilDeath);
+    realEstateAt93 = Math.round(currentRE * factor);
+  } catch {}
+
+  const projectedEstateValue = Math.max(0, retirementAt93) + Math.max(0, realEstateAt93);
+  const totalEstateValue = projectedEstateValue > 0 ? projectedEstateValue : inputEstateValue;
+
+  // Federal estate tax exemption (OBBA from 2026)
+  const { getFederalExemption, StateEstateTaxByCode } = await import('../shared/estate-tax-config');
+  const basicExclusion = getFederalExemption(yearOfDeath);
+  const isMarried = profile.maritalStatus === 'married';
+  const totalExemption = isMarried ? basicExclusion * 2 : basicExclusion;
+
+  // Federal estate tax calculation (flat 40% on taxable amount)
+  const federalTaxableEstate = Math.max(0, totalEstateValue - totalExemption);
+  const federalEstateTax = federalTaxableEstate * 0.40;
+
+  // State estate tax calculation by configured table
+  const state = (profile.state || 'CA').toUpperCase();
+  const cfg: any = (StateEstateTaxByCode as any)[state];
+  let stateExemption = 0;
+  let stateTaxable = 0;
   let stateEstateTax = 0;
-  
-  // Simplified state tax calculation (varies by state)
-  if (state === 'MA') {
-    stateEstateTax = stateTaxableEstate * 0.16; // MA has rates from 0.8% to 16%
-  } else if (state === 'NY') {
-    stateEstateTax = stateTaxableEstate * 0.155; // NY has rates from 3.06% to 16%
-  } else if (stateTaxableEstate > 0) {
-    stateEstateTax = stateTaxableEstate * 0.12; // Average state rate
+  if (cfg) {
+    stateExemption = cfg.exemption || 0;
+    stateTaxable = Math.max(0, totalEstateValue - stateExemption);
+    let remaining = stateTaxable;
+    if (stateTaxable > 0) {
+      const brackets = cfg.brackets || [];
+      for (const b of brackets) {
+        if (remaining <= 0) break;
+        const max = b.max ?? Infinity;
+        const min = b.min ?? 0;
+        const span = Math.min(remaining, max === Infinity ? remaining : Math.max(0, max - min));
+        stateEstateTax += span * (b.rate ?? 0);
+        remaining -= span;
+      }
+    }
   }
-  
+
   // Distribution analysis
   const beneficiaries = await storage.getEstateBeneficiaries(userId, plan.id);
   const netToHeirs = totalEstateValue - federalEstateTax - stateEstateTax;
-  
+
   return {
     totalEstateValue,
+    inputEstateValue,
+    projectedEstateValue,
+    retirementAt93,
+    realEstateAt93,
     federalExemption: totalExemption,
     federalTaxableEstate,
     federalEstateTax,
     stateExemption,
-    stateTaxableEstate, 
+    stateTaxable, 
     stateEstateTax,
     totalEstateTax: federalEstateTax + stateEstateTax,
     netToHeirs,
     effectiveTaxRate: totalEstateValue > 0 ? ((federalEstateTax + stateEstateTax) / totalEstateValue) * 100 : 0,
     beneficiaryCount: beneficiaries.length,
+    assumptions: {
+      yearOfDeath,
+      deathAge,
+      currentAge: elderAge,
+      state,
+    },
     recommendations: generateEstatePlanningRecommendations(plan, profile, {
       federalEstateTax,
       stateEstateTax,

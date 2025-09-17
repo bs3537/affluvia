@@ -200,6 +200,81 @@ export function useEstatePlanningNew(): EstatePlanningNewData {
   const strategies = useMemo(() => extractStrategies(estatePlan), [estatePlan]);
   const assumptions = useMemo(() => extractAssumptions(estatePlan, profile, monteCarlo), [estatePlan, profile, monteCarlo]);
 
+  // Helper to derive current ages from profile DOBs if present
+  const getAgeFromDOB = (iso?: string): number | undefined => {
+    try {
+      if (!iso) return undefined;
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return undefined;
+      const diff = Date.now() - d.getTime();
+      return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)));
+    } catch { return undefined; }
+  };
+
+  const currentAge = useMemo(() => {
+    return (
+      (profile?.currentAge as number | undefined) ??
+      getAgeFromDOB((profile as any)?.dateOfBirth) ??
+      monteCarlo?.currentAge ??
+      55
+    );
+  }, [profile, monteCarlo]);
+
+  const spouseAge = useMemo(() => {
+    return (
+      (profile as any)?.spouseCurrentAge ??
+      getAgeFromDOB((profile as any)?.spouseDateOfBirth)
+    );
+  }, [profile]);
+
+  const elderAge = useMemo(() => {
+    if (typeof spouseAge === 'number') return Math.max(currentAge, spouseAge);
+    return currentAge;
+  }, [currentAge, spouseAge]);
+
+  const yearsTo93 = useMemo(() => Math.max(0, 93 - elderAge), [elderAge]);
+
+  // Retirement assets at age 93 (optimized if available; baseline otherwise)
+  const retirementAt93 = useMemo(() => {
+    // Try optimized/baseline combined series saved in profile.retirementPlanningData.impactOnPortfolioBalance
+    const impact = (profile as any)?.retirementPlanningData?.impactOnPortfolioBalance;
+    if (impact?.projectionData && Array.isArray(impact.projectionData)) {
+      const row = impact.projectionData.find((r: any) => Math.floor(r.age) === 93);
+      if (row) {
+        const hasOptimized = Boolean(profile?.optimizationVariables?.optimizedScore);
+        const val = hasOptimized ? (Number(row.optimized) || 0) : (Number(row.baseline) || 0);
+        if (val > 0) return val;
+      }
+    }
+    // Fallback to baseline Monte Carlo median yearlyCashFlows
+    const flows = (profile as any)?.monteCarloSimulation?.retirementSimulation?.results?.yearlyCashFlows
+      || (profile as any)?.monteCarloSimulation?.retirementSimulation?.yearlyCashFlows;
+    if (Array.isArray(flows) && flows.length) {
+      const r = flows.find((y: any) => Math.floor(y.age || 0) === 93) || flows[flows.length - 1];
+      const val = Number(r?.portfolioValue || r?.portfolioBalance || 0);
+      if (val >= 0) return val;
+    }
+    // Last resort
+    return 0;
+  }, [profile]);
+
+  // Real estate projection to age 93 (5% CAGR, mortgage assumed paid off)
+  const projectedRealEstate = useMemo(() => {
+    const primary = Number((profile as any)?.primaryResidence?.marketValue || 0);
+    const additional = Array.isArray((profile as any)?.additionalProperties)
+      ? (profile as any).additionalProperties.reduce((sum: number, p: any) => sum + Number(p?.marketValue || 0), 0)
+      : 0;
+    const currentRE = Math.max(0, primary + additional);
+    const factor = Math.pow(1.03, yearsTo93);
+    return Math.round(currentRE * factor);
+  }, [profile, yearsTo93]);
+
+  // Total projected estate used by projection calc
+  const projectedEstateValue = useMemo(() => {
+    const total = Math.max(0, Number(retirementAt93 || 0)) + Math.max(0, Number(projectedRealEstate || 0));
+    return total;
+  }, [retirementAt93, projectedRealEstate]);
+
   // Auto-create an estate plan when missing so the new section has no dependency on the legacy view
   useEffect(() => {
     // Only auto-create when the server explicitly returns null (no plan).
@@ -223,21 +298,23 @@ export function useEstatePlanningNew(): EstatePlanningNewData {
     }
   }, [creatingPlan, planLoading, estatePlan, planError, profile, queryClient]);
 
-  const projectedEstateValue = useMemo(
+  // Legacy fallback if needed (retain, but prefer our computed projectedEstateValue)
+  const legacyProjectedEstateValue = useMemo(
     () => deriveBaseEstateValue(profile, estatePlan, assetComposition, monteCarlo),
     [profile, estatePlan, assetComposition, monteCarlo]
   );
 
   const estateProjection = useMemo(() => {
-    if (!projectedEstateValue || projectedEstateValue <= 0) return null;
+    const base = projectedEstateValue > 0 ? projectedEstateValue : legacyProjectedEstateValue;
+    if (!base || base <= 0) return null;
     return calculateEstateProjection({
-      baseEstateValue: projectedEstateValue,
+      baseEstateValue: base,
       assetComposition,
       strategies,
       assumptions,
       profile,
     });
-  }, [projectedEstateValue, assetComposition, strategies, assumptions, profile]);
+  }, [projectedEstateValue, legacyProjectedEstateValue, assetComposition, strategies, assumptions, profile]);
 
   const isLoading = profileLoading || planLoading || docsLoading || beneficiariesLoading || scenariosLoading;
   const error = profileError?.message || planError?.message || null;
@@ -262,6 +339,9 @@ export function useEstatePlanningNew(): EstatePlanningNewData {
     monteCarlo,
     projectedEstateValue,
     estateProjection,
+    // Expose exact composition for UI breakdowns
+    retirementAt93,
+    projectedRealEstate,
     strategies,
     assumptions,
     isLoading,

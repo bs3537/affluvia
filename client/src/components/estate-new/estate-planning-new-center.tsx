@@ -28,7 +28,6 @@ import {
   Sparkles,
   Target,
   Users,
-  Workflow
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -89,6 +88,72 @@ function formatPercent(value?: number | null) {
 
 const PIE_COLORS = ["#a855f7", "#f97316", "#22d3ee", "#94a3b8"];
 
+// Custom tooltips for pie charts to ensure readable white text on dark background
+const DistributionTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0];
+    return (
+      <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 shadow-xl">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: data.color }} />
+          <span className="text-white font-semibold">{data.name}</span>
+        </div>
+        <div className="text-white font-medium">{formatCurrency(data.value)}</div>
+      </div>
+    );
+  }
+  return null;
+};
+
+const CompositionTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0];
+    return (
+      <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 shadow-xl">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: data.color }} />
+          <span className="text-white font-semibold">{data.name}</span>
+        </div>
+        <div className="text-white font-medium">{formatCurrency(data.value)}</div>
+      </div>
+    );
+  }
+  return null;
+};
+
+// Compact value formatter for pie slice labels
+function formatCompactLabel(value: number): string {
+  if (value < 1_000) return `$${Math.round(value)}`;
+  if (value < 1_000_000) return `$${Math.round(value / 1_000)}K`;
+  return `$${(value / 1_000_000).toFixed(1)}M`;
+}
+
+// Custom label renderer for pie slices
+const PieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, value }: any) => {
+  // Hide small slices to avoid clutter
+  if (!value || value < 50_000) return null;
+  const RADIAN = Math.PI / 180;
+  // Position labels a bit further toward the outer edge for clarity
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.6;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  const compact = formatCompactLabel(value);
+  return (
+    <text
+      x={x}
+      y={y}
+      fill="white"
+      textAnchor="middle"
+      dominantBaseline="central"
+      fontSize={12}
+      fontWeight={600}
+      className="drop-shadow-sm"
+    >
+      {compact}
+    </text>
+  );
+};
+
 export function EstatePlanningNewCenter() {
   const {
     profile,
@@ -99,6 +164,8 @@ export function EstatePlanningNewCenter() {
     monteCarlo,
     projectedEstateValue,
     estateProjection,
+    retirementAt93,
+    projectedRealEstate,
     strategies,
     assumptions,
     isLoading,
@@ -133,12 +200,26 @@ export function EstatePlanningNewCenter() {
 
   const taxPieData = summary
     ? [
-        { name: "Net to Heirs", value: Math.max(0, summary.netToHeirs) },
+        // Use final net to heirs after both estate taxes and heirs' income taxes
+        { name: "Net to Heirs", value: Math.max(0, summary.heirTaxEstimate.netAfterIncomeTax) },
         { name: "Estate Taxes", value: Math.max(0, summary.totalTax) },
         { name: "Charitable Gifts", value: Math.max(0, summary.charitableImpact.charitableBequests) },
         { name: "Income Tax Drag", value: Math.max(0, summary.heirTaxEstimate.projectedIncomeTax) },
       ]
     : [];
+
+  // Composition pie: retirement vs real estate breakdown (approximated from summary and hook projections)
+  const compositionPieData = useMemo(() => {
+    if (!summary) return [] as { name: string; value: number }[];
+    const retirement = Math.max(0, Number(retirementAt93 || 0));
+    const realEstate = Math.max(0, Number(projectedRealEstate || 0));
+    const total = retirement + realEstate;
+    if (!total) return [];
+    return [
+      { name: "Retirement Assets", value: retirement },
+      { name: "Real Estate", value: realEstate },
+    ];
+  }, [summary, retirementAt93, projectedRealEstate]);
 
   const taxBarData = summary
     ? [
@@ -161,9 +242,10 @@ export function EstatePlanningNewCenter() {
       : { variant: "default" as const, label: "Liquidity covered" }
     : null;
 
-  const probabilityLabel = monteCarlo?.successProbability !== undefined
-    ? percentFormatter.format(monteCarlo.successProbability)
-    : "—";
+  const optimizedProb = (profile as any)?.optimizationVariables?.optimizedScore?.probabilityOfSuccess;
+  const probabilityLabel = optimizedProb !== undefined
+    ? percentFormatter.format(optimizedProb)
+    : (monteCarlo?.successProbability !== undefined ? percentFormatter.format(monteCarlo.successProbability) : "—");
 
   const handleStrategyNumberChange = (key: keyof EstateStrategyInputs, value: number) => {
     setLocalStrategies((prev) => {
@@ -212,14 +294,20 @@ export function EstatePlanningNewCenter() {
 
       <Card className="bg-gray-800/50 border-gray-700">
         <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <BookOpen className="h-8 w-8 text-primary" />
-            <CardTitle className="text-3xl text-white">Estate Planning New</CardTitle>
-          </div>
-          <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
+                    <BookOpen className="h-8 w-8 text-primary" />
+                    <CardTitle className="text-3xl text-white">Estate Planning New</CardTitle>
+                  </div>
+                  <div className="flex items-center gap-2">
             {liquidityStatusBadge && (
               <Badge variant={liquidityStatusBadge.variant}>{liquidityStatusBadge.label}</Badge>
             )}
+            {/* Plan type indicator: Optimized vs Baseline */}
+            <Badge variant="outline" className="border-indigo-400/40 text-indigo-200">
+              {(
+                (profile as any)?.optimizationVariables?.optimizedScore
+              ) ? 'Optimized Plan' : 'Baseline Plan'}
+            </Badge>
             <Button
               size="sm"
               onClick={refetchAll}
@@ -252,7 +340,6 @@ export function EstatePlanningNewCenter() {
             <TabsList className="flex flex-wrap gap-2 bg-transparent p-0">
               {[
                 { id: "overview", label: "Overview", icon: DollarSign },
-                { id: "projections", label: "Retirement Projections", icon: Workflow },
                 { id: "tax", label: "Tax Analysis", icon: Scale },
                 { id: "strategies", label: "Strategies", icon: Lightbulb },
                 { id: "beneficiaries", label: "Beneficiaries & Flow", icon: Users },
@@ -282,9 +369,9 @@ export function EstatePlanningNewCenter() {
                       Combined estate value, modeled taxes, and inheritance results based on current retirement projections.
                     </p>
                   </div>
-                  {summary && (
-                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-300">
-                      {probabilityLabel} retirement success probability
+                  {summary && optimizedProb !== undefined && (
+                    <Badge variant="outline" className="border-purple-500/40 text-purple-300 w-fit text-xs">
+                      Based on optimized retirement plan
                     </Badge>
                   )}
                 </CardHeader>
@@ -340,19 +427,14 @@ export function EstatePlanningNewCenter() {
                                 outerRadius={100}
                                 paddingAngle={3}
                                 dataKey="value"
+                                label={PieLabel}
+                                labelLine={false}
                               >
                                 {taxPieData.map((entry, index) => (
                                   <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                                 ))}
                               </Pie>
-                              <RechartsTooltip
-                                formatter={(val: number) => formatCurrency(val)}
-                                contentStyle={{
-                                  backgroundColor: "#111827",
-                                  borderColor: "#1f2937",
-                                  color: "#E5E7EB",
-                                }}
-                              />
+                              <RechartsTooltip content={<DistributionTooltip />} />
                             </RechartsPieChart>
                           </ResponsiveContainer>
                           <div className="mt-4 flex flex-wrap gap-3 text-xs">
@@ -371,24 +453,38 @@ export function EstatePlanningNewCenter() {
 
                       <Card className="bg-gray-950/40 border-gray-800">
                         <CardHeader>
-                          <CardTitle className="text-white text-lg">Key Assumptions</CardTitle>
+                          <CardTitle className="text-white text-lg">Estate Composition</CardTitle>
                         </CardHeader>
-                        <CardContent className="space-y-4 text-sm text-gray-300">
-                          <AssumptionRow label="Year of death" value={summary.assumptions.yearOfDeath} />
-                          <AssumptionRow label="State" value={summary.assumptions.state || "Not set"} />
-                          <AssumptionRow
-                            label="Federal exemption applied"
-                            value={formatCurrency(summary.assumptions.federalExemption)}
-                          />
-                          <AssumptionRow
-                            label="State exemption"
-                            value={summary.assumptions.stateExemption ? formatCurrency(summary.assumptions.stateExemption) : "No state estate tax"}
-                          />
-                          <AssumptionRow
-                            label="Liquidity target"
-                            value={percentFormatter.format((localAssumptions.liquidityTargetPercent ?? 110) / 100)}
-                          />
-                          <AssumptionRow label="Portability" value={summary.assumptions.portability ? "Enabled" : "Disabled"} />
+                        <CardContent className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <RechartsPieChart>
+                              <Pie
+                                data={compositionPieData}
+                                innerRadius={60}
+                                outerRadius={100}
+                                paddingAngle={3}
+                                dataKey="value"
+                                label={PieLabel}
+                                labelLine={false}
+                              >
+                                {compositionPieData.map((entry, index) => (
+                                  <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[(index + 2) % PIE_COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <RechartsTooltip content={<CompositionTooltip />} />
+                            </RechartsPieChart>
+                          </ResponsiveContainer>
+                          <div className="mt-4 flex flex-wrap gap-3 text-xs">
+                            {compositionPieData.map((item, index) => (
+                              <div key={item.name} className="flex items-center gap-2">
+                                <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: PIE_COLORS[(index + 2) % PIE_COLORS.length] }} />
+                                <span className="text-gray-300">{item.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-2 text-[11px] text-gray-500">
+                            Real estate assumed at 3% annual growth; mortgage fully paid by age 93.
+                          </div>
                         </CardContent>
                       </Card>
                     </div>
@@ -397,89 +493,7 @@ export function EstatePlanningNewCenter() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="projections" className="space-y-4">
-              <Card className="bg-gray-900/40 border-gray-700">
-                <CardHeader className="space-y-2">
-                  <CardTitle className="text-xl text-white">Retirement & Legacy Alignment</CardTitle>
-                  <p className="text-sm text-gray-400">
-                    Pulls from Monte Carlo retirement projections to anchor estate values at the expected longevity age.
-                  </p>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <MetricTile
-                      label="Longevity Age"
-                      icon={Sparkles}
-                      value={localAssumptions.projectedDeathAge || monteCarlo?.longevityAge || "—"}
-                      helper="Adjust projected death age to test legacy outcomes."
-                    />
-                    <MetricTile
-                      label="Retirement Success"
-                      icon={CheckCircle2}
-                      value={probabilityLabel}
-                      helper="Monte Carlo success probability"
-                    />
-                    <MetricTile
-                      label="Median Ending Portfolio"
-                      icon={Briefcase}
-                      value={formatCurrency(monteCarlo?.medianEndingBalance)}
-                      helper="Excludes real estate and trust transfers"
-                    />
-                  </div>
-
-                  <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm text-gray-300">Projected death age</p>
-                        <p className="text-2xl font-semibold text-white">{localAssumptions.projectedDeathAge ?? monteCarlo?.longevityAge ?? "—"}</p>
-                      </div>
-                      <div className="text-xs text-gray-400">
-                        Modeled from current age {(localAssumptions.currentAge ?? profile?.currentAge ?? 55)} to longevity
-                      </div>
-                    </div>
-                    <Slider
-                      defaultValue={[localAssumptions.projectedDeathAge ?? monteCarlo?.longevityAge ?? 90]}
-                      min={(localAssumptions.currentAge ?? profile?.currentAge ?? 55) + 5}
-                      max={110}
-                      step={1}
-                      onValueChange={([value]) => handleAssumptionChange("projectedDeathAge", value)}
-                    />
-                  </div>
-
-                  <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-4">
-                    <h3 className="text-sm font-semibold text-white mb-3">Median estate build-up</h3>
-                    {Array.isArray(monteCarlo?.yearlyCashFlows) ? (
-                      <ResponsiveContainer width="100%" height={240}>
-                        <BarChart data={monteCarlo?.yearlyCashFlows?.slice?.(0, 25) || []}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
-                          <XAxis
-                            dataKey="age"
-                            stroke="#9CA3AF"
-                            tick={{ fontSize: 11 }}
-                            tickFormatter={(value) => (value ? `${value}` : "")}
-                          />
-                          <YAxis stroke="#9CA3AF" tick={{ fontSize: 11 }} tickFormatter={(value) => formatCurrency(value, { compact: true })} />
-                          <RechartsTooltip
-                            formatter={(value: number) => formatCurrency(value)}
-                            labelFormatter={(label) => `Age ${label}`}
-                            contentStyle={{
-                              backgroundColor: "#111827",
-                              borderColor: "#1f2937",
-                              color: "#E5E7EB",
-                            }}
-                          />
-                          <Bar dataKey="portfolioValue" fill="#8B5CF6" radius={[6, 6, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <p className="text-sm text-gray-400">
-                        Run retirement Monte Carlo analyses to unlock median balance trajectories and integrate them into estate outcomes.
-                      </p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
+            
 
             <TabsContent value="tax" className="space-y-4">
               <Card className="bg-gray-900/40 border-gray-700">
@@ -544,10 +558,41 @@ export function EstatePlanningNewCenter() {
                             <span>Required liquidity ({percentFormatter.format((localAssumptions.liquidityTargetPercent ?? 110) / 100)})</span>
                             <span className="text-white">{formatCurrency(summary.liquidity.required)}</span>
                           </div>
+                          {/* Settlement expenses breakdown */}
+                          <div className="flex items-center justify-between">
+                            <span>Settlement expenses (probate + funeral)</span>
+                            <span className="text-white">{formatCurrency(Number((summary as any).liquidity?.settlementExpenses || 0))}</span>
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            Probate (5%): {formatCurrency(Number((summary as any).liquidity?.probateCosts || 0))} · Funeral: {formatCurrency(Number((summary as any).liquidity?.funeralCost || 0))}
+                          </div>
                           <div className="flex items-center justify-between">
                             <span>Insurance need</span>
                             <span className="text-white">{formatCurrency(summary.liquidity.insuranceNeed)}</span>
                           </div>
+                          {/* Life insurance disclosure */}
+                          {(summary.liquidity.existingLifeInsuranceUser > 0 || summary.liquidity.existingLifeInsuranceSpouse > 0 || summary.liquidity.ilitCoverage > 0) && (
+                            <div className="pt-1 text-xs text-gray-400">
+                              {(() => {
+                                const parts: string[] = [];
+                                if (summary.liquidity.existingLifeInsuranceUser > 0) {
+                                  parts.push(`user in-estate ${formatCurrency(Number(summary.liquidity.existingLifeInsuranceUser))}`);
+                                }
+                                if (summary.liquidity.existingLifeInsuranceSpouse > 0) {
+                                  parts.push(`spouse in-estate ${formatCurrency(Number(summary.liquidity.existingLifeInsuranceSpouse))}`);
+                                }
+                                if (summary.liquidity.ilitCoverage > 0) {
+                                  parts.push(`ILIT ${formatCurrency(Number(summary.liquidity.ilitCoverage))}`);
+                                }
+                                const total = Number(summary.liquidity.existingLifeInsuranceUser || 0) + Number(summary.liquidity.existingLifeInsuranceSpouse || 0) + Number(summary.liquidity.ilitCoverage || 0);
+                                return (
+                                  <span>
+                                    Includes life insurance: {formatCurrency(total)} ({parts.join(', ')})
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
 

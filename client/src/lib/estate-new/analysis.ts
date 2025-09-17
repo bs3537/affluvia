@@ -1,5 +1,6 @@
 import { differenceInYears, parseISO } from "date-fns";
 import { STATE_TAX_CONFIG } from "@/lib/estate-calculations";
+import { getFederalExemption, StateEstateTaxByCode } from "@shared/estate-tax-config";
 
 export interface EstateProjectionSummary {
   projectedEstateValue: number;
@@ -82,8 +83,7 @@ export interface EstateCalculationInput {
   profile?: any;
 }
 
-const DEFAULT_FEDERAL_EXEMPTION_2024 = 13_610_000;
-const ESTIMATED_FEDERAL_EXEMPTION_2026 = 6_800_000;
+const DEFAULT_FEDERAL_EXEMPTION_2024 = 13_610_000; // kept for fallback only
 const DEFAULT_HEIR_INCOME_TAX_RATE = 0.25;
 
 function resolveCurrentAge(profile: any): number {
@@ -111,7 +111,9 @@ function resolveDeathAge(input: EstateAssumptionInputs | undefined, profile: any
     return profile.longevityAge;
   }
 
-  return currentAge + 30;
+  // Default to age 93 (aligned with retirement projections),
+  // ensuring at least 5 years forward for older users
+  return Math.max(93, currentAge + 5);
 }
 
 function resolveYearOfDeath(currentAge: number, deathAge: number): number {
@@ -121,7 +123,7 @@ function resolveYearOfDeath(currentAge: number, deathAge: number): number {
 
 function resolveFederalExemption(yearOfDeath: number, override?: number): number {
   if (typeof override === "number" && override > 0) return override;
-  return yearOfDeath >= 2026 ? ESTIMATED_FEDERAL_EXEMPTION_2026 : DEFAULT_FEDERAL_EXEMPTION_2024;
+  return getFederalExemption(yearOfDeath) || DEFAULT_FEDERAL_EXEMPTION_2024;
 }
 
 function sumTrustFunding(strategies?: EstateStrategyInputs): number {
@@ -153,25 +155,26 @@ function calculateStateTax(
   overrideState?: string
 ): { stateTax: number; stateExemption: number } {
   const stateKey = (overrideState || state || "").toUpperCase();
-  const config = STATE_TAX_CONFIG[stateKey];
-  if (!config) return { stateTax: 0, stateExemption: 0 };
+  // Prefer new config; fallback to legacy STATE_TAX_CONFIG
+  const cfg = StateEstateTaxByCode[stateKey];
+  const legacy = (STATE_TAX_CONFIG as any)[stateKey];
+  const exemption = cfg?.exemption ?? legacy?.exemption ?? 0;
+  const brackets = cfg?.brackets ?? legacy?.rates ?? [];
 
-  const taxableAmount = Math.max(0, taxableEstate - config.exemption);
-  if (taxableAmount <= 0) {
-    return { stateTax: 0, stateExemption: config.exemption };
-  }
+  const taxableAmount = Math.max(0, taxableEstate - exemption);
+  if (taxableAmount <= 0) return { stateTax: 0, stateExemption: exemption };
 
   let tax = 0;
   let remaining = taxableAmount;
-
-  for (const bracket of config.rates) {
+  for (const bracket of brackets) {
     if (remaining <= 0) break;
-    const bracketSpan = bracket.max === Infinity ? remaining : Math.min(remaining, bracket.max - bracket.min);
-    tax += bracketSpan * bracket.rate;
-    remaining -= bracketSpan;
+    const max = (bracket as any).max ?? Infinity;
+    const min = (bracket as any).min ?? 0;
+    const span = Math.min(remaining, max === Infinity ? remaining : Math.max(0, max - min));
+    tax += span * (bracket as any).rate;
+    remaining -= span;
   }
-
-  return { stateTax: tax, stateExemption: config.exemption };
+  return { stateTax: tax, stateExemption: exemption };
 }
 
 export function calculateEstateProjection(input: EstateCalculationInput): EstateProjectionSummary {
@@ -226,8 +229,32 @@ export function calculateEstateProjection(input: EstateCalculationInput): Estate
   const effectiveRate = grossEstate > 0 ? (totalTax / grossEstate) * 100 : 0;
 
   const liquidityTarget = (assumptions?.liquidityTargetPercent ?? 110) / 100;
-  const availableLiquidity = Math.max(0, assetComposition.taxable + assetComposition.roth + ilitDeathBenefit);
-  const requiredLiquidity = totalTax * liquidityTarget;
+  // Include existing life insurance coverage (user and spouse) as a liquidity source.
+  // These proceeds are generally available at death to pay estate costs; if owned in the estate they are includible for estate tax,
+  // but still provide liquidity. ILIT coverage is accounted via ilitDeathBenefit above.
+  const userLifeCoverage = (() => {
+    try {
+      const li = (profile as any)?.lifeInsurance;
+      if (li?.hasPolicy && typeof li?.coverageAmount === 'number') return Math.max(0, li.coverageAmount);
+    } catch {}
+    return 0;
+  })();
+  const spouseLifeCoverage = (() => {
+    try {
+      const sli = (profile as any)?.spouseLifeInsurance;
+      if (sli?.hasPolicy && typeof sli?.coverageAmount === 'number') return Math.max(0, sli.coverageAmount);
+    } catch {}
+    return 0;
+  })();
+  const availableLiquidity = Math.max(
+    0,
+    assetComposition.taxable + assetComposition.roth + ilitDeathBenefit + userLifeCoverage + spouseLifeCoverage
+  );
+  // Settlement expenses per guidance: probate costs at 5% of gross estate + $10,000 per spouse
+  const probateCosts = Math.round(grossEstate * 0.05);
+  const funeralCost = 10000 * ((String(profile?.maritalStatus || '').toLowerCase() === 'married') ? 2 : 1);
+  const settlementExpenses = probateCosts + funeralCost;
+  const requiredLiquidity = Math.max(0, totalTax * liquidityTarget + settlementExpenses);
   const liquidityGap = Math.max(0, requiredLiquidity - availableLiquidity);
   const insuranceNeed = Math.max(0, liquidityGap - ilitDeathBenefit);
 
@@ -249,6 +276,11 @@ export function calculateEstateProjection(input: EstateCalculationInput): Estate
       gap: liquidityGap,
       insuranceNeed,
       ilitCoverage: ilitDeathBenefit,
+      existingLifeInsuranceUser: userLifeCoverage,
+      existingLifeInsuranceSpouse: spouseLifeCoverage,
+      probateCosts,
+      funeralCost,
+      settlementExpenses,
     },
     heirTaxEstimate: {
       taxDeferredBalance: assetComposition.taxDeferred,

@@ -1,6 +1,5 @@
 Affluvia Financial Planning Application
 
-For every user instruction, search entire codebase, think step by step and prepare a plan for user how you will best solve the issue raised  by user. No code edits unless user approves your plan.
 
 # Repository Guidelines
 
