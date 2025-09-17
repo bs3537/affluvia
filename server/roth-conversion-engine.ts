@@ -628,7 +628,9 @@ export class RothConversionEngine {
     
     // ENHANCED: Conversion window is active if EITHER spouse is in gap years
     // This maximizes the conversion opportunity window
-    const inGapYears = userInGapYears || spouseInGapYears;
+    // Disallow conversions at/after RMD age (73) for either spouse
+    const rmdNotStarted = userAge < 73 && (spouseAge ? spouseAge < 73 : true);
+    const inGapYears = (userInGapYears || spouseInGapYears) && rmdNotStarted;
     
     // Debug logging for gap year detection
     if (inGapYears) {
@@ -653,6 +655,8 @@ export class RothConversionEngine {
     age: number, 
     year: number
   ): number {
+    // Hard stop once RMDs begin
+    if (age >= 73) return 0;
     const taxBrackets = this.getTaxBrackets(year);
     const totalDeductions = this.getTotalDeductions(year, age, undefined, baselineTaxableIncome);
     
@@ -690,20 +694,20 @@ export class RothConversionEngine {
       return 0;
     }
     
-    // CALCULATE BRACKET FILLING AMOUNT
-    // Formula: Target Bracket Upper Limit - Current Taxable Income
-    const bracketUpperLimit = targetBracket.max;
-    const availableCapacity = bracketUpperLimit === Infinity ? 
-      Math.min(100000, availableToConvert) : // Cap at $100K if unlimited bracket
-      bracketUpperLimit - actualTaxableIncome;
-    
+    // New target income: 95% of the full bracket width from the lower bound
+    const lower = targetBracket.min;
+    const upper = targetBracket.max === Infinity ? (lower + 100000) : targetBracket.max;
+    const targetIncome95 = lower + 0.95 * (upper - lower);
+    const capacityToTarget = Math.max(0, targetIncome95 - actualTaxableIncome);
+
     console.log(`\nBRACKET FILLING CALCULATION:`);
-    console.log(`Target Bracket: ${(targetBracket.rate * 100).toFixed(0)}% (up to $${bracketUpperLimit === Infinity ? '∞' : bracketUpperLimit.toLocaleString()})`);
-    console.log(`Available Capacity: $${availableCapacity.toLocaleString()}`);
+    console.log(`Target Bracket: ${(targetBracket.rate * 100).toFixed(0)}% ($${lower.toLocaleString()} - $${upper === Infinity ? '∞' : upper.toLocaleString()})`);
+    console.log(`Target Income (95% of width from lower): $${Math.round(targetIncome95).toLocaleString()}`);
+    console.log(`Capacity to target: $${Math.round(capacityToTarget).toLocaleString()}`);
     
-    // Apply safety factor and constraints
+    // Apply constraints
     let conversionAmount = Math.max(0, Math.min(
-      availableCapacity * 0.95, // 95% safety factor
+      capacityToTarget,
       availableToConvert,
       this.getMaxConversionConstraints(age, actualTaxableIncome, year)
     ));
@@ -1452,58 +1456,31 @@ export class RothConversionEngine {
   }
   
   private determineOptimalPaymentSource(year: ProjectionYear): string {
-    const currentYear = new Date().getFullYear();
-    const yearsToConversion = year.year - currentYear;
-    const userCurrentAge = currentYear - new Date(this.inputs.user_dob).getFullYear();
-    const yearsToRetirement = this.inputs.user_retirement_age - userCurrentAge;
-    
-    // Get financial profile data
-    const savingsRate = this.financialProfile?.savingsRate ? parseFloat(this.financialProfile.savingsRate) : 0;
-    const monthlyExpenses = this.inputs.desired_monthly_retirement_expense;
-    const monthlyCashFlow = (this.inputs.user_gross_income + (this.inputs.spouse_gross_income || 0)) / 12 - monthlyExpenses;
-    const monthlySavings = monthlyCashFlow * 0.5; // User is saving 50% of extra monthly cash flow
-    
-    // Get investor risk profile from optimization variables
-    const riskProfile = this.financialProfile?.optimizationVariables?.userRiskProfile || 'balanced';
-    const expectedReturn = this.getExpectedReturnByRiskProfile(riskProfile);
-    
-    // Project savings account growth (conservative 2% real return)
-    const currentSavingsBalance = this.getCurrentSavingsBalance();
-    const projectedSavingsGrowth = this.calculateSavingsGrowth(
-      currentSavingsBalance, monthlySavings, yearsToConversion, 0.02
-    );
-    
-    // Project taxable brokerage growth based on risk profile
-    const currentTaxableBalance = this.getCurrentTaxableBalance();
-    const projectedTaxableGrowth = currentTaxableBalance * Math.pow(1 + expectedReturn, yearsToConversion);
-    
-    // Calculate tax impact of each source
-    const taxOwed = year.conversionTax;
-    
-    // Priority 1: Savings accounts (projected growth)
-    if (projectedSavingsGrowth >= taxOwed) {
-      const yearsOfSavings = Math.ceil(taxOwed / (monthlySavings * 12));
-      return `Savings accounts ($${projectedSavingsGrowth.toLocaleString()} projected by ${year.year}) - tax-free withdrawal, ${yearsOfSavings} years of current savings rate`;
+    const taxOwed = Math.max(0, year.conversionTax || 0);
+    const savingsNow = Math.max(0, Math.round(year.savingsBalance || 0));
+    const taxableNow = Math.max(0, Math.round(year.taxableBalance || 0));
+
+    // Priority 1: Savings accounts today (tax-free to withdraw)
+    if (savingsNow >= taxOwed) {
+      return `Savings accounts ($${savingsNow.toLocaleString()} available) - tax-free withdrawal`;
     }
-    
-    // Priority 2: Taxable brokerage accounts (projected growth)
-    if (projectedTaxableGrowth >= taxOwed) {
+
+    // Priority 2: Taxable brokerage today (approx capital gains impact)
+    if (taxableNow >= taxOwed) {
       const capitalGainsRate = this.getCapitalGainsRate(year.totalIncome);
-      const netTaxCost = taxOwed * (1 + capitalGainsRate);
-      return `Taxable brokerage ($${projectedTaxableGrowth.toLocaleString()} projected) - ~${(capitalGainsRate * 100).toFixed(1)}% capital gains tax on withdrawal`;
+      return `Taxable brokerage ($${taxableNow.toLocaleString()} available) - ~${(capitalGainsRate * 100).toFixed(1)}% capital gains drag`;
     }
-    
-    // Priority 3: Combination of both sources
-    const combinedProjected = projectedSavingsGrowth + projectedTaxableGrowth;
-    if (combinedProjected >= taxOwed) {
-      const savingsPortion = Math.min(projectedSavingsGrowth, taxOwed);
-      const taxablePortion = taxOwed - savingsPortion;
-      return `Combination: $${savingsPortion.toLocaleString()} from savings + $${taxablePortion.toLocaleString()} from taxable brokerage`;
+
+    // Priority 3: Combination of savings + taxable
+    if (savingsNow + taxableNow >= taxOwed) {
+      const fromSavings = Math.min(savingsNow, taxOwed);
+      const fromTaxable = taxOwed - fromSavings;
+      return `Combination: $${fromSavings.toLocaleString()} from savings + $${fromTaxable.toLocaleString()} from taxable brokerage`;
     }
-    
-    // Last resort: Monthly cash flow or traditional accounts
-    const monthlyTaxPayment = taxOwed / 12;
-    return `Monthly cash flow ($${monthlyTaxPayment.toLocaleString()}/month) or traditional IRA withdrawal (not recommended - double taxation)`;
+
+    // Last resort
+    const monthlyTaxPayment = Math.round(taxOwed / 12);
+    return `Monthly cash flow (~$${monthlyTaxPayment.toLocaleString()}/mo) or withholding (not recommended)`;
   }
   
   private getExpectedReturnByRiskProfile(riskProfile: string): number {
