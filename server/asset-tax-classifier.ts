@@ -360,17 +360,17 @@ export function calculateOptimalRothConversion(
     return 0;
   }
   
-  // Get tax bracket thresholds for 2024
+  // Get tax bracket thresholds for 2025 (simplified reference points)
   const brackets = filingStatus === 'married' ? {
-    '10%': 23200,
-    '12%': 94300,
-    '22%': 201050,
-    '24%': 383900
+    '10%': 23850,
+    '12%': 96950,
+    '22%': 206700,
+    '24%': 394600
   } : {
-    '10%': 11600,
-    '12%': 47150,
-    '22%': 100525,
-    '24%': 191950
+    '10%': 11925,
+    '12%': 48475,
+    '22%': 103350,
+    '24%': 197300
   };
   
   // Target filling up to the 12% bracket for optimal long-term tax efficiency
