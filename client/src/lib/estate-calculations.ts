@@ -33,7 +33,7 @@ const FEDERAL_TAX_BRACKETS = [
 ]
 
 // State estate tax rates by state
-const STATE_TAX_CONFIG: Record<string, { exemption: number; rates: Array<{ min: number; max: number; rate: number }> }> = {
+export const STATE_TAX_CONFIG: Record<string, { exemption: number; rates: Array<{ min: number; max: number; rate: number }> }> = {
   CT: {
     exemption: 12920000,
     rates: [
@@ -149,7 +149,8 @@ export function calculateEstateTax(
   }
 
   // Calculate years until death
-  const yearsUntilDeath = assumptions.yearOfDeath - new Date().getFullYear()
+  const targetYearOfDeath = assumptions.yearOfDeath ?? new Date().getFullYear()
+  const yearsUntilDeath = Math.max(0, targetYearOfDeath - new Date().getFullYear())
   
   // Calculate gross estate with appreciation
   const appreciationFactor = Math.pow(1 + assumptions.appreciationRate / 100, yearsUntilDeath)
@@ -165,7 +166,10 @@ export function calculateEstateTax(
   grossEstate -= assumptions.lifetimeGiftAmount
   
   // Apply trust funding reductions
-  const totalTrustFunding = Object.values(assumptions.trustFunding).reduce((sum, amount) => sum + amount, 0)
+  const trustFundingValues = assumptions.trustFunding
+    ? (Object.values(assumptions.trustFunding) as number[])
+    : []
+  const totalTrustFunding = trustFundingValues.reduce((sum, amount) => sum + (amount || 0), 0)
   grossEstate -= totalTrustFunding
   
   // Apply valuation discounts

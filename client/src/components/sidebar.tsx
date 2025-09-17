@@ -24,7 +24,7 @@ import {
 
 interface SidebarProps {
   activeView: string;
-  setActiveView: (view: "dashboard" | "connections2" | "intake" | "life-goals" | "chatbot" | "settings" | "education" | "tax" | "investments" | "goals" | "estate" | "educationfunding" | "retirement-planning" | "debt-management" | "insights" | "report-builder") => void;
+  setActiveView: (view: "dashboard" | "connections2" | "intake" | "life-goals" | "chatbot" | "settings" | "education" | "tax" | "investments" | "goals" | "estate" | "estate-new" | "educationfunding" | "retirement-planning" | "debt-management" | "insights" | "report-builder") => void;
   isOpen: boolean;
   onClose: () => void;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -51,6 +51,7 @@ export function Sidebar({ activeView, setActiveView, isOpen, onClose, onCollapse
     // { id: "goals", label: "Goals Center", icon: Target, emoji: "🎯" }, // Temporarily disabled
     { id: "educationfunding", label: "Education Funding", icon: School },
     { id: "estate", label: "Estate Planning", icon: BookOpen },
+    { id: "estate-new", label: "Estaate▌ Planning New", icon: BookOpen }, // Intentional glyph per requirements
     { id: "insights", label: "Insights", icon: Sparkles },
     { id: "chatbot", label: "Financial Assistant", icon: MessageCircle },
     { id: "education", label: "Financial Education", icon: GraduationCap },

@@ -10,6 +10,7 @@ import { TaxReductionCenter } from "@/components/tax-reduction-center";
 import { InvestmentsCenter } from "@/pages/InvestmentsCenter";
 import { GoalsPlanningCenter } from "@/components/goals-planning-center";
 import { EstatePlanningCenter } from "@/components/estate-planning-center";
+import { EstatePlanningNewCenter } from "@/components/estate-new/estate-planning-new-center";
 import { EducationFundingCenter } from "@/components/education-funding-center";
 import { LifeGoals } from "@/components/life-goals";
 import RetirementPlanning from "@/pages/retirement-planning";
@@ -27,7 +28,7 @@ import { useAchievements } from "@/hooks/useAchievements";
 import { useAuth } from "@/hooks/use-auth";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 
-type ActiveView = "dashboard" | "connections2" | "intake" | "life-goals" | "chatbot" | "settings" | "education" | "retirement" | "tax" | "investments" | "goals" | "estate" | "educationfunding" | "retirement-planning" | "debt-management" | "insights" | "report-builder";
+type ActiveView = "dashboard" | "connections2" | "intake" | "life-goals" | "chatbot" | "settings" | "education" | "retirement" | "tax" | "investments" | "goals" | "estate" | "estate-new" | "educationfunding" | "retirement-planning" | "debt-management" | "insights" | "report-builder";
 
 export default function HomePage() {
   const [activeView, setActiveView] = useState<ActiveView>("dashboard");
@@ -144,6 +145,8 @@ export default function HomePage() {
         return <GoalsPlanningCenter />;
       case "estate":
         return <EstatePlanningCenter />;
+      case "estate-new":
+        return <EstatePlanningNewCenter />;
       case "retirement-planning":
         return <RetirementPlanning />;
       case "debt-management":

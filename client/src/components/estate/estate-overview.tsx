@@ -228,28 +228,27 @@ export function EstateOverview({ estatePlan }: EstateOverviewProps) {
     },
   });
 
-  if (!estatePlan && !showCreatePlan) {
-    return (
-      <div className="text-center py-12">
-        <Building className="h-16 w-16 text-gray-500 mx-auto mb-4" />
-        <h3 className="text-xl font-semibold text-white mb-2">No Estate Plan Found</h3>
-        <p className="text-gray-400 mb-6">
-          Start creating your estate plan to ensure your assets are distributed according to your wishes.
-        </p>
-        <Button 
-          onClick={() => createPlanMutation.mutate()}
-          className="bg-[#8A00C4] hover:bg-[#7000A4]"
-          disabled={createPlanMutation.isPending || !profile}
-        >
-          <PlusCircle className="h-4 w-4 mr-2" />
-          {createPlanMutation.isPending ? 'Creating...' : 'Create Estate Plan'}
-        </Button>
-      </div>
-    );
-  }
+  // If no estate plan exists yet, still show Asset Preview using saved intake assets and offer CTA to create plan
 
   return (
     <div className="space-y-6">
+      {!estatePlan && (
+        <Alert className="bg-purple-900/20 border-purple-700/50">
+          <AlertDescription className="flex items-center justify-between">
+            <div className="text-purple-200">
+              No estate plan found yet. You can still preview your assets by ownership below. Click Create Estate Plan to generate a plan from your saved intake data.
+            </div>
+            <Button 
+              onClick={() => createPlanMutation.mutate()}
+              className="bg-[#8A00C4] hover:bg-[#7000A4]"
+              disabled={createPlanMutation.isPending || !profile}
+            >
+              <PlusCircle className="h-4 w-4 mr-2" />
+              {createPlanMutation.isPending ? 'Creating…' : 'Create Estate Plan'}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {/* Asset Preview - Three Column Layout */}
       {spouseAssets && (
         <Card className="bg-gray-800/50 border-gray-700">
