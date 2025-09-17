@@ -202,7 +202,9 @@ export function useEstatePlanningNew(): EstatePlanningNewData {
 
   // Auto-create an estate plan when missing so the new section has no dependency on the legacy view
   useEffect(() => {
-    if (!creatingPlan && !planLoading && !estatePlan && profile) {
+    // Only auto-create when the server explicitly returns null (no plan).
+    // Do not auto-create on errors to avoid duplicate plans.
+    if (!creatingPlan && !planLoading && estatePlan === null && profile && !planError) {
       setCreatingPlan(true);
       estatePlanningService
         .createInitialEstatePlanFromProfile(profile)
@@ -219,7 +221,7 @@ export function useEstatePlanningNew(): EstatePlanningNewData {
         })
         .finally(() => setCreatingPlan(false));
     }
-  }, [creatingPlan, planLoading, estatePlan, profile, queryClient]);
+  }, [creatingPlan, planLoading, estatePlan, planError, profile, queryClient]);
 
   const projectedEstateValue = useMemo(
     () => deriveBaseEstateValue(profile, estatePlan, assetComposition, monteCarlo),
