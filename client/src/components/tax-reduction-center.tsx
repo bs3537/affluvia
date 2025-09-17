@@ -193,7 +193,8 @@ function TaxReductionCenterContent() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [showTestDetails, setShowTestDetails] = useState(false);
   const [showRothPrimer, setShowRothPrimer] = useState(true);
-  const [showReadinessAssessment, setShowReadinessAssessment] = useState(true);
+  // Remove readiness assessment from Roth conversions flow
+  const [showReadinessAssessment, setShowReadinessAssessment] = useState(false);
   
   // Store previous user ID to detect user changes
   const [previousUserId, setPreviousUserId] = useState<number | null>(null);
@@ -1335,7 +1336,7 @@ function TaxReductionCenterContent() {
                       </div>
                     </div>
                   </CardHeader>
-                  {showReadinessAssessment && (
+                  {false && (
                     <CardContent>
                     {/* Show loading state while profile is being fetched */}
                     {isLoadingProfile || isRefetching ? (
@@ -1640,40 +1641,15 @@ function TaxReductionCenterContent() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-6">
-                    {!aiAnalysisResult && !isAnalyzing && !analysisError && !anyonePassesAllTests && (
-                <div className="text-center py-8">
-                  <div className="mb-4">
-                    <AlertCircle className="h-12 w-12 text-orange-400 mx-auto mb-2" />
-                    <h3 className="text-lg font-semibold text-white mb-2">
-                      Golden Window Strategy Analysis
-                    </h3>
-                    <p className="text-gray-400 mb-6 max-w-md mx-auto">
-                      {anyonePassesAnyTest && !(userPassesGapTest || spousePassesGapTest) ?
-                        "You're within 3 years of retirement but don't have gap years for conversions. Consider adjusting your retirement timeline to create a golden window before running this analysis." :
-                        "This AI analysis is specifically designed for optimal golden window conversion timing. Based on your current timeline, you may benefit more from general Roth conversion guidance or adjusting your retirement timeline to create a golden window."
-                      }
-                    </p>
-                  </div>
-                  <Button 
-                    disabled
-                    className="bg-gray-600 text-gray-400 px-8 py-3 cursor-not-allowed"
-                    size="lg"
-                  >
-                    <Brain className="h-5 w-5 mr-2" />
-                    Analyze Roth Conversion Benefits
-                  </Button>
-                </div>
-              )}
-
-              {!aiAnalysisResult && !isAnalyzing && !analysisError && anyonePassesAllTests && (
+                    {!aiAnalysisResult && !isAnalyzing && !analysisError && (
                 <div className="text-center py-8">
                   <div className="mb-4">
                     <CheckCircle className="h-12 w-12 text-green-400 mx-auto mb-2" />
                     <h3 className="text-lg font-semibold text-white mb-2">
-                      All Tests Passed - Analysis Available!
+                      Roth Conversion Strategy Analysis
                     </h3>
                     <p className="text-gray-400 mb-6 max-w-md mx-auto">
-                      Congratulations! You've passed all readiness tests. Click the button below to get your roth conversion analysis.
+                      Run a personalized analysis of potential lifetime tax savings and estate impacts from strategic Roth conversions.
                     </p>
                   </div>
                   <Button 
