@@ -123,6 +123,8 @@ function extractStrategies(estatePlan: any, profile?: any): EstateStrategyInputs
   const gifting = estatePlan.analysisResults?.gifting || {};
   const insurance = estatePlan.analysisResults?.insurance || {};
   const charitable = estatePlan.charitableGifts || estatePlan.analysisResults?.charitable || {};
+  const analysisStrategies = estatePlan.analysisResults?.strategies || {};
+  const estateNewStrategies = estatePlan.analysisResults?.estateNew?.strategies || {};
   // Resolve charitable bequest with fallback to intake legacyGoal when plan lacks a value
   const fromPlan = Number(charitable?.plannedTotal || charitable?.amount || charitable?.bequestAmount || 0) || undefined;
   const fromIntake = Number(profile?.legacyGoal || 0) || undefined;
@@ -135,7 +137,7 @@ function extractStrategies(estatePlan: any, profile?: any): EstateStrategyInputs
     charitableBequest: resolvedCharity,
     ilitDeathBenefit: Number(insurance?.ilitDeathBenefit || insurance?.deathBenefit || 0) || undefined,
     bypassTrust: Boolean(
-      estatePlan?.analysisResults?.strategies?.bypassTrust ||
+      (analysisStrategies?.bypassTrust ?? estateNewStrategies?.bypassTrust) ??
       trustStrategies.some((strategy: any) => String(strategy?.type || "").toLowerCase().includes("bypass"))
     ),
   };

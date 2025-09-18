@@ -443,6 +443,10 @@ export function EstatePlanningNewCenter() {
             portability: localAssumptions.portability,
             dsueAmount: localAssumptions.dsueAmount,
           },
+          strategies: {
+            ...(estatePlan as any)?.analysisResults?.strategies,
+            bypassTrust: Boolean(localStrategies.bypassTrust),
+          },
           gifting: {
             ...(estatePlan as any)?.analysisResults?.gifting,
             lifetimeGifts: localStrategies.lifetimeGifts,
