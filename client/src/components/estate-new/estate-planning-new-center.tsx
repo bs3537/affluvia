@@ -1547,7 +1547,9 @@ function RecommendationList({ items }: { items: string[] }) {
 
 const numericSanitizer = /[^0-9.-]/g;
 function parseNumericInput(value: string): number {
-  if (!value) return 0;
-  const parsed = Number(value.replace(numericSanitizer, ""));
-  return Number.isFinite(parsed) ? parsed : 0;
+  if (value == null) return NaN;
+  const trimmed = String(value).trim();
+  if (trimmed === "") return NaN; // allow empty while editing
+  const parsed = Number(trimmed.replace(numericSanitizer, ""));
+  return Number.isFinite(parsed) ? parsed : NaN;
 }
