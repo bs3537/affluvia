@@ -8929,7 +8929,10 @@ Response format:
           estateValueIncrease: analysisData.estateValueIncrease,
           conversionYears: analysisData.conversionYears
         },
-        results: analysisData.transformedResult || analysisData.results
+        // Maintain existing client contract: primary 'results' preferred for transformed UI payload
+        results: analysisData.transformedResult || analysisData.results,
+        // NEW: Always include raw engine results for advanced consumers (e.g., estate overlay)
+        rawResults: analysisData.results
       });
     } catch (error) {
       console.error('Error retrieving Roth conversion analysis:', error);

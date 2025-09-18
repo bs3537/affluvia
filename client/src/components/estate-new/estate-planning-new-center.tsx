@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEstatePlanningNew } from "@/hooks/useEstatePlanningNew";
 import { calculateEstateProjection, EstateStrategyInputs, EstateAssumptionInputs } from "@/lib/estate-new/analysis";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -155,6 +156,7 @@ const PieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, value }: any) =>
 };
 
 export function EstatePlanningNewCenter() {
+  const queryClient = useQueryClient();
   const {
     profile,
     documents,
@@ -176,6 +178,7 @@ export function EstatePlanningNewCenter() {
   const [activeTab, setActiveTab] = useState("overview");
   const [localStrategies, setLocalStrategies] = useState<EstateStrategyInputs>(strategies);
   const [localAssumptions, setLocalAssumptions] = useState<EstateAssumptionInputs>(assumptions);
+  const [includeRoth, setIncludeRoth] = useState(false);
 
   useEffect(() => {
     setLocalStrategies((prev) => ({ ...prev, ...strategies }));
@@ -198,20 +201,112 @@ export function EstatePlanningNewCenter() {
 
   const summary = recalculatedProjection ?? estateProjection;
 
-  const taxPieData = summary
+  // Fetch stored Roth conversion analysis; include raw projections for overlay
+  const { data: rothAnalysis, isLoading: rothLoading } = useQuery({
+    queryKey: ["stored-roth-conversion-analysis"],
+    queryFn: async () => {
+      const res = await fetch("/api/roth-conversion/analysis", { credentials: "include" });
+      if (!res.ok) {
+        if (res.status === 404) return null;
+        throw new Error("Failed to fetch Roth conversion analysis");
+      }
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+  });
+
+  // Inline runner to compute analysis if toggle is on and none exists
+  const runRothAnalysisMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/roth-conversion/ai-analysis", { method: "POST", credentials: "include" });
+      if (!res.ok) throw new Error("Failed to run Roth conversion analysis");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["stored-roth-conversion-analysis"] });
+    }
+  });
+
+  // Build estate overlay using Roth engine balances at projected death age
+  const withRothSummary = useMemo(() => {
+    if (!summary || !rothAnalysis || !rothAnalysis.rawResults) return null;
+    const raw = rothAnalysis.rawResults;
+    const deathAge = Number(summary.assumptions?.deathAge || 0);
+    const currentAge = Number(summary.assumptions?.currentAge || 0);
+    if (!Number.isFinite(deathAge) || !Number.isFinite(currentAge) || deathAge <= currentAge) return null;
+    const yearsUntilDeath = Math.max(0, Math.floor(deathAge - currentAge));
+    const targetYear = new Date().getFullYear() + yearsUntilDeath;
+
+    const pickYear = (arr: any[]) => {
+      if (!Array.isArray(arr) || arr.length === 0) return null;
+      let y = arr.find((r) => r.year === targetYear) || arr.slice().reverse().find((r) => r.year <= targetYear) || arr[arr.length - 1];
+      return y || null;
+    };
+
+    const withConvYear = pickYear(raw.withConversionProjection || []);
+    if (!withConvYear) return null;
+
+    const traditional = Math.max(0, Number(withConvYear.traditionalBalance || 0));
+    const rothBal = Math.max(0, Number(withConvYear.rothBalance || 0));
+    const taxable = Math.max(0, Number(withConvYear.taxableBalance || 0));
+    const savings = Math.max(0, Number(withConvYear.savingsBalance || 0));
+
+    const overlayComposition = {
+      taxable: taxable + savings,
+      taxDeferred: traditional,
+      roth: rothBal,
+      illiquid: Math.max(0, Number((assetComposition as any)?.illiquid || 0)),
+    } as any;
+
+    const base = summary.projectedEstateValue;
+    try {
+      return calculateEstateProjection({
+        baseEstateValue: base,
+        assetComposition: overlayComposition,
+        strategies: localStrategies,
+        assumptions: localAssumptions,
+        profile,
+      });
+    } catch {
+      return null;
+    }
+  }, [summary, rothAnalysis, localStrategies, localAssumptions, profile]);
+
+  const activeSummary = includeRoth && withRothSummary ? withRothSummary : summary;
+
+  const taxPieData = activeSummary
     ? [
         // Use final net to heirs after both estate taxes and heirs' income taxes
-        { name: "Net to Heirs", value: Math.max(0, summary.heirTaxEstimate.netAfterIncomeTax) },
-        { name: "Estate Taxes", value: Math.max(0, summary.totalTax) },
-        { name: "Charitable Gifts", value: Math.max(0, summary.charitableImpact.charitableBequests) },
-        { name: "Income Tax Drag", value: Math.max(0, summary.heirTaxEstimate.projectedIncomeTax) },
+        { name: "Net to Heirs", value: Math.max(0, activeSummary.heirTaxEstimate.netAfterIncomeTax) },
+        { name: "Estate Taxes", value: Math.max(0, activeSummary.totalTax) },
+        { name: "Charitable Gifts", value: Math.max(0, activeSummary.charitableImpact.charitableBequests) },
+        { name: "Income Tax Drag", value: Math.max(0, activeSummary.heirTaxEstimate.projectedIncomeTax) },
       ]
     : [];
 
   // Composition pie: retirement vs real estate breakdown (approximated from summary and hook projections)
   const compositionPieData = useMemo(() => {
-    if (!summary) return [] as { name: string; value: number }[];
-    const retirement = Math.max(0, Number(retirementAt93 || 0));
+    if (!activeSummary) return [] as { name: string; value: number }[];
+    // If Roth overlay available and toggle on, approximate retirement assets from engine balances at death
+    let retirement = Math.max(0, Number(retirementAt93 || 0));
+    if (includeRoth && rothAnalysis?.rawResults) {
+      const deathAge = Number(activeSummary.assumptions?.deathAge || 0);
+      const currentAge = Number(activeSummary.assumptions?.currentAge || 0);
+      if (deathAge > currentAge) {
+        const yearsUntilDeath = Math.max(0, Math.floor(deathAge - currentAge));
+        const targetYear = new Date().getFullYear() + yearsUntilDeath;
+        const arr = rothAnalysis.rawResults.withConversionProjection || [];
+        const row = Array.isArray(arr) && (arr.find((r: any) => r.year === targetYear) || arr.slice().reverse().find((r: any) => r.year <= targetYear) || arr[arr.length - 1]);
+        if (row) {
+          const t = Math.max(0, Number(row.traditionalBalance || 0));
+          const r = Math.max(0, Number(row.rothBalance || 0));
+          const x = Math.max(0, Number(row.taxableBalance || 0));
+          const s = Math.max(0, Number(row.savingsBalance || 0));
+          retirement = t + r + x + s;
+        }
+      }
+    }
     const realEstate = Math.max(0, Number(projectedRealEstate || 0));
     const total = retirement + realEstate;
     if (!total) return [];
@@ -219,15 +314,15 @@ export function EstatePlanningNewCenter() {
       { name: "Retirement Assets", value: retirement },
       { name: "Real Estate", value: realEstate },
     ];
-  }, [summary, retirementAt93, projectedRealEstate]);
+  }, [activeSummary, includeRoth, rothAnalysis, retirementAt93, projectedRealEstate]);
 
-  const taxBarData = summary
+  const taxBarData = activeSummary
     ? [
         {
           name: "Taxes",
-          Federal: summary.federalTax,
-          State: summary.stateTax,
-          LiquidityGap: summary.liquidity.gap,
+          Federal: activeSummary.federalTax,
+          State: activeSummary.stateTax,
+          LiquidityGap: activeSummary.liquidity.gap,
         },
       ]
     : [];
@@ -236,9 +331,9 @@ export function EstatePlanningNewCenter() {
     return (localStrategies.trustFunding || []).reduce((total, trust) => total + (Number(trust?.amount) || 0), 0);
   }, [localStrategies.trustFunding]);
 
-  const liquidityStatusBadge = summary
-    ? summary.liquidity.gap > 0
-      ? { variant: "destructive" as const, label: `${formatCurrency(summary.liquidity.gap)} gap` }
+  const liquidityStatusBadge = activeSummary
+    ? activeSummary.liquidity.gap > 0
+      ? { variant: "destructive" as const, label: `${formatCurrency(activeSummary.liquidity.gap)} gap` }
       : { variant: "default" as const, label: "Liquidity covered" }
     : null;
 
@@ -267,16 +362,16 @@ export function EstatePlanningNewCenter() {
     setLocalAssumptions((prev) => ({ ...prev, [key]: value }));
   };
 
-  const reportSummary = summary
+  const reportSummary = activeSummary
     ? [
-        `Projected estate value at death: ${formatCurrency(summary.projectedEstateValue)}`,
-        `Estimated estate taxes: ${formatCurrency(summary.totalTax)} (${formatPercent(summary.effectiveTaxRate)})`,
-        `Net inheritance for beneficiaries: ${formatCurrency(summary.netToHeirs)}`,
-        summary.liquidity.gap > 0
-          ? `Liquidity shortfall of ${formatCurrency(summary.liquidity.gap)} detected for estate settlement.`
+        `Projected estate value at death: ${formatCurrency(activeSummary.projectedEstateValue)}`,
+        `Estimated estate taxes: ${formatCurrency(activeSummary.totalTax)} (${formatPercent(activeSummary.effectiveTaxRate)})`,
+        `Net inheritance for beneficiaries: ${formatCurrency(activeSummary.netToHeirs)}`,
+        activeSummary.liquidity.gap > 0
+          ? `Liquidity shortfall of ${formatCurrency(activeSummary.liquidity.gap)} detected for estate settlement.`
           : "Liquidity target met for projected estate obligations.",
-        summary.heirTaxEstimate.taxDeferredBalance > 0
-          ? `Heirs may owe approximately ${formatCurrency(summary.heirTaxEstimate.projectedIncomeTax)} in income taxes on inherited tax-deferred accounts.`
+        activeSummary.heirTaxEstimate.taxDeferredBalance > 0
+          ? `Heirs may owe approximately ${formatCurrency(activeSummary.heirTaxEstimate.projectedIncomeTax)} in income taxes on inherited tax-deferred accounts.`
           : "Heirs are positioned for tax-efficient inheritance (limited tax-deferred balances).",
       ]
     : [];
@@ -296,7 +391,12 @@ export function EstatePlanningNewCenter() {
         <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div className="flex items-center gap-3">
                     <BookOpen className="h-8 w-8 text-primary" />
-                    <CardTitle className="text-3xl text-white">Estate Planning New</CardTitle>
+                    <div className="flex flex-col">
+                      <CardTitle className="text-3xl text-white">Estate Planning New</CardTitle>
+                      {includeRoth && (
+                        <div className="text-xs uppercase tracking-wide text-purple-300 mt-1">Tax Bracket Filling Strategy (Roth conversions through age 72)</div>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
             {liquidityStatusBadge && (
@@ -308,6 +408,10 @@ export function EstatePlanningNewCenter() {
                 (profile as any)?.optimizationVariables?.optimizedScore
               ) ? 'Optimized Plan' : 'Baseline Plan'}
             </Badge>
+            <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-gray-900/40 border border-gray-700">
+              <span className="text-xs text-gray-300">Include Roth Conversions</span>
+              <Switch checked={includeRoth} onCheckedChange={setIncludeRoth} />
+            </div>
             <Button
               size="sm"
               onClick={refetchAll}
@@ -328,6 +432,21 @@ export function EstatePlanningNewCenter() {
           </div>
         </CardHeader>
         <CardContent>
+          {includeRoth && !rothLoading && !rothAnalysis && (
+            <Alert className="mb-4 bg-purple-900/30 border-purple-700">
+              <AlertCircle className="h-4 w-4 text-purple-300" />
+              <AlertTitle className="text-purple-100">Roth analysis not found</AlertTitle>
+              <AlertDescription className="text-gray-200">
+                Run a Roth conversion analysis to see estate impacts using the tax bracket filling strategy.
+                <div className="mt-3">
+                  <Button size="sm" onClick={() => runRothAnalysisMutation.mutate()} disabled={runRothAnalysisMutation.isPending}
+                    className="bg-purple-600 hover:bg-purple-700 text-white">
+                    {runRothAnalysisMutation.isPending ? 'Running…' : 'Run Roth Analysis'}
+                  </Button>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
           {error && (
             <Alert variant="destructive" className="mb-4 bg-red-900/30 border-red-700">
               <ShieldAlert className="h-4 w-4" />
@@ -369,42 +488,42 @@ export function EstatePlanningNewCenter() {
                       Combined estate value, modeled taxes, and inheritance results based on current retirement projections.
                     </p>
                   </div>
-                  {summary && optimizedProb !== undefined && (
+                  {activeSummary && optimizedProb !== undefined && (
                     <Badge variant="outline" className="border-purple-500/40 text-purple-300 w-fit text-xs">
                       Based on optimized retirement plan
                     </Badge>
                   )}
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  {isLoading && !summary ? (
+                  {isLoading && !activeSummary ? (
                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                       {Array.from({ length: 4 }).map((_, index) => (
                         <div key={index} className="h-28 rounded-xl bg-gray-800/60 animate-pulse" />
                       ))}
                     </div>
-                  ) : summary ? (
+                  ) : activeSummary ? (
                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                       <SummaryTile
                         label="Projected Estate"
-                        value={formatCurrency(summary.projectedEstateValue, { compact: false, decimals: 0 })}
-                        helper={`Modeled at age ${summary.assumptions.deathAge}`}
+                        value={formatCurrency(activeSummary.projectedEstateValue, { compact: false, decimals: 0 })}
+                        helper={`Modeled at age ${activeSummary.assumptions.deathAge}`}
                       />
                       <SummaryTile
                         label="Net to Heirs"
-                        value={formatCurrency(summary.netToHeirs)}
+                        value={formatCurrency(activeSummary.netToHeirs)}
                         helper="After estate tax impact"
                         accent="emerald"
                       />
                       <SummaryTile
                         label="Estate Taxes"
-                        value={formatCurrency(summary.totalTax)}
-                        helper={`Effective rate ${formatPercent(summary.effectiveTaxRate)}`}
+                        value={formatCurrency(activeSummary.totalTax)}
+                        helper={`Effective rate ${formatPercent(activeSummary.effectiveTaxRate)}`}
                         accent="orange"
                       />
                       <SummaryTile
                         label="After Heir Income Tax"
-                        value={formatCurrency(summary.heirTaxEstimate.netAfterIncomeTax)}
-                        helper={`Assumes ${percentFormatter.format(summary.heirTaxEstimate.assumedRate)} heir tax`}
+                        value={formatCurrency(activeSummary.heirTaxEstimate.netAfterIncomeTax)}
+                        helper={`Assumes ${percentFormatter.format(activeSummary.heirTaxEstimate.assumedRate)} heir tax`}
                         accent="sky"
                       />
                     </div>
@@ -412,7 +531,7 @@ export function EstatePlanningNewCenter() {
                     <p className="text-gray-400">No estate projection available. Complete your financial profile to unlock insights.</p>
                   )}
 
-                  {summary && (
+                  {activeSummary && (
                     <div className="grid gap-6 lg:grid-cols-2">
                       <Card className="bg-gray-950/40 border-gray-800">
                         <CardHeader>
@@ -501,7 +620,7 @@ export function EstatePlanningNewCenter() {
                   <CardTitle className="text-xl text-white">Estate Tax Outlook</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  {summary ? (
+                  {activeSummary ? (
                     <div className="overflow-hidden rounded-xl border border-gray-800">
                       <table className="min-w-full divide-y divide-gray-800 text-sm">
                         <thead className="bg-gray-950/60 text-gray-400">
@@ -514,26 +633,26 @@ export function EstatePlanningNewCenter() {
                         <tbody className="divide-y divide-gray-800">
                           <tr>
                             <td className="px-4 py-3 text-gray-200">Gross estate</td>
-                            <td className="px-4 py-3 text-right text-white">{formatCurrency(summary.projectedEstateValue)}</td>
+                            <td className="px-4 py-3 text-right text-white">{formatCurrency(activeSummary.projectedEstateValue)}</td>
                             <td className="px-4 py-3 text-right text-gray-400">Includes appreciation, net of gifts & trust funding</td>
                           </tr>
                           <tr>
                             <td className="px-4 py-3 text-gray-200">Taxable estate</td>
-                            <td className="px-4 py-3 text-right text-white">{formatCurrency(summary.projectedTaxableEstate)}</td>
+                            <td className="px-4 py-3 text-right text-white">{formatCurrency(activeSummary.projectedTaxableEstate)}</td>
                             <td className="px-4 py-3 text-right text-gray-400">After deductions and charitable adjustments</td>
                           </tr>
                           <tr>
                             <td className="px-4 py-3 text-gray-200">Federal estate tax</td>
-                            <td className="px-4 py-3 text-right text-orange-300">{formatCurrency(summary.federalTax)}</td>
+                            <td className="px-4 py-3 text-right text-orange-300">{formatCurrency(activeSummary.federalTax)}</td>
                             <td className="px-4 py-3 text-right text-gray-400">
-                              Exemption applied: {formatCurrency(summary.assumptions.federalExemption)}
+                              Exemption applied: {formatCurrency(activeSummary.assumptions.federalExemption)}
                             </td>
                           </tr>
                           <tr>
                             <td className="px-4 py-3 text-gray-200">State estate/inheritance tax</td>
-                            <td className="px-4 py-3 text-right text-orange-300">{formatCurrency(summary.stateTax)}</td>
+                            <td className="px-4 py-3 text-right text-orange-300">{formatCurrency(activeSummary.stateTax)}</td>
                             <td className="px-4 py-3 text-right text-gray-400">
-                              Based on {summary.assumptions.state || "residence"} thresholds
+                              Based on {activeSummary.assumptions.state || "residence"} thresholds
                             </td>
                           </tr>
                         </tbody>
@@ -552,11 +671,11 @@ export function EstatePlanningNewCenter() {
                         <CardContent className="space-y-2 text-sm text-gray-300">
                           <div className="flex items-center justify-between">
                             <span>Available liquid assets (incl. Roth)</span>
-                            <span className="text-white">{formatCurrency(summary.liquidity.available)}</span>
+                            <span className="text-white">{formatCurrency(activeSummary.liquidity.available)}</span>
                           </div>
                           <div className="flex items-center justify-between">
                             <span>Required liquidity ({percentFormatter.format((localAssumptions.liquidityTargetPercent ?? 110) / 100)})</span>
-                            <span className="text-white">{formatCurrency(summary.liquidity.required)}</span>
+                            <span className="text-white">{formatCurrency(activeSummary.liquidity.required)}</span>
                           </div>
                           {/* Settlement expenses breakdown */}
                           <div className="flex items-center justify-between">
@@ -567,31 +686,31 @@ export function EstatePlanningNewCenter() {
                           {((summary as any).liquidity?.charitableReserve || 0) > 0 && (
                             <div className="flex items-center justify-between">
                               <span>Charitable reserve (earmarked)</span>
-                              <span className="text-white">{formatCurrency(Number((summary as any).liquidity?.charitableReserve || 0))}</span>
+                            <span className="text-white">{formatCurrency(Number((activeSummary as any).liquidity?.charitableReserve || 0))}</span>
                             </div>
                           )}
                           <div className="text-xs text-gray-500">
-                            Probate (5%): {formatCurrency(Number((summary as any).liquidity?.probateCosts || 0))} · Funeral: {formatCurrency(Number((summary as any).liquidity?.funeralCost || 0))}
+                            Probate (5%): {formatCurrency(Number((activeSummary as any).liquidity?.probateCosts || 0))} · Funeral: {formatCurrency(Number((activeSummary as any).liquidity?.funeralCost || 0))}
                           </div>
                           <div className="flex items-center justify-between">
                             <span>Insurance need</span>
-                            <span className="text-white">{formatCurrency(summary.liquidity.insuranceNeed)}</span>
+                            <span className="text-white">{formatCurrency(activeSummary.liquidity.insuranceNeed)}</span>
                           </div>
                           {/* Life insurance disclosure */}
-                          {(summary.liquidity.existingLifeInsuranceUser > 0 || summary.liquidity.existingLifeInsuranceSpouse > 0 || summary.liquidity.ilitCoverage > 0) && (
+                          {(activeSummary.liquidity.existingLifeInsuranceUser > 0 || activeSummary.liquidity.existingLifeInsuranceSpouse > 0 || activeSummary.liquidity.ilitCoverage > 0) && (
                             <div className="pt-1 text-xs text-gray-400">
                               {(() => {
                                 const parts: string[] = [];
-                                if (summary.liquidity.existingLifeInsuranceUser > 0) {
-                                  parts.push(`user in-estate ${formatCurrency(Number(summary.liquidity.existingLifeInsuranceUser))}`);
+                                if (activeSummary.liquidity.existingLifeInsuranceUser > 0) {
+                                  parts.push(`user in-estate ${formatCurrency(Number(activeSummary.liquidity.existingLifeInsuranceUser))}`);
                                 }
-                                if (summary.liquidity.existingLifeInsuranceSpouse > 0) {
-                                  parts.push(`spouse in-estate ${formatCurrency(Number(summary.liquidity.existingLifeInsuranceSpouse))}`);
+                                if (activeSummary.liquidity.existingLifeInsuranceSpouse > 0) {
+                                  parts.push(`spouse in-estate ${formatCurrency(Number(activeSummary.liquidity.existingLifeInsuranceSpouse))}`);
                                 }
-                                if (summary.liquidity.ilitCoverage > 0) {
-                                  parts.push(`ILIT ${formatCurrency(Number(summary.liquidity.ilitCoverage))}`);
+                                if (activeSummary.liquidity.ilitCoverage > 0) {
+                                  parts.push(`ILIT ${formatCurrency(Number(activeSummary.liquidity.ilitCoverage))}`);
                                 }
-                                const total = Number(summary.liquidity.existingLifeInsuranceUser || 0) + Number(summary.liquidity.existingLifeInsuranceSpouse || 0) + Number(summary.liquidity.ilitCoverage || 0);
+                                const total = Number(activeSummary.liquidity.existingLifeInsuranceUser || 0) + Number(activeSummary.liquidity.existingLifeInsuranceSpouse || 0) + Number(activeSummary.liquidity.ilitCoverage || 0);
                                 return (
                                   <span>
                                     Includes life insurance: {formatCurrency(total)} ({parts.join(', ')})
@@ -714,7 +833,7 @@ export function EstatePlanningNewCenter() {
                             onValueChange={([value]) => handleAssumptionChange("liquidityTargetPercent", value)}
                           />
                           <p className="mt-3 text-xs text-gray-500">
-                            Liquidity required: {formatCurrency(summary.liquidity.required)} · Available today: {formatCurrency(summary.liquidity.available)}
+                            Liquidity required: {formatCurrency(activeSummary.liquidity.required)} · Available today: {formatCurrency(activeSummary.liquidity.available)}
                           </p>
                         </div>
                         <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
@@ -722,15 +841,15 @@ export function EstatePlanningNewCenter() {
                           <ul className="space-y-2 text-sm text-gray-300">
                             <li className="flex items-center gap-2">
                               <ArrowRight className="h-4 w-4 text-purple-400" />
-                              Net to heirs {summary.netToHeirs >= (estateProjection?.netToHeirs || 0) ? "increased" : "changed"} to {formatCurrency(summary.netToHeirs)}
+                              Net to heirs {activeSummary.netToHeirs >= (estateProjection?.netToHeirs || 0) ? "increased" : "changed"} to {formatCurrency(activeSummary.netToHeirs)}
                             </li>
                             <li className="flex items-center gap-2">
                               <ArrowRight className="h-4 w-4 text-purple-400" />
-                              Estate tax liability now {formatCurrency(summary.totalTax)}
+                              Estate tax liability now {formatCurrency(activeSummary.totalTax)}
                             </li>
                             <li className="flex items-center gap-2">
                               <ArrowRight className="h-4 w-4 text-purple-400" />
-                              Liquidity gap {summary.liquidity.gap > 0 ? `is ${formatCurrency(summary.liquidity.gap)}` : "closed"}
+                              Liquidity gap {activeSummary.liquidity.gap > 0 ? `is ${formatCurrency(activeSummary.liquidity.gap)}` : "closed"}
                             </li>
                           </ul>
                           <Button
@@ -779,14 +898,14 @@ export function EstatePlanningNewCenter() {
                   <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-4 space-y-3">
                     <h3 className="text-sm font-semibold text-gray-200">High-level estate flow</h3>
                     <div className="flex flex-col gap-3 text-sm text-gray-300 md:flex-row md:items-center md:justify-between">
-                      <FlowNode label="Client Estate" amount={summary ? formatCurrency(summary.projectedEstateValue) : "—"} />
+                      <FlowNode label="Client Estate" amount={activeSummary ? formatCurrency(activeSummary.projectedEstateValue) : "—"} />
                       <ArrowRight className="h-4 w-4 text-purple-400 self-center" />
                       <FlowNode
                         label="Surviving spouse / trusts"
-                        amount={summary ? formatCurrency(summary.netToHeirs - summary.heirTaxEstimate.projectedIncomeTax) : "—"}
+                        amount={activeSummary ? formatCurrency(activeSummary.netToHeirs - activeSummary.heirTaxEstimate.projectedIncomeTax) : "—"}
                       />
                       <ArrowRight className="h-4 w-4 text-purple-400 self-center" />
-                      <FlowNode label="Final heirs / charity" amount={summary ? formatCurrency(summary.heirTaxEstimate.netAfterIncomeTax) : "—"} />
+                      <FlowNode label="Final heirs / charity" amount={activeSummary ? formatCurrency(activeSummary.heirTaxEstimate.netAfterIncomeTax) : "—"} />
                     </div>
                     <p className="text-xs text-gray-500">
                       Probate-sensitive assets (those without beneficiary designations or not titled in trust) may delay or reduce distributions. Confirm titling and contingent beneficiaries regularly.
@@ -891,9 +1010,9 @@ export function EstatePlanningNewCenter() {
                         <CardTitle className="text-sm font-semibold text-gray-200">Liquidity & insurance</CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-2 text-sm text-gray-300">
-                        {summary && summary.liquidity.gap > 0 ? (
+                        {activeSummary && activeSummary.liquidity.gap > 0 ? (
                           <p>
-                            Liquidity shortfall projected. Consider layering survivorship life insurance or earmarking brokerage assets to cover {formatCurrency(summary.liquidity.gap)} in expected settlement costs.
+                            Liquidity shortfall projected. Consider layering survivorship life insurance or earmarking brokerage assets to cover {formatCurrency(activeSummary.liquidity.gap)} in expected settlement costs.
                           </p>
                         ) : (
                           <p>Liquidity targets satisfied. Continue monitoring as projections shift with market returns or gifting.</p>
