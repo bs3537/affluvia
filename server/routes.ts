@@ -38,6 +38,7 @@ import { cacheService } from './services/cache.service';
 import { setupDashboardSnapshotRoutes } from './routes/dashboard-snapshot';
 import type { DatabaseError } from 'pg';
 import { mapStrategyToRisk, optimizeEducationGoal } from "./education-optimizer";
+import { calculateEstateProjection, buildAssetCompositionFromProfile } from "@shared/estate/analysis";
 
 const PG_UNDEFINED_TABLE = '42P01';
 
@@ -8680,15 +8681,137 @@ Response format:
       console.log('Running RothConversionEngine analysis...');
       const analysisResult = await engine.analyze();
       console.log('RothConversionEngine analysis complete');
-      
+
+      // Compute after-heir-tax estate values using shared estate model (Option B)
+      // Build baseline vs with-conversion overlays at a unified target age to match Estate Planning New (age 93)
+      const baselineProjection = analysisResult.withoutConversionProjection;
+      const conversionProjection = analysisResult.withConversionProjection;
+
+      let baselineAfterHeirTax = analysisResult.estateValueWithoutConversion;
+      let conversionAfterHeirTax = analysisResult.estateValueWithConversion;
+      try {
+        // Use the same target age as Estate Planning New: 93
+        const estateTargetAge = 93;
+
+        // Find rows at (or nearest below) the target death year in both projections
+        const yearsUntilTarget = Math.max(0, estateTargetAge - userAge);
+        const targetYear = new Date().getFullYear() + yearsUntilTarget;
+
+        const pickRowAtTarget = (arr: any[]) =>
+          Array.isArray(arr) && arr.length ? (
+            arr.find((r: any) => r.year === targetYear) ||
+            arr.slice().reverse().find((r: any) => r.year <= targetYear) ||
+            arr[arr.length - 1]
+          ) : null;
+
+        const baseAtTarget = pickRowAtTarget(baselineProjection) || baselineProjection[baselineProjection.length - 1];
+        const convAtTarget = pickRowAtTarget(conversionProjection) || conversionProjection[conversionProjection.length - 1];
+
+        const retirementWithout = Math.max(0,
+          (baseAtTarget?.traditionalBalance || 0) +
+          (baseAtTarget?.rothBalance || 0) +
+          (baseAtTarget?.taxableBalance || 0) +
+          (baseAtTarget?.savingsBalance || 0)
+        );
+        const retirementWith = Math.max(0,
+          (convAtTarget?.traditionalBalance || 0) +
+          (convAtTarget?.rothBalance || 0) +
+          (convAtTarget?.taxableBalance || 0) +
+          (convAtTarget?.savingsBalance || 0)
+        );
+
+        // Project real estate to target death age (3% CAGR), keep constant across scenarios
+        const yearsUntilDeath = yearsUntilTarget;
+        const factor = Math.pow(1.03, yearsUntilDeath);
+        const currentRE = (() => {
+          try {
+            const primaryMV = Number((completeProfile as any)?.primaryResidence?.marketValue || 0);
+            const additional = Array.isArray((completeProfile as any)?.additionalProperties)
+              ? (completeProfile as any).additionalProperties.reduce((sum: number, p: any) => sum + Number(p?.marketValue || 0), 0)
+              : 0;
+            return Math.max(0, primaryMV + additional);
+          } catch { return 0; }
+        })();
+        const realEstateAtDeath = Math.round(currentRE * factor);
+
+        // Align baseline retirement value with optimized Monte Carlo used in Estate Planning New
+        let retirementAtTarget = 0;
+        try {
+          const impact: any = (completeProfile as any)?.retirementPlanningData?.impactOnPortfolioBalance;
+          const hasOptimized = Boolean((completeProfile as any)?.optimizationVariables?.optimizedScore);
+          const targetAge = estateTargetAge;
+          if (impact?.projectionData && Array.isArray(impact.projectionData)) {
+            const row = impact.projectionData.find((r: any) => Math.floor(r.age) === targetAge);
+            if (row) {
+              retirementAtTarget = hasOptimized ? Number(row.optimized || 0) : Number(row.baseline || 0);
+            }
+          }
+          if (!retirementAtTarget || retirementAtTarget < 0) {
+            const flows: any[] = (completeProfile as any)?.monteCarloSimulation?.retirementSimulation?.results?.yearlyCashFlows
+              || (completeProfile as any)?.monteCarloSimulation?.retirementSimulation?.yearlyCashFlows
+              || [];
+            const r = Array.isArray(flows) && flows.length
+              ? (flows.find((y: any) => Math.floor(y.age || 0) === targetAge) || flows[flows.length - 1])
+              : null;
+            if (r) retirementAtTarget = Number(r.portfolioValue || r.portfolioBalance || 0) || 0;
+          }
+        } catch {}
+
+        const baseEstateWithout = Math.max(0, retirementAtTarget + realEstateAtDeath);
+        const baseEstateWith = Math.max(0, retirementWith + realEstateAtDeath);
+
+        const overlayIlliquid = (() => {
+          try {
+            const primaryMV = Number((completeProfile as any)?.primaryResidence?.marketValue || 0);
+            const primaryMortgage = Number((completeProfile as any)?.primaryResidence?.mortgageBalance || 0);
+            const additional = Array.isArray((completeProfile as any)?.additionalProperties)
+              ? (completeProfile as any).additionalProperties.reduce((sum: number, p: any) => sum + (Number(p?.marketValue || 0) - Number(p?.mortgageBalance || 0)), 0)
+              : 0;
+            const equity = Math.max(0, (primaryMV - primaryMortgage) + additional);
+            return equity;
+          } catch { return 0; }
+        })();
+
+        const baselineSummary = calculateEstateProjection({
+          baseEstateValue: baseEstateWithout,
+          assetComposition: {
+            taxable: Math.max(0, (baseAtTarget?.taxableBalance || 0) + (baseAtTarget?.savingsBalance || 0)),
+            taxDeferred: Math.max(0, baseAtTarget?.traditionalBalance || 0),
+            roth: Math.max(0, baseAtTarget?.rothBalance || 0),
+            illiquid: overlayIlliquid,
+          },
+          assumptions: {
+            projectedDeathAge: estateTargetAge,
+            appreciationRate: 0,
+          },
+          profile: completeProfile,
+        });
+
+        const withSummary = calculateEstateProjection({
+          baseEstateValue: baseEstateWith,
+          assetComposition: {
+            taxable: Math.max(0, (convAtTarget?.taxableBalance || 0) + (convAtTarget?.savingsBalance || 0)),
+            taxDeferred: Math.max(0, convAtTarget?.traditionalBalance || 0),
+            roth: Math.max(0, convAtTarget?.rothBalance || 0),
+            illiquid: overlayIlliquid,
+          },
+          assumptions: {
+            projectedDeathAge: estateTargetAge,
+            appreciationRate: 0,
+          },
+          profile: completeProfile,
+        });
+
+        baselineAfterHeirTax = Math.max(0, baselineSummary.heirTaxEstimate.netAfterIncomeTax);
+        conversionAfterHeirTax = Math.max(0, withSummary.heirTaxEstimate.netAfterIncomeTax);
+      } catch (e) {
+        console.warn("Falling back to engine estate values (pre-tax) due to estate projection error:", e);
+      }
+
       // Format the engine results to match the expected UI format
       const formatCurrency = (amount: number) => `$${Math.round(amount).toLocaleString()}`;
 
-      
       // Calculate some summary metrics from the projections
-      const baselineProjection = analysisResult.withoutConversionProjection;
-      const conversionProjection = analysisResult.withConversionProjection;
-      
       // Calculate total taxes from projections
       const baselineTotalTaxes = baselineProjection.reduce((sum, year) => sum + year.totalTaxes, 0);
       const conversionTotalTaxes = conversionProjection.reduce((sum, year) => sum + year.totalTaxes, 0);
@@ -8720,7 +8843,7 @@ Response format:
           philosophy: "Continue current trajectory without any Roth conversions",
           projections: {
             lifetimeIncomeTaxes: baselineTotalTaxes,
-            afterTaxEstateValueAt85: analysisResult.estateValueWithoutConversion,
+            afterTaxEstateValueAt85: baselineAfterHeirTax,
             totalIRMAARisk: baselineTotalIRMAA,
             bracketCreepRisk: baselineTotalRMDs > 2000000 ? "High" : 
                               baselineTotalRMDs > 1000000 ? "Medium" : "Low",
@@ -8751,14 +8874,14 @@ Response format:
             })),
             projections: {
               lifetimeIncomeTaxes: conversionTotalTaxes,
-              afterTaxEstateValueAt85: analysisResult.estateValueWithConversion,
+              afterTaxEstateValueAt85: conversionAfterHeirTax,
               totalIRMAARisk: conversionTotalIRMAA,
               bracketCreepRisk: "Low",
               totalRMDsOverLifetime: conversionTotalRMDs
             },
             pros: [
               `Saves ${formatCurrency(analysisResult.lifetimeTaxSavings)} in lifetime taxes`,
-              `Increases estate value by ${formatCurrency(analysisResult.estateValueWithConversion - analysisResult.estateValueWithoutConversion)}`,
+              `Increases after-tax estate value by ${formatCurrency(conversionAfterHeirTax - baselineAfterHeirTax)}`,
               "Reduces future RMDs and associated tax burden",
               "Creates tax-free income in retirement",
               "Tax-free inheritance for heirs"
@@ -8770,8 +8893,8 @@ Response format:
             ],
             comparisonToBaseline: {
               additionalTaxesPaid: analysisResult.conversionPlan.reduce((sum, conv) => sum + conv.taxOwed, 0),
-              additionalEstateValue: analysisResult.estateValueWithConversion - analysisResult.estateValueWithoutConversion,
-              netBenefit: (analysisResult.estateValueWithConversion - analysisResult.estateValueWithoutConversion) + analysisResult.lifetimeTaxSavings
+              additionalEstateValue: conversionAfterHeirTax - baselineAfterHeirTax,
+              netBenefit: (conversionAfterHeirTax - baselineAfterHeirTax) + analysisResult.lifetimeTaxSavings
             }
           }
         ],
@@ -8874,7 +8997,7 @@ Response format:
         calculatedAt: currentDateTime,
         lifetimeTaxSavings: analysisResult.lifetimeTaxSavings,
         totalConversions: analysisResult.totalConversions,
-        estateValueIncrease: analysisResult.estateValueWithConversion - analysisResult.estateValueWithoutConversion,
+        estateValueIncrease: conversionAfterHeirTax - baselineAfterHeirTax,
         conversionYears: analysisResult.conversionPlan.length,
         transformedResult: transformedResult
       };
@@ -8918,7 +9041,130 @@ Response format:
       }
 
       const analysisData = profile.calculations.rothConversionAnalysis;
-      
+
+      // Prepare response, but first attempt to recompute after-heir-tax estate values at age 93
+      // from stored raw projections to ensure consistency with Estate Planning New.
+      let summaryEstateIncrease = analysisData.estateValueIncrease;
+      let resultsOut: any = analysisData.transformedResult || analysisData.results;
+      const raw = analysisData.results;
+
+      try {
+        if (raw && Array.isArray(raw.withoutConversionProjection) && Array.isArray(raw.withConversionProjection)) {
+          const userDob = (profile as any)?.dateOfBirth || (profile as any)?.userDob || (raw as any)?.user_dob;
+          const userAge = (() => {
+            try {
+              const d = new Date(userDob);
+              if (!isNaN(d.getTime())) return Math.max(0, Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24 * 365.25)));
+            } catch {}
+            return Number((profile as any)?.currentAge || (raw as any)?.currentAge || 55);
+          })();
+
+          const estateTargetAge = 93;
+          const yearsUntilTarget = Math.max(0, estateTargetAge - userAge);
+          const targetYear = new Date().getFullYear() + yearsUntilTarget;
+          const pickRowAtTarget = (arr: any[]) =>
+            Array.isArray(arr) && arr.length ? (
+              arr.find((r: any) => r.year === targetYear) ||
+              arr.slice().reverse().find((r: any) => r.year <= targetYear) ||
+              arr[arr.length - 1]
+            ) : null;
+
+          const baseAtTarget = pickRowAtTarget(raw.withoutConversionProjection);
+          const convAtTarget = pickRowAtTarget(raw.withConversionProjection);
+
+          if (baseAtTarget && convAtTarget) {
+            // 1) Compute retirement at target and real estate to age 93
+            const retirementWithout = Math.max(0,
+              (baseAtTarget?.traditionalBalance || 0) +
+              (baseAtTarget?.rothBalance || 0) +
+              (baseAtTarget?.taxableBalance || 0) +
+              (baseAtTarget?.savingsBalance || 0)
+            );
+            const retirementWith = Math.max(0,
+              (convAtTarget?.traditionalBalance || 0) +
+              (convAtTarget?.rothBalance || 0) +
+              (convAtTarget?.taxableBalance || 0) +
+              (convAtTarget?.savingsBalance || 0)
+            );
+
+            const currentRE = (() => {
+              try {
+                const primaryMV = Number((profile as any)?.primaryResidence?.marketValue || 0);
+                const additional = Array.isArray((profile as any)?.additionalProperties)
+                  ? (profile as any).additionalProperties.reduce((sum: number, p: any) => sum + Number(p?.marketValue || 0), 0)
+                  : 0;
+                return Math.max(0, primaryMV + additional);
+              } catch { return 0; }
+            })();
+            const factor = Math.pow(1.03, yearsUntilTarget);
+            const realEstateAtDeath = Math.round(currentRE * factor);
+
+            // 2) Align baseline retirement value with the Overview (optimized MC at 93)
+            let retirementAtTarget = 0;
+            try {
+              const impact: any = (profile as any)?.retirementPlanningData?.impactOnPortfolioBalance;
+              const hasOptimized = Boolean((profile as any)?.optimizationVariables?.optimizedScore);
+              if (impact?.projectionData && Array.isArray(impact.projectionData)) {
+                const row = impact.projectionData.find((r: any) => Math.floor(r.age) === estateTargetAge);
+                if (row) retirementAtTarget = hasOptimized ? Number(row.optimized || 0) : Number(row.baseline || 0);
+              }
+              if (!retirementAtTarget || retirementAtTarget < 0) {
+                const flows: any[] = (profile as any)?.monteCarloSimulation?.retirementSimulation?.results?.yearlyCashFlows
+                  || (profile as any)?.monteCarloSimulation?.retirementSimulation?.yearlyCashFlows
+                  || [];
+                const r = Array.isArray(flows) && flows.length
+                  ? (flows.find((y: any) => Math.floor(y.age || 0) === estateTargetAge) || flows[flows.length - 1])
+                  : null;
+                if (r) retirementAtTarget = Number(r.portfolioValue || r.portfolioBalance || 0) || 0;
+              }
+            } catch {}
+
+            // 3) Mirror Overview baseline/overlay construction
+            const projectedEstateValue = Math.max(0, retirementAtTarget + realEstateAtDeath);
+            const baselineRetirement = retirementAtTarget;
+            const rothRetirement = retirementWith; // engine with-conversion retirement sum at target
+            const baseEstateValueRoth = Math.max(0, projectedEstateValue - baselineRetirement + rothRetirement);
+
+            // Use the same baseline composition as Overview (from profile), keep illiquid constant
+            const profileComposition = buildAssetCompositionFromProfile(profile || {});
+            const overlayComposition = {
+              taxable: Math.max(0, (convAtTarget?.taxableBalance || 0) + (convAtTarget?.savingsBalance || 0)),
+              taxDeferred: Math.max(0, convAtTarget?.traditionalBalance || 0),
+              roth: Math.max(0, convAtTarget?.rothBalance || 0),
+              illiquid: Math.max(0, profileComposition.illiquid || 0),
+            };
+
+            const baselineSummary = calculateEstateProjection({
+              baseEstateValue: projectedEstateValue,
+              assetComposition: profileComposition,
+              assumptions: { projectedDeathAge: estateTargetAge, appreciationRate: 0 },
+              profile,
+            });
+
+            const withSummary = calculateEstateProjection({
+              baseEstateValue: baseEstateValueRoth,
+              assetComposition: overlayComposition,
+              assumptions: { projectedDeathAge: estateTargetAge, appreciationRate: 0 },
+              profile,
+            });
+
+            const baselineAfterHeir = Math.max(0, baselineSummary.heirTaxEstimate.netAfterIncomeTax);
+            const withAfterHeir = Math.max(0, withSummary.heirTaxEstimate.netAfterIncomeTax);
+            summaryEstateIncrease = withAfterHeir - baselineAfterHeir;
+
+            // Also update transformed result projections so UI tiles that derive differences from them align
+            if (resultsOut && resultsOut.baselineScenario && resultsOut.baselineScenario.projections) {
+              resultsOut.baselineScenario.projections.afterTaxEstateValueAt85 = baselineAfterHeir;
+            }
+            if (resultsOut && Array.isArray(resultsOut.strategies) && resultsOut.strategies[0]?.projections) {
+              resultsOut.strategies[0].projections.afterTaxEstateValueAt85 = withAfterHeir;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[GET /api/roth-conversion/analysis] Could not recompute estate overlay at 93:', (e as any)?.message || e);
+      }
+
       res.json({
         hasAnalysis: true,
         calculatedAt: analysisData.calculatedAt,
@@ -8926,17 +9172,173 @@ Response format:
         summary: {
           lifetimeTaxSavings: analysisData.lifetimeTaxSavings,
           totalConversions: analysisData.totalConversions,
-          estateValueIncrease: analysisData.estateValueIncrease,
+          estateValueIncrease: summaryEstateIncrease,
           conversionYears: analysisData.conversionYears
         },
         // Maintain existing client contract: primary 'results' preferred for transformed UI payload
-        results: analysisData.transformedResult || analysisData.results,
-        // NEW: Always include raw engine results for advanced consumers (e.g., estate overlay)
+        results: resultsOut,
+        // Always include raw engine results for advanced consumers (e.g., estate overlay)
         rawResults: analysisData.results
       });
     } catch (error) {
       console.error('Error retrieving Roth conversion analysis:', error);
       res.status(500).json({ error: 'Failed to retrieve Roth conversion analysis' });
+    }
+  });
+
+  // Debug endpoint: compute after-tax estate delta at age 93 using the exact
+  // Estate Planning New approach (baseline from profile MC + real estate; overlay from Roth engine).
+  app.get("/api/roth-conversion/analysis-debug", async (req, res) => {
+    try {
+      if (!req.isAuthenticated()) return res.sendStatus(401);
+      const userId = req.user!.id;
+
+      const profile = await storage.getFinancialProfile(userId);
+      const estatePlan = await storage.getEstatePlan(userId);
+      const calculations = profile?.calculations as any;
+      const saved = calculations?.rothConversionAnalysis;
+      if (!saved?.results?.withConversionProjection || !saved?.results?.withoutConversionProjection) {
+        return res.status(404).json({ error: "No saved Roth analysis raw projections" });
+      }
+
+      const raw = saved.results;
+      const getAge = (iso?: string) => {
+        try { if (!iso) return undefined; const d = new Date(iso); if (isNaN(d.getTime())) return undefined; return Math.max(0, Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24 * 365.25))); } catch { return undefined; }
+      };
+      const currentAge = (profile as any)?.currentAge ?? getAge((profile as any)?.dateOfBirth) ?? 55;
+      const spouseAge = (profile as any)?.spouseCurrentAge ?? getAge((profile as any)?.spouseDateOfBirth);
+      const elderAge = typeof spouseAge === 'number' ? Math.max(currentAge, spouseAge) : currentAge;
+
+      const impact: any = (profile as any)?.retirementPlanningData?.impactOnPortfolioBalance;
+      let retirementAt93 = 0; const optimized = Boolean((profile as any)?.optimizationVariables?.optimizedScore);
+      if (impact?.projectionData && Array.isArray(impact.projectionData)) {
+        const row = impact.projectionData.find((r: any) => Math.floor(r.age) === 93);
+        if (row) retirementAt93 = optimized ? Number(row.optimized || 0) : Number(row.baseline || 0);
+      }
+      if (!retirementAt93 || retirementAt93 < 0) {
+        const flows: any[] = (profile as any)?.monteCarloSimulation?.retirementSimulation?.results?.yearlyCashFlows
+          || (profile as any)?.monteCarloSimulation?.retirementSimulation?.yearlyCashFlows || [];
+        const r = Array.isArray(flows) && flows.length ? (flows.find((y: any) => Math.floor(y.age || 0) === 93) || flows[flows.length - 1]) : null;
+        if (r) retirementAt93 = Number(r.portfolioValue || r.portfolioBalance || 0) || 0;
+      }
+
+      const primaryMV = Number((profile as any)?.primaryResidence?.marketValue || 0);
+      const additionalMV = Array.isArray((profile as any)?.additionalProperties)
+        ? (profile as any).additionalProperties.reduce((s: number, p: any) => s + Number(p?.marketValue || 0), 0)
+        : 0;
+      const yearsTo93 = Math.max(0, 93 - elderAge);
+      const realEstateAt93 = Math.round(Math.max(0, primaryMV + additionalMV) * Math.pow(1.03, yearsTo93));
+      const baseEstateValue = Math.max(0, retirementAt93 + realEstateAt93);
+
+      const pickRowAtTarget = (arr: any[]) => Array.isArray(arr) && arr.length ? (
+        arr.find((r: any) => r.year === (new Date().getFullYear() + yearsTo93)) ||
+        arr.slice().reverse().find((r: any) => r.year <= (new Date().getFullYear() + yearsTo93)) ||
+        arr[arr.length - 1]
+      ) : null;
+
+      const convAtTarget = pickRowAtTarget(raw.withConversionProjection);
+      if (!convAtTarget) return res.status(400).json({ error: 'No with-conversion row at death year' });
+
+      const traditional = Math.max(0, Number(convAtTarget?.traditionalBalance || 0));
+      const rothBal = Math.max(0, Number(convAtTarget?.rothBalance || 0));
+      const taxable = Math.max(0, Number(convAtTarget?.taxableBalance || 0));
+      const savings = Math.max(0, Number(convAtTarget?.savingsBalance || 0));
+      const rothRetirement = traditional + rothBal + taxable + savings;
+
+      const profileComposition = buildAssetCompositionFromProfile(profile || {});
+      const overlayComposition = {
+        taxable: taxable + savings,
+        taxDeferred: traditional,
+        roth: rothBal,
+        illiquid: Math.max(0, profileComposition.illiquid || 0),
+      };
+
+      // Extract strategies/assumptions minimally from estatePlan
+      const extractStrategies = (plan: any, prof: any) => {
+        try {
+          if (!plan) { const fromIntake = Number(prof?.legacyGoal || 0) || undefined; return fromIntake && fromIntake > 0 ? { charitableBequest: fromIntake } : {}; }
+          const trustStrategies = Array.isArray(plan.trustStrategies) ? plan.trustStrategies : [];
+          const trustFunding = trustStrategies.map((s: any) => ({ label: s?.name || s?.type || 'Trust Strategy', amount: Number(s?.fundingAmount || s?.amount || 0) })).filter((i: any) => Number.isFinite(i.amount) && i.amount > 0);
+          const gifting = plan.analysisResults?.gifting || {};
+          const insurance = plan.analysisResults?.insurance || {};
+          const charitable = plan.charitableGifts || plan.analysisResults?.charitable || {};
+          const fromPlan = Number(charitable?.plannedTotal || charitable?.amount || charitable?.bequestAmount || 0) || undefined;
+          const fromIntake = Number(prof?.legacyGoal || 0) || undefined;
+          const resolvedCharity = (fromPlan && fromPlan > 0) ? fromPlan : (fromIntake && fromIntake > 0 ? fromIntake : undefined);
+          return {
+            lifetimeGifts: Number(gifting?.lifetimeGifts || plan?.lifetimeGiftAmount || 0) || undefined,
+            annualGiftAmount: Number(gifting?.annualGiftAmount || plan?.annualGiftAmount || 0) || undefined,
+            trustFunding: trustFunding.length ? trustFunding : undefined,
+            charitableBequest: resolvedCharity,
+            ilitDeathBenefit: Number(insurance?.ilitDeathBenefit || insurance?.deathBenefit || 0) || undefined,
+            bypassTrust: Boolean(plan?.analysisResults?.strategies?.bypassTrust || trustStrategies.some((st: any) => String(st?.type || '').toLowerCase().includes('bypass'))),
+          } as any;
+        } catch { return {} as any; }
+      };
+      const extractAssumptions = (plan: any, prof: any) => {
+        try {
+          const assumptions = plan?.analysisResults?.assumptions || {};
+          return {
+            projectedDeathAge: 93,
+            federalExemptionOverride: Number(assumptions?.federalExemption || plan?.federalExemptionUsed || 0) || undefined,
+            stateOverride: assumptions?.stateOverride || prof?.estatePlanningState || undefined,
+            portability: assumptions?.portability ?? undefined,
+            dsueAmount: Number(assumptions?.dsueAmount || 0) || undefined,
+            liquidityTargetPercent: Number(assumptions?.liquidityTarget || 110) || undefined,
+            appreciationRate: 0,
+            assumedHeirIncomeTaxRate: Number(assumptions?.heirIncomeTaxRate || 0) || undefined,
+            currentAge,
+          } as any;
+        } catch { return { projectedDeathAge: 93, currentAge, appreciationRate: 0 } as any; }
+      };
+
+      const strategies = extractStrategies(estatePlan, profile);
+      const assumptions = extractAssumptions(estatePlan, profile);
+
+      const baselineSummary = calculateEstateProjection({
+        baseEstateValue,
+        assetComposition: profileComposition,
+        strategies,
+        assumptions,
+        profile,
+      });
+
+      const baseEstateValueRoth = Math.max(0, baseEstateValue - retirementAt93 + rothRetirement);
+      const withSummary = calculateEstateProjection({
+        baseEstateValue: baseEstateValueRoth,
+        assetComposition: overlayComposition,
+        strategies,
+        assumptions,
+        profile,
+      });
+
+      const baselineAfterHeir = Math.max(0, baselineSummary.heirTaxEstimate.netAfterIncomeTax);
+      const withAfterHeir = Math.max(0, withSummary.heirTaxEstimate.netAfterIncomeTax);
+      const delta = withAfterHeir - baselineAfterHeir;
+
+      res.json({
+        baselineAfterHeir,
+        withAfterHeir,
+        delta,
+        pieces: {
+          retirementAt93,
+          realEstateAt93,
+          baseEstateValue,
+          rothRetirementAt93: rothRetirement,
+          baseEstateValueRoth,
+          compositionBaseline: profileComposition,
+          compositionOverlay: overlayComposition,
+          strategies,
+          assumptions,
+        },
+        serverSummaryEstateIncrease: saved?.estateValueIncrease,
+        tileValues: {
+          baselineTile: saved?.transformedResult?.baselineScenario?.projections?.afterTaxEstateValueAt85,
+          withTile: saved?.transformedResult?.strategies?.[0]?.projections?.afterTaxEstateValueAt85,
+        }
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: 'Debug calc failed', message: e?.message || String(e) });
     }
   });
 

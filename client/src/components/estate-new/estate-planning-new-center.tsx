@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEstatePlanningNew } from "@/hooks/useEstatePlanningNew";
+import { estatePlanningService } from "@/services/estate-planning.service";
 import { calculateEstateProjection, EstateStrategyInputs, EstateAssumptionInputs } from "@/lib/estate-new/analysis";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -159,6 +160,7 @@ export function EstatePlanningNewCenter() {
   const queryClient = useQueryClient();
   const {
     profile,
+    estatePlan,
     documents,
     beneficiaries,
     scenarios,
@@ -179,6 +181,14 @@ export function EstatePlanningNewCenter() {
   const [localStrategies, setLocalStrategies] = useState<EstateStrategyInputs>(strategies);
   const [localAssumptions, setLocalAssumptions] = useState<EstateAssumptionInputs>(assumptions);
   const [includeRoth, setIncludeRoth] = useState(false);
+
+  // Initialize toggle from persisted estate plan preferences if available
+  useEffect(() => {
+    const persisted = (estatePlan as any)?.analysisResults?.estateNew?.includeRoth;
+    if (typeof persisted === "boolean") {
+      setIncludeRoth(persisted);
+    }
+  }, [(estatePlan as any)?.id]);
 
   useEffect(() => {
     setLocalStrategies((prev) => ({ ...prev, ...strategies }));
@@ -228,30 +238,44 @@ export function EstatePlanningNewCenter() {
     }
   });
 
+  // If toggle is on but no analysis is present, auto-run the Roth analysis
+  useEffect(() => {
+    if (includeRoth && !rothLoading && !rothAnalysis && !runRothAnalysisMutation.isPending) {
+      runRothAnalysisMutation.mutate();
+    }
+  }, [includeRoth, rothLoading, rothAnalysis, runRothAnalysisMutation.isPending]);
+
   // Build estate overlay using Roth engine balances at projected death age
   const withRothSummary = useMemo(() => {
-    if (!summary || !rothAnalysis || !rothAnalysis.rawResults) return null;
-    const raw = rothAnalysis.rawResults;
-    const deathAge = Number(summary.assumptions?.deathAge || 0);
-    const currentAge = Number(summary.assumptions?.currentAge || 0);
-    if (!Number.isFinite(deathAge) || !Number.isFinite(currentAge) || deathAge <= currentAge) return null;
-    const yearsUntilDeath = Math.max(0, Math.floor(deathAge - currentAge));
+    // Only compute when toggle is on and baseline summary exists
+    if (!includeRoth || !summary) return null;
+
+    // Pull Roth engine results (support both shapes)
+    const raw = (rothAnalysis as any)?.rawResults || (rothAnalysis as any)?.results;
+    const withProj = raw?.withConversionProjection;
+    if (!Array.isArray(withProj) || withProj.length === 0) return null;
+
+    // Determine death year from baseline assumptions
+    const deathAge = Number(summary.assumptions?.deathAge ?? 93);
+    const currentAgeAssumed = Number(summary.assumptions?.currentAge ?? 0);
+    const yearsUntilDeath = Math.max(0, Math.floor(deathAge - currentAgeAssumed));
     const targetYear = new Date().getFullYear() + yearsUntilDeath;
 
-    const pickYear = (arr: any[]) => {
-      if (!Array.isArray(arr) || arr.length === 0) return null;
-      let y = arr.find((r) => r.year === targetYear) || arr.slice().reverse().find((r) => r.year <= targetYear) || arr[arr.length - 1];
-      return y || null;
-    };
+    // Find the Roth projection row at (or nearest below) death year
+    const deathRow =
+      withProj.find((r: any) => r.year === targetYear) ||
+      withProj.slice().reverse().find((r: any) => r.year <= targetYear) ||
+      withProj[withProj.length - 1];
 
-    const withConvYear = pickYear(raw.withConversionProjection || []);
-    if (!withConvYear) return null;
+    if (!deathRow) return null;
 
-    const traditional = Math.max(0, Number(withConvYear.traditionalBalance || 0));
-    const rothBal = Math.max(0, Number(withConvYear.rothBalance || 0));
-    const taxable = Math.max(0, Number(withConvYear.taxableBalance || 0));
-    const savings = Math.max(0, Number(withConvYear.savingsBalance || 0));
+    // Balances at death (Roth engine)
+    const traditional = Math.max(0, Number(deathRow.traditionalBalance || 0));
+    const rothBal = Math.max(0, Number(deathRow.rothBalance || 0));
+    const taxable = Math.max(0, Number(deathRow.taxableBalance || 0));
+    const savings = Math.max(0, Number(deathRow.savingsBalance || 0));
 
+    // Overlay composition used by estate projection (keep illiquid from current composition)
     const overlayComposition = {
       taxable: taxable + savings,
       taxDeferred: traditional,
@@ -259,10 +283,18 @@ export function EstatePlanningNewCenter() {
       illiquid: Math.max(0, Number((assetComposition as any)?.illiquid || 0)),
     } as any;
 
-    const base = summary.projectedEstateValue;
+    // Replace baseline retirement assets with Roth retirement balances for base estate value
+    const baselineRetirement = Math.max(0, Number(retirementAt93 || 0));
+    const rothRetirement = traditional + rothBal + taxable + savings;
+
+    const baseEstateValueRoth = Math.max(
+      0,
+      Number(summary.projectedEstateValue || 0) - baselineRetirement + rothRetirement
+    );
+
     try {
       return calculateEstateProjection({
-        baseEstateValue: base,
+        baseEstateValue: baseEstateValueRoth,
         assetComposition: overlayComposition,
         strategies: localStrategies,
         assumptions: localAssumptions,
@@ -271,9 +303,32 @@ export function EstatePlanningNewCenter() {
     } catch {
       return null;
     }
-  }, [summary, rothAnalysis, localStrategies, localAssumptions, profile]);
+  }, [
+    includeRoth,
+    summary,
+    rothAnalysis,
+    retirementAt93,
+    assetComposition,
+    localStrategies,
+    localAssumptions,
+    profile,
+  ]);
 
   const activeSummary = includeRoth && withRothSummary ? withRothSummary : summary;
+
+  // Persist all displayed state and computed results for Estate Planning New
+  const saveEstateNewMutation = useMutation({
+    mutationFn: async (updates: any) => {
+      if (!estatePlan?.id) return null;
+      return estatePlanningService.updateEstatePlan(estatePlan.id, updates);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
+    }
+  });
+
+  // Build and save a snapshot whenever relevant inputs/results change (debounced)
+  // Note: placed after compositionPieData declaration to avoid TDZ issues.
 
   const taxPieData = activeSummary
     ? [
@@ -316,6 +371,107 @@ export function EstatePlanningNewCenter() {
     ];
   }, [activeSummary, includeRoth, rothAnalysis, retirementAt93, projectedRealEstate]);
 
+  // Build and save a snapshot whenever relevant inputs/results change (debounced)
+  useEffect(() => {
+    if (!estatePlan?.id || !activeSummary) return;
+    const timeout = setTimeout(() => {
+      try {
+        // Map local strategies to top-level fields for better persistence compatibility
+        const trustStrategies = Array.isArray(localStrategies.trustFunding)
+          ? localStrategies.trustFunding
+              .filter((t) => (Number(t?.amount) || 0) > 0)
+              .map((t) => ({ type: "funding", name: t.label || "Trust Funding", fundingAmount: Number(t.amount) }))
+          : undefined;
+
+        const charitableGifts = (Number(localStrategies.charitableBequest || 0) > 0)
+          ? { plannedTotal: Number(localStrategies.charitableBequest || 0), source: "estate-new" }
+          : undefined;
+
+        // Build recommendations snapshot from current summary
+        const recommendationsList = activeSummary ? [
+          `Projected estate value at death: ${formatCurrency(activeSummary.projectedEstateValue)}`,
+          `Estimated estate taxes: ${formatCurrency(activeSummary.totalTax)} (${formatPercent(activeSummary.effectiveTaxRate)})`,
+          `Net inheritance for beneficiaries: ${formatCurrency(activeSummary.netToHeirs)}`,
+          activeSummary.liquidity.gap > 0
+            ? `Liquidity shortfall of ${formatCurrency(activeSummary.liquidity.gap)} detected for estate settlement.`
+            : "Liquidity target met for projected estate obligations.",
+          activeSummary.heirTaxEstimate.taxDeferredBalance > 0
+            ? `Heirs may owe approximately ${formatCurrency(activeSummary.heirTaxEstimate.projectedIncomeTax)} in income taxes on inherited tax-deferred accounts.`
+            : "Heirs are positioned for tax-efficient inheritance (limited tax-deferred balances).",
+        ] : [];
+
+        // Persist both baseline and withRoth summaries for auditability
+        const estateNew = {
+          includeRoth,
+          strategies: localStrategies,
+          assumptions: localAssumptions,
+          summaries: {
+            baseline: summary || null,
+            withRoth: withRothSummary || null,
+          },
+          charts: {
+            composition: compositionPieData,
+            distribution: taxPieData,
+          },
+          recommendations: recommendationsList,
+          updatedAt: new Date().toISOString(),
+        };
+
+        const mergedAnalysis = {
+          ...(estatePlan as any)?.analysisResults,
+          estateNew,
+          // Keep a simple latest summary at root for easier server-side access
+          assumptions: {
+            ...(estatePlan as any)?.analysisResults?.assumptions,
+            deathAge: activeSummary.assumptions?.deathAge,
+            longevityAge: activeSummary.assumptions?.deathAge,
+            currentAge: activeSummary.assumptions?.currentAge,
+            federalExemption: activeSummary.assumptions?.federalExemption,
+            stateExemption: activeSummary.assumptions?.stateExemption,
+            liquidityTarget: localAssumptions.liquidityTargetPercent,
+            stateOverride: localAssumptions.stateOverride,
+            heirIncomeTaxRate: localAssumptions.assumedHeirIncomeTaxRate,
+            portability: localAssumptions.portability,
+            dsueAmount: localAssumptions.dsueAmount,
+          },
+          gifting: {
+            ...(estatePlan as any)?.analysisResults?.gifting,
+            lifetimeGifts: localStrategies.lifetimeGifts,
+            annualGiftAmount: localStrategies.annualGiftAmount,
+          },
+          insurance: {
+            ...(estatePlan as any)?.analysisResults?.insurance,
+            ilitDeathBenefit: localStrategies.ilitDeathBenefit,
+          },
+          charitable: charitableGifts || (estatePlan as any)?.analysisResults?.charitable,
+          latestSummary: activeSummary,
+        };
+
+        saveEstateNewMutation.mutate({
+          // Update top-level helpful fields
+          trustStrategies,
+          charitableGifts,
+          // Persist detailed analysis
+          analysisResults: mergedAnalysis,
+        });
+      } catch (e) {
+        // swallow; this is a best-effort background save
+      }
+    }, 800);
+
+    return () => clearTimeout(timeout);
+  }, [
+    estatePlan?.id,
+    includeRoth,
+    JSON.stringify(localStrategies),
+    JSON.stringify(localAssumptions),
+    JSON.stringify(activeSummary),
+    JSON.stringify(summary),
+    JSON.stringify(withRothSummary),
+    JSON.stringify(taxPieData),
+    JSON.stringify(compositionPieData),
+  ]);
+
   const taxBarData = activeSummary
     ? [
         {
@@ -346,7 +502,8 @@ export function EstatePlanningNewCenter() {
     setLocalStrategies((prev) => {
       const next = { ...prev } as EstateStrategyInputs;
       if (key === "trustFunding") {
-        next.trustFunding = value > 0 ? [{ label: "Modeled Trust Funding", amount: value }] : undefined;
+        // Important: send an explicit empty array when clearing to ensure persistence clears server state
+        next.trustFunding = value > 0 ? [{ label: "Modeled Trust Funding", amount: value }] : [];
       } else {
         (next as any)[key] = value > 0 ? value : undefined;
       }
@@ -408,8 +565,15 @@ export function EstatePlanningNewCenter() {
                 (profile as any)?.optimizationVariables?.optimizedScore
               ) ? 'Optimized Plan' : 'Baseline Plan'}
             </Badge>
-            <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-gray-900/40 border border-gray-700">
-              <span className="text-xs text-gray-300">Include Roth Conversions</span>
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all
+                ${includeRoth
+                  ? "bg-purple-600/15 border-purple-400/40 ring-2 ring-purple-400/30 shadow-[0_0_20px_rgba(168,85,247,0.25)]"
+                  : "bg-gray-900/40 border-gray-700 hover:border-purple-500/40"}`}
+              title="Toggle to overlay Roth conversion impact across the estate analysis"
+            >
+              <Sparkles className={`h-4 w-4 ${includeRoth ? "text-purple-300" : "text-gray-400"}`} />
+              <span className={`text-xs font-medium ${includeRoth ? "text-purple-200" : "text-gray-300"}`}>Include Roth Conversions</span>
               <Switch checked={includeRoth} onCheckedChange={setIncludeRoth} />
             </div>
             <Button

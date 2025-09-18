@@ -2510,11 +2510,11 @@ export function Dashboard() {
             
             {/* Roth Conversion Center Teaser */}
             <ValueTeaserCard
-              title="Roth Conversion Savings"
-              value="12%"
-              description="Average lifetime tax savings through strategic Roth conversions and tax-efficient planning"
+              title="Roth Conversion Potential"
+              value="2×"
+              description="Potential to double your ending estate value with strategic Roth conversions. Results vary based on your situation."
               linkTo="/tax-strategies"
-              linkText="Start Saving on Taxes"
+              linkText="Explore Roth Conversions"
               icon="dollar"
               variant="accent"
             />

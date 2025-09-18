@@ -28,7 +28,11 @@ import {
   XCircle,
   RefreshCw
 } from "lucide-react";
+// Extra icon for the new After-Tax Estate tile
+import { Scale } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { estatePlanningService } from "@/services/estate-planning.service";
+import { calculateEstateProjection, buildAssetCompositionFromProfile } from "@/lib/estate-new/analysis";
 import { TaxOverview } from "./tax-overview";
 import { SelfEmployedStrategiesTab } from "./self-employed-strategies-tab";
 import { TaxGamification, useGamification } from "./gamification/gamification-wrapper";
@@ -198,6 +202,195 @@ function TaxReductionCenterContent() {
   
   // Store previous user ID to detect user changes
   const [previousUserId, setPreviousUserId] = useState<number | null>(null);
+
+  // Fetch profile and estate plan for consistent estate math with Overview
+  const { data: financialProfile } = useQuery({
+    queryKey: ["/api/financial-profile", user?.id],
+    queryFn: async () => {
+      const res = await fetch("/api/financial-profile", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch profile");
+      return res.json();
+    },
+    enabled: !!user?.id,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: estatePlan } = useQuery({
+    queryKey: ["estate-plan", user?.id],
+    queryFn: () => estatePlanningService.getEstatePlan(),
+    enabled: !!user?.id,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Helpers to replicate Overview’s 93 overlay
+  const getAgeFromDOB = (iso?: string): number | undefined => {
+    try {
+      if (!iso) return undefined;
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return undefined;
+      const diff = Date.now() - d.getTime();
+      return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)));
+    } catch { return undefined; }
+  };
+
+  const currentAge = (() => {
+    const p: any = financialProfile || {};
+    return (
+      (p?.currentAge as number | undefined) ??
+      getAgeFromDOB(p?.dateOfBirth) ??
+      55
+    );
+  })();
+
+  const spouseAge = (() => {
+    const p: any = financialProfile || {};
+    return (
+      p?.spouseCurrentAge ??
+      getAgeFromDOB(p?.spouseDateOfBirth)
+    );
+  })();
+
+  const elderAge = (() => {
+    if (typeof spouseAge === 'number') return Math.max(currentAge || 0, spouseAge);
+    return currentAge || 0;
+  })();
+
+  const retirementAt93 = (() => {
+    const p: any = financialProfile || {};
+    const impact = p?.retirementPlanningData?.impactOnPortfolioBalance;
+    if (impact?.projectionData && Array.isArray(impact.projectionData)) {
+      const row = impact.projectionData.find((r: any) => Math.floor(r.age) === 93);
+      if (row) {
+        const hasOptimized = Boolean(p?.optimizationVariables?.optimizedScore);
+        const val = hasOptimized ? (Number(row.optimized) || 0) : (Number(row.baseline) || 0);
+        if (val > 0) return val;
+      }
+    }
+    const flows = p?.monteCarloSimulation?.retirementSimulation?.results?.yearlyCashFlows
+      || p?.monteCarloSimulation?.retirementSimulation?.yearlyCashFlows;
+    if (Array.isArray(flows) && flows.length) {
+      const r = flows.find((y: any) => Math.floor(y.age || 0) === 93) || flows[flows.length - 1];
+      const val = Number(r?.portfolioValue || r?.portfolioBalance || 0);
+      if (val >= 0) return val;
+    }
+    return 0;
+  })();
+
+  const projectedRealEstateAt93 = (() => {
+    const p: any = financialProfile || {};
+    const primary = Number(p?.primaryResidence?.marketValue || 0);
+    const additional = Array.isArray(p?.additionalProperties)
+      ? p.additionalProperties.reduce((sum: number, ap: any) => sum + Number(ap?.marketValue || 0), 0)
+      : 0;
+    const currentRE = Math.max(0, primary + additional);
+    const yearsTo93 = Math.max(0, 93 - (elderAge || 0));
+    const factor = Math.pow(1.03, yearsTo93);
+    return Math.round(currentRE * factor);
+  })();
+
+  // Mirror Estate Planning New helpers (lightweight copies)
+  const extractStrategiesFromPlan = (estatePlanObj: any, profileObj?: any) => {
+    try {
+      if (!estatePlanObj) {
+        const fromIntake = Number(profileObj?.legacyGoal || 0) || undefined;
+        return fromIntake && fromIntake > 0 ? { charitableBequest: fromIntake } : {};
+      }
+      const trustStrategies = Array.isArray(estatePlanObj.trustStrategies) ? estatePlanObj.trustStrategies : [];
+      const trustFunding = trustStrategies.map((s: any) => ({
+        label: s?.name || s?.type || "Trust Strategy",
+        amount: Number(s?.fundingAmount || s?.amount || 0),
+      })).filter((i: any) => Number.isFinite(i.amount) && i.amount > 0);
+      const gifting = estatePlanObj.analysisResults?.gifting || {};
+      const insurance = estatePlanObj.analysisResults?.insurance || {};
+      const charitable = estatePlanObj.charitableGifts || estatePlanObj.analysisResults?.charitable || {};
+      const fromPlan = Number(charitable?.plannedTotal || charitable?.amount || charitable?.bequestAmount || 0) || undefined;
+      const fromIntake = Number(profileObj?.legacyGoal || 0) || undefined;
+      const resolvedCharity = (fromPlan && fromPlan > 0) ? fromPlan : (fromIntake && fromIntake > 0 ? fromIntake : undefined);
+      return {
+        lifetimeGifts: Number(gifting?.lifetimeGifts || estatePlanObj?.lifetimeGiftAmount || 0) || undefined,
+        annualGiftAmount: Number(gifting?.annualGiftAmount || estatePlanObj?.annualGiftAmount || 0) || undefined,
+        trustFunding: trustFunding.length ? trustFunding : undefined,
+        charitableBequest: resolvedCharity,
+        ilitDeathBenefit: Number(insurance?.ilitDeathBenefit || insurance?.deathBenefit || 0) || undefined,
+        bypassTrust: Boolean(
+          estatePlanObj?.analysisResults?.strategies?.bypassTrust ||
+          trustStrategies.some((st: any) => String(st?.type || "").toLowerCase().includes("bypass"))
+        ),
+      } as any;
+    } catch { return {} as any; }
+  };
+
+  const extractAssumptionsFromPlan = (estatePlanObj: any, profileObj: any, assumedLongevity: number | undefined) => {
+    try {
+      const assumptions = estatePlanObj?.analysisResults?.assumptions || {};
+      const projectedDeathAge = Number(
+        assumptions?.deathAge || assumptions?.longevityAge || profileObj?.longevityAge || assumedLongevity || 0
+      );
+      return {
+        projectedDeathAge: projectedDeathAge > 0 ? projectedDeathAge : 93,
+        federalExemptionOverride: Number(assumptions?.federalExemption || estatePlanObj?.federalExemptionUsed || 0) || undefined,
+        stateOverride: assumptions?.stateOverride || profileObj?.estatePlanningState || undefined,
+        portability: assumptions?.portability ?? undefined,
+        dsueAmount: Number(assumptions?.dsueAmount || 0) || undefined,
+        liquidityTargetPercent: Number(assumptions?.liquidityTarget || 110) || undefined,
+        appreciationRate: Number(assumptions?.appreciationRate || profileObj?.estateAppreciationRate || 0) || undefined,
+        assumedHeirIncomeTaxRate: Number(assumptions?.heirIncomeTaxRate || 0) || undefined,
+        currentAge: Number(profileObj?.currentAge || 0) || undefined,
+      } as any;
+    } catch { return { projectedDeathAge: 93 } as any; }
+  };
+
+  const computeAfterTaxEstateDeltaAt93 = (): number | null => {
+    try {
+      if (!financialProfile || !storedRothAnalysis?.rawResults) return null;
+      const profile: any = financialProfile;
+      const assetComposition = buildAssetCompositionFromProfile(profile || {});
+      const baseEstateValue = Math.max(0, Number(retirementAt93 || 0)) + Math.max(0, Number(projectedRealEstateAt93 || 0));
+      const strategies = extractStrategiesFromPlan(estatePlan, profile);
+      const assumptions = extractAssumptionsFromPlan(estatePlan, profile, profile?.monteCarloSimulation?.retirementConfidenceBands?.meta?.longevityAge);
+      // Force to 93 to mirror Overview UI
+      (assumptions as any).projectedDeathAge = 93;
+      (assumptions as any).appreciationRate = 0;
+
+      const baseline = calculateEstateProjection({
+        baseEstateValue,
+        assetComposition,
+        strategies,
+        assumptions,
+        profile,
+      });
+
+      const withProj: any[] = storedRothAnalysis.rawResults.withConversionProjection || [];
+      if (!Array.isArray(withProj) || withProj.length === 0) return null;
+      const yearsUntilDeath = Math.max(0, 93 - (elderAge || 0));
+      const targetYear = new Date().getFullYear() + yearsUntilDeath;
+      const deathRow = withProj.find((r: any) => r.year === targetYear) || withProj.slice().reverse().find((r: any) => r.year <= targetYear) || withProj[withProj.length - 1];
+      if (!deathRow) return null;
+      const traditional = Math.max(0, Number(deathRow.traditionalBalance || 0));
+      const rothBal = Math.max(0, Number(deathRow.rothBalance || 0));
+      const taxable = Math.max(0, Number(deathRow.taxableBalance || 0));
+      const savings = Math.max(0, Number(deathRow.savingsBalance || 0));
+      const overlayComposition = {
+        taxable: taxable + savings,
+        taxDeferred: traditional,
+        roth: rothBal,
+        illiquid: Math.max(0, Number((assetComposition as any)?.illiquid || 0)),
+      } as any;
+      const baselineRetirement = Math.max(0, Number(retirementAt93 || 0));
+      const rothRetirement = traditional + rothBal + taxable + savings;
+      const baseEstateValueRoth = Math.max(0, baseEstateValue - baselineRetirement + rothRetirement);
+      const withSummary = calculateEstateProjection({
+        baseEstateValue: baseEstateValueRoth,
+        assetComposition: overlayComposition,
+        strategies,
+        assumptions,
+        profile,
+      });
+      return Math.max(0, withSummary.heirTaxEstimate.netAfterIncomeTax - baseline.heirTaxEstimate.netAfterIncomeTax);
+    } catch {
+      return null;
+    }
+  };
 
   // Check for existing analysis on component mount and when user changes
   useEffect(() => {
@@ -1424,8 +1617,25 @@ function TaxReductionCenterContent() {
                     
                     const rating = getRating();
                     
+                    // 1) If Estate Planning New has persisted summaries, prefer their exact Net-to-Heirs delta
+                    const persistedBaseline = (estatePlan as any)?.analysisResults?.estateNew?.summaries?.baseline;
+                    const persistedWith = (estatePlan as any)?.analysisResults?.estateNew?.summaries?.withRoth;
+                    const persistedDelta = (persistedBaseline && persistedWith)
+                      ? Math.max(0, Number(persistedWith?.heirTaxEstimate?.netAfterIncomeTax || persistedWith?.netToHeirs || 0) - Number(persistedBaseline?.heirTaxEstimate?.netAfterIncomeTax || persistedBaseline?.netToHeirs || 0))
+                      : null;
+
+                    // 2) Else, compute client-side with Overview algorithm
+                    const clientDelta = persistedDelta == null ? computeAfterTaxEstateDeltaAt93() : null;
+
+                    // 3) Else, fall back to server’s summary
+                    const newAfterTaxEstateDelta = (typeof persistedDelta === 'number' && !Number.isNaN(persistedDelta))
+                      ? persistedDelta
+                      : (typeof clientDelta === 'number' && !Number.isNaN(clientDelta))
+                        ? clientDelta
+                        : (storedRothAnalysis as any)?.summary?.estateValueIncrease;
+
                     return (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
                         {/* Lifetime Tax Savings Tile */}
                         <Card className="bg-gradient-to-r from-green-950 to-green-800 border-2 border-green-400/40 shadow-xl shadow-green-400/20 backdrop-blur-sm">
                           <CardContent className="p-6">
@@ -1464,6 +1674,27 @@ function TaxReductionCenterContent() {
                             </div>
                             <p className="text-sm text-blue-200">
                               Additional after-tax value for heirs with recommended strategy
+                            </p>
+                          </CardContent>
+                        </Card>
+
+                        {/* After‑Tax Estate Value Change (New) */}
+                        <Card className="bg-gradient-to-r from-indigo-950 to-indigo-800 border-2 border-indigo-400/40 shadow-xl shadow-indigo-400/20 backdrop-blur-sm">
+                          <CardContent className="p-6">
+                            <div className="flex items-center justify-between mb-4">
+                              <div className="flex items-center">
+                                <Scale className="h-7 w-7 text-indigo-300 mr-3" />
+                                <h3 className="text-sm font-semibold text-indigo-100">After‑Tax Estate Value Change (New)</h3>
+                              </div>
+                              <Badge className="bg-indigo-950/60 text-indigo-200 border-indigo-400/30 font-medium">
+                                vs No Conversion
+                              </Badge>
+                            </div>
+                            <div className="text-4xl font-bold text-indigo-50 mb-3">
+                              {typeof newAfterTaxEstateDelta === 'number' ? `$${Math.round(newAfterTaxEstateDelta).toLocaleString()}` : '—'}
+                            </div>
+                            <p className="text-sm text-indigo-200">
+                              Net to heirs change after estate + heir income taxes (age 93)
                             </p>
                           </CardContent>
                         </Card>

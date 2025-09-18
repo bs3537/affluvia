@@ -1,5 +1,6 @@
 Affluvia Financial Planning Application
 
+On starting codex cli, Activate the current directory Affluvia as project using serena.
 
 # Repository Guidelines
 
