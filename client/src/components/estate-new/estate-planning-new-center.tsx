@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlertCircle,
   ArrowRight,
@@ -41,7 +42,8 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip as RechartsTooltip
+  Tooltip as RechartsTooltip,
+  Legend
 } from "recharts";
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
@@ -81,6 +83,13 @@ function formatCurrency(value?: number | null, options?: { compact?: boolean; de
     }).format(value);
   }
   return currencyFormatter.format(value);
+}
+
+function formatMillions(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) return "—";
+  const abs = Math.abs(Number(value)) / 1_000_000;
+  const str = abs.toFixed(2);
+  return (Number(value) < 0 ? "-" : "") + "$" + str + "M";
 }
 
 function formatPercent(value?: number | null) {
@@ -483,6 +492,85 @@ export function EstatePlanningNewCenter() {
       ]
     : [];
 
+  const liquidityCoverage =
+    activeSummary
+      ? Math.min(
+          1,
+          (activeSummary.liquidity.available || 0) /
+            Math.max(1, activeSummary.liquidity.required || 0)
+        )
+      : 0;
+
+  const liquidityPieData = activeSummary
+    ? [
+        {
+          name: "Covered",
+          value: Math.min(
+            activeSummary.liquidity.available,
+            activeSummary.liquidity.required
+          ),
+        },
+        {
+          name: "Shortfall",
+          value: Math.max(
+            0,
+            activeSummary.liquidity.required - activeSummary.liquidity.available
+          ),
+        },
+      ]
+    : [];
+
+  const deltas =
+    includeRoth && summary && withRothSummary
+      ? {
+          netToHeirs:
+            (withRothSummary.heirTaxEstimate?.netAfterIncomeTax ??
+              withRothSummary.netToHeirs) -
+            (summary.heirTaxEstimate?.netAfterIncomeTax ?? summary.netToHeirs),
+          totalTax: withRothSummary.totalTax - summary.totalTax,
+          liquidityGap:
+            (withRothSummary.liquidity?.gap ?? 0) -
+            (summary.liquidity?.gap ?? 0),
+        }
+      : null;
+
+  // Build compact waterfall data from active summary
+  type WaterfallRow = { name: string; offset: number; value: number; color: string };
+  const waterfallData: WaterfallRow[] = useMemo(() => {
+    if (!activeSummary) return [];
+    const gross = Math.max(0, Number(activeSummary.projectedEstateValue || 0));
+    const taxable = Math.max(0, Number(activeSummary.projectedTaxableEstate || 0));
+    const deductions = Math.max(0, gross - taxable);
+    const estateTaxes = Math.max(0, Number(activeSummary.totalTax || 0));
+    const heirsIncomeTax = Math.max(0, Number(activeSummary.heirTaxEstimate?.projectedIncomeTax || 0));
+    const netAfterIncome = Math.max(0, Number(activeSummary.heirTaxEstimate?.netAfterIncomeTax || 0));
+
+    let running = gross;
+    const rows: WaterfallRow[] = [];
+
+    // 1) Gross Estate (total bar)
+    rows.push({ name: "Gross Estate", offset: 0, value: running, color: "#a855f7" });
+
+    // 2) Deductions (drop)
+    rows.push({ name: "Deductions", offset: Math.max(0, running - deductions), value: Math.min(deductions, running), color: "#94a3b8" });
+    running = Math.max(0, running - deductions);
+
+    // 3) Estate Taxes (drop)
+    rows.push({ name: "Estate Taxes", offset: Math.max(0, running - estateTaxes), value: Math.min(estateTaxes, running), color: "#f97316" });
+    running = Math.max(0, running - estateTaxes);
+
+    // 4) Heirs' Income Tax (drop)
+    rows.push({ name: "Heirs' Income Tax", offset: Math.max(0, running - heirsIncomeTax), value: Math.min(heirsIncomeTax, running), color: "#22d3ee" });
+    running = Math.max(0, running - heirsIncomeTax);
+
+    // 5) Net to Heirs (total bar)
+    // Use model-provided net when available to avoid rounding drift
+    const final = netAfterIncome > 0 ? netAfterIncome : running;
+    rows.push({ name: "Net to Heirs", offset: 0, value: Math.max(0, final), color: "#10b981" });
+
+    return rows;
+  }, [activeSummary]);
+
   const trustFundingTotal = useMemo(() => {
     return (localStrategies.trustFunding || []).reduce((total, trust) => total + (Number(trust?.amount) || 0), 0);
   }, [localStrategies.trustFunding]);
@@ -659,6 +747,37 @@ export function EstatePlanningNewCenter() {
                   )}
                 </CardHeader>
                 <CardContent className="space-y-6">
+                  {deltas && (
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <Card className="bg-emerald-900/20 border-emerald-700/50">
+                        <CardContent className="p-4">
+                          <div className="text-xs text-emerald-300">Net to heirs (Δ)</div>
+                          <div className="text-lg font-semibold text-white">{formatCurrency(deltas.netToHeirs)}</div>
+                          <div className="text-[11px] text-gray-400">
+                            {deltas.netToHeirs >= 0 ? "Increase" : "Decrease"} vs baseline
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card className="bg-orange-900/20 border-orange-700/50">
+                        <CardContent className="p-4">
+                          <div className="text-xs text-orange-300">Total estate taxes (Δ)</div>
+                          <div className="text-lg font-semibold text-white">{formatCurrency(deltas.totalTax)}</div>
+                          <div className="text-[11px] text-gray-400">
+                            {deltas.totalTax <= 0 ? "Lower taxes" : "Higher taxes"} vs baseline
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card className="bg-red-900/20 border-red-700/50">
+                        <CardContent className="p-4">
+                          <div className="text-xs text-red-300">Liquidity gap (Δ)</div>
+                          <div className="text-lg font-semibold text-white">{formatCurrency(deltas.liquidityGap)}</div>
+                          <div className="text-[11px] text-gray-400">
+                            {deltas.liquidityGap <= 0 ? "Gap reduced" : "Gap increased"} vs baseline
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  )}
                   {isLoading && !activeSummary ? (
                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                       {Array.from({ length: 4 }).map((_, index) => (
@@ -827,15 +946,36 @@ export function EstatePlanningNewCenter() {
                   )}
 
                   {summary && (
-                    <div className="grid gap-4 md:grid-cols-2">
+                    <div className="grid gap-4 md:grid-cols-3">
                       <Card className="bg-gray-950/40 border-gray-800">
                         <CardHeader>
                           <CardTitle className="text-sm font-semibold text-gray-200">Liquidity for settlement</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-2 text-sm text-gray-300">
                           <div className="flex items-center justify-between">
-                            <span>Available liquid assets (incl. Roth)</span>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-gray-300 hover:text-gray-100 cursor-help">Available liquid assets (incl. Roth)</span>
+                                </TooltipTrigger>
+                                <TooltipContent className="bg-gray-800 border-gray-700 text-gray-100 max-w-[320px]">
+                                  Includes taxable, Roth, ILIT, and in‑estate life insurance; excludes earmarked charitable bequests.
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                             <span className="text-white">{formatCurrency(activeSummary.liquidity.available)}</span>
+                          </div>
+
+                          {/* Liquidity breakdown for clarity */}
+                          <div className="flex items-center justify-between">
+                            <span>Gross liquidity</span>
+                            <span className="text-white">
+                              {formatCurrency(Number(activeSummary.liquidity.available || 0) + Number((activeSummary as any).liquidity?.charitableReserve || 0))}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Less: charitable reserve</span>
+                            <span className="text-white">{formatCurrency(Number((activeSummary as any).liquidity?.charitableReserve || 0))}</span>
                           </div>
                           <div className="flex items-center justify-between">
                             <span>Required liquidity ({percentFormatter.format((localAssumptions.liquidityTargetPercent ?? 110) / 100)})</span>
@@ -846,13 +986,6 @@ export function EstatePlanningNewCenter() {
                             <span>Settlement expenses (probate + funeral)</span>
                             <span className="text-white">{formatCurrency(Number((summary as any).liquidity?.settlementExpenses || 0))}</span>
                           </div>
-                          {/* Charitable reserve (earmarked funds not counted toward available liquidity) */}
-                          {((summary as any).liquidity?.charitableReserve || 0) > 0 && (
-                            <div className="flex items-center justify-between">
-                              <span>Charitable reserve (earmarked)</span>
-                            <span className="text-white">{formatCurrency(Number((activeSummary as any).liquidity?.charitableReserve || 0))}</span>
-                            </div>
-                          )}
                           <div className="text-xs text-gray-500">
                             Probate (5%): {formatCurrency(Number((activeSummary as any).liquidity?.probateCosts || 0))} · Funeral: {formatCurrency(Number((activeSummary as any).liquidity?.funeralCost || 0))}
                           </div>
@@ -892,7 +1025,7 @@ export function EstatePlanningNewCenter() {
                         </CardHeader>
                         <CardContent className="h-52">
                           <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={taxBarData}>
+                            <BarChart data={taxBarData} margin={{ top: 4, right: 8, left: 0, bottom: 24 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
                               <XAxis dataKey="name" stroke="#9CA3AF" tick={{ fontSize: 11 }} />
                               <YAxis stroke="#9CA3AF" tick={{ fontSize: 11 }} tickFormatter={(value) => formatCurrency(value, { compact: true })} />
@@ -904,11 +1037,81 @@ export function EstatePlanningNewCenter() {
                                   color: "#E5E7EB",
                                 }}
                               />
-                              <Bar dataKey="Federal" stackId="a" fill="#f97316" radius={[6, 6, 0, 0]} />
-                              <Bar dataKey="State" stackId="a" fill="#fb923c" radius={[6, 6, 0, 0]} />
+                              <Legend
+                                verticalAlign="bottom"
+                                align="center"
+                                iconType="square"
+                                formatter={(value: any) => <span className="text-gray-300 text-xs">{value === "LiquidityGap" ? "Liquidity Gap" : value}</span>}
+                                wrapperStyle={{ paddingTop: 6 }}
+                              />
+                              <Bar dataKey="Federal" stackId="a" fill="#60a5fa" radius={[6, 6, 0, 0]} />
+                              <Bar dataKey="State" stackId="a" fill="#f59e0b" radius={[6, 6, 0, 0]} />
                               <Bar dataKey="LiquidityGap" fill="#ef4444" radius={[6, 6, 0, 0]} />
                             </BarChart>
                           </ResponsiveContainer>
+                        </CardContent>
+                      </Card>
+
+                      <Card className="bg-gray-950/40 border-gray-800">
+                        <CardHeader>
+                          <CardTitle className="text-sm font-semibold text-gray-200">Liquidity coverage</CardTitle>
+                        </CardHeader>
+                        <CardContent className="h-52">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <RechartsPieChart>
+                              <Pie
+                                data={liquidityPieData}
+                                innerRadius={48}
+                                outerRadius={70}
+                                startAngle={90}
+                                endAngle={-270}
+                                paddingAngle={2}
+                                dataKey="value"
+                                labelLine={false}
+                              >
+                                <Cell fill="#10b981" />
+                                <Cell fill="#ef4444" />
+                              </Pie>
+                              <RechartsTooltip
+                                formatter={(value: number, name: string) => [formatCurrency(value), name]}
+                                contentStyle={{ backgroundColor: "#111827", borderColor: "#1f2937", color: "#E5E7EB" }}
+                              />
+                            </RechartsPieChart>
+                          </ResponsiveContainer>
+                          <div className="mt-3 text-xs text-gray-400">
+                            Coverage: {percentFormatter.format(liquidityCoverage)}
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <Card className="bg-gray-950/40 border-gray-800">
+                        <CardHeader>
+                          <CardTitle className="text-sm font-semibold text-gray-200">Estate Waterfall</CardTitle>
+                        </CardHeader>
+                        <CardContent className="h-56">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={waterfallData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                              <XAxis dataKey="name" stroke="#9CA3AF" tick={{ fontSize: 11 }} interval={0} angle={-12} dy={8} />
+                              <YAxis stroke="#9CA3AF" tick={{ fontSize: 11 }} tickFormatter={(v) => formatCurrency(v, { compact: true })} />
+                              <RechartsTooltip
+                                formatter={(value: number, name: string, props: any) => [formatMillions(value), props?.payload?.name]}
+                                contentStyle={{ backgroundColor: "#111827", borderColor: "#1f2937", color: "#E5E7EB" }}
+                                cursor={{ fill: "rgba(31,41,55,0.35)" }}
+                              />
+                              {/* Invisible offset to position each step */}
+                              <Bar dataKey="offset" stackId="a" fill="transparent" isAnimationActive={false} />
+                              {/* Visible step amount with per-bar color */}
+                              <Bar dataKey="value" stackId="a" radius={[6, 6, 0, 0]}>
+                                {waterfallData.map((entry, index) => (
+                                  <Cell key={`wf-${index}`} fill={entry.color} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                          <div className="mt-2 text-[11px] text-gray-500">
+                            Shows progression from gross estate to net to heirs after deductions, estate taxes, and heirs’ income tax.
+                          </div>
                         </CardContent>
                       </Card>
                     </div>
