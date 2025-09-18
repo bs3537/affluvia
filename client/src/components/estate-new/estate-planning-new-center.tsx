@@ -14,6 +14,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
 import {
   AlertCircle,
   ArrowRight,
@@ -167,6 +168,7 @@ const PieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, value }: any) =>
 
 export function EstatePlanningNewCenter() {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const {
     profile,
     estatePlan,
@@ -190,7 +192,9 @@ export function EstatePlanningNewCenter() {
   const [localStrategies, setLocalStrategies] = useState<EstateStrategyInputs>(strategies);
   const [localAssumptions, setLocalAssumptions] = useState<EstateAssumptionInputs>(assumptions);
   const [includeRoth, setIncludeRoth] = useState(false);
+  const isEditingRef = useRef(false);
   const lastEditAtRef = useRef(0);
+  const markEdited = () => { try { lastEditAtRef.current = Date.now(); } catch {} };
 
   // Initialize toggle from persisted estate plan preferences if available
   useEffect(() => {
@@ -201,25 +205,36 @@ export function EstatePlanningNewCenter() {
   }, [(estatePlan as any)?.id]);
 
   useEffect(() => {
-    if (Date.now() - lastEditAtRef.current < 1200) return;
+    if (isEditingRef.current || Date.now() - lastEditAtRef.current < 1200) return;
     setLocalStrategies((prev) => ({ ...prev, ...strategies }));
   }, [strategies]);
 
   useEffect(() => {
-    if (Date.now() - lastEditAtRef.current < 1200) return;
+    if (isEditingRef.current || Date.now() - lastEditAtRef.current < 1200) return;
     setLocalAssumptions((prev) => ({ ...prev, ...assumptions }));
   }, [assumptions]);
+
+  // Manual-calc mode: committed inputs drive calculations; typing in local inputs does not recalc until Calculate is pressed
+  const [committedStrategies, setCommittedStrategies] = useState<EstateStrategyInputs>(strategies);
+  const [committedAssumptions, setCommittedAssumptions] = useState<EstateAssumptionInputs>(assumptions);
+
+  // Keep committed inputs aligned with server when not actively editing
+  useEffect(() => {
+    if (isEditingRef.current || Date.now() - lastEditAtRef.current < 1200) return;
+    setCommittedStrategies(strategies);
+    setCommittedAssumptions(assumptions);
+  }, [strategies, assumptions]);
 
   const recalculatedProjection = useMemo(() => {
     if (!projectedEstateValue || projectedEstateValue <= 0) return null;
     return calculateEstateProjection({
       baseEstateValue: projectedEstateValue,
       assetComposition,
-      strategies: localStrategies,
-      assumptions: localAssumptions,
+      strategies: committedStrategies,
+      assumptions: committedAssumptions,
       profile,
     });
-  }, [projectedEstateValue, assetComposition, localStrategies, localAssumptions, profile]);
+  }, [projectedEstateValue, assetComposition, committedStrategies, committedAssumptions, profile]);
 
   const summary = recalculatedProjection ?? estateProjection;
 
@@ -308,8 +323,8 @@ export function EstatePlanningNewCenter() {
       return calculateEstateProjection({
         baseEstateValue: baseEstateValueRoth,
         assetComposition: overlayComposition,
-        strategies: localStrategies,
-        assumptions: localAssumptions,
+        strategies: committedStrategies,
+        assumptions: committedAssumptions,
         profile,
       });
     } catch {
@@ -321,8 +336,8 @@ export function EstatePlanningNewCenter() {
     rothAnalysis,
     retirementAt93,
     assetComposition,
-    localStrategies,
-    localAssumptions,
+    committedStrategies,
+    committedAssumptions,
     profile,
   ]);
 
@@ -335,7 +350,9 @@ export function EstatePlanningNewCenter() {
       return estatePlanningService.updateEstatePlan(estatePlan.id, updates);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
+      if (!isEditingRef.current) {
+        queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
+      }
     }
   });
 
@@ -383,104 +400,92 @@ export function EstatePlanningNewCenter() {
     ];
   }, [activeSummary, includeRoth, rothAnalysis, retirementAt93, projectedRealEstate]);
 
-  // Build and save a snapshot whenever relevant inputs/results change (debounced)
+  // Save snapshot when committed inputs (via Calculate) change
   useEffect(() => {
     if (!estatePlan?.id || !activeSummary) return;
-    const timeout = setTimeout(() => {
-      try {
-        // Map local strategies to top-level fields for better persistence compatibility
-        const trustStrategies = Array.isArray(localStrategies.trustFunding)
-          ? localStrategies.trustFunding
-              .filter((t) => (Number(t?.amount) || 0) > 0)
-              .map((t) => ({ type: "funding", name: t.label || "Trust Funding", fundingAmount: Number(t.amount) }))
-          : undefined;
+    try {
+      const trustStrategies = Array.isArray(committedStrategies.trustFunding)
+        ? committedStrategies.trustFunding
+            .filter((t) => (Number(t?.amount) || 0) > 0)
+            .map((t) => ({ type: "funding", name: t.label || "Trust Funding", fundingAmount: Number(t.amount) }))
+        : undefined;
 
-        const charitableGifts = (Number(localStrategies.charitableBequest || 0) > 0)
-          ? { plannedTotal: Number(localStrategies.charitableBequest || 0), source: "estate-new" }
-          : undefined;
+      const charitableGifts = (Number(committedStrategies.charitableBequest || 0) > 0)
+        ? { plannedTotal: Number(committedStrategies.charitableBequest || 0), source: "estate-new" }
+        : undefined;
 
-        // Build recommendations snapshot from current summary
-        const recommendationsList = activeSummary ? [
-          `Projected estate value at death: ${formatCurrency(activeSummary.projectedEstateValue)}`,
-          `Estimated estate taxes: ${formatCurrency(activeSummary.totalTax)} (${formatPercent(activeSummary.effectiveTaxRate)})`,
-          `Net inheritance for beneficiaries: ${formatCurrency(activeSummary.netToHeirs)}`,
-          activeSummary.liquidity.gap > 0
-            ? `Liquidity shortfall of ${formatCurrency(activeSummary.liquidity.gap)} detected for estate settlement.`
-            : "Liquidity target met for projected estate obligations.",
-          activeSummary.heirTaxEstimate.taxDeferredBalance > 0
-            ? `Heirs may owe approximately ${formatCurrency(activeSummary.heirTaxEstimate.projectedIncomeTax)} in income taxes on inherited tax-deferred accounts.`
-            : "Heirs are positioned for tax-efficient inheritance (limited tax-deferred balances).",
-        ] : [];
+      const recommendationsList = activeSummary ? [
+        `Projected estate value at death: ${formatCurrency(activeSummary.projectedEstateValue)}`,
+        `Estimated estate taxes: ${formatCurrency(activeSummary.totalTax)} (${formatPercent(activeSummary.effectiveTaxRate)})`,
+        `Net inheritance for beneficiaries: ${formatCurrency(activeSummary.netToHeirs)}`,
+        activeSummary.liquidity.gap > 0
+          ? `Liquidity shortfall of ${formatCurrency(activeSummary.liquidity.gap)} detected for estate settlement.`
+          : "Liquidity target met for projected estate obligations.",
+        activeSummary.heirTaxEstimate.taxDeferredBalance > 0
+          ? `Heirs may owe approximately ${formatCurrency(activeSummary.heirTaxEstimate.projectedIncomeTax)} in income taxes on inherited tax-deferred accounts.`
+          : "Heirs are positioned for tax-efficient inheritance (limited tax-deferred balances).",
+      ] : [];
 
-        // Persist both baseline and withRoth summaries for auditability
-        const estateNew = {
-          includeRoth,
-          strategies: localStrategies,
-          assumptions: localAssumptions,
-          summaries: {
-            baseline: summary || null,
-            withRoth: withRothSummary || null,
-          },
-          charts: {
-            composition: compositionPieData,
-            distribution: taxPieData,
-          },
-          recommendations: recommendationsList,
-          updatedAt: new Date().toISOString(),
-        };
+      const estateNew = {
+        includeRoth,
+        strategies: committedStrategies,
+        assumptions: committedAssumptions,
+        summaries: {
+          baseline: summary || null,
+          withRoth: withRothSummary || null,
+        },
+        charts: {
+          composition: compositionPieData,
+          distribution: taxPieData,
+        },
+        recommendations: recommendationsList,
+        updatedAt: new Date().toISOString(),
+      };
 
-        const mergedAnalysis = {
-          ...(estatePlan as any)?.analysisResults,
-          estateNew,
-          // Keep a simple latest summary at root for easier server-side access
-          assumptions: {
-            ...(estatePlan as any)?.analysisResults?.assumptions,
-            deathAge: activeSummary.assumptions?.deathAge,
-            longevityAge: activeSummary.assumptions?.deathAge,
-            currentAge: activeSummary.assumptions?.currentAge,
-            federalExemption: activeSummary.assumptions?.federalExemption,
-            stateExemption: activeSummary.assumptions?.stateExemption,
-            liquidityTarget: localAssumptions.liquidityTargetPercent,
-            stateOverride: localAssumptions.stateOverride,
-            heirIncomeTaxRate: localAssumptions.assumedHeirIncomeTaxRate,
-            portability: localAssumptions.portability,
-            dsueAmount: localAssumptions.dsueAmount,
-          },
-          strategies: {
-            ...(estatePlan as any)?.analysisResults?.strategies,
-            bypassTrust: Boolean(localStrategies.bypassTrust),
-          },
-          gifting: {
-            ...(estatePlan as any)?.analysisResults?.gifting,
-            lifetimeGifts: localStrategies.lifetimeGifts,
-            annualGiftAmount: localStrategies.annualGiftAmount,
-          },
-          insurance: {
-            ...(estatePlan as any)?.analysisResults?.insurance,
-            ilitDeathBenefit: localStrategies.ilitDeathBenefit,
-          },
-          charitable: charitableGifts || (estatePlan as any)?.analysisResults?.charitable,
-          latestSummary: activeSummary,
-        };
+      const mergedAnalysis = {
+        ...(estatePlan as any)?.analysisResults,
+        estateNew,
+        assumptions: {
+          ...(estatePlan as any)?.analysisResults?.assumptions,
+          deathAge: activeSummary.assumptions?.deathAge,
+          longevityAge: activeSummary.assumptions?.deathAge,
+          currentAge: activeSummary.assumptions?.currentAge,
+          federalExemption: activeSummary.assumptions?.federalExemption,
+          stateExemption: activeSummary.assumptions?.stateExemption,
+          liquidityTarget: committedAssumptions.liquidityTargetPercent,
+          stateOverride: committedAssumptions.stateOverride,
+          heirIncomeTaxRate: committedAssumptions.assumedHeirIncomeTaxRate,
+          portability: committedAssumptions.portability,
+          dsueAmount: committedAssumptions.dsueAmount,
+        },
+        strategies: {
+          ...(estatePlan as any)?.analysisResults?.strategies,
+          bypassTrust: Boolean(committedStrategies.bypassTrust),
+        },
+        gifting: {
+          ...(estatePlan as any)?.analysisResults?.gifting,
+          lifetimeGifts: committedStrategies.lifetimeGifts,
+          annualGiftAmount: committedStrategies.annualGiftAmount,
+        },
+        insurance: {
+          ...(estatePlan as any)?.analysisResults?.insurance,
+          ilitDeathBenefit: committedStrategies.ilitDeathBenefit,
+        },
+        charitable: charitableGifts || (estatePlan as any)?.analysisResults?.charitable,
+        latestSummary: activeSummary,
+      };
 
-        saveEstateNewMutation.mutate({
-          // Update top-level helpful fields
-          trustStrategies,
-          charitableGifts,
-          // Persist detailed analysis
-          analysisResults: mergedAnalysis,
-        });
-      } catch (e) {
-        // swallow; this is a best-effort background save
-      }
-    }, 800);
-
-    return () => clearTimeout(timeout);
+      saveEstateNewMutation.mutate({
+        trustStrategies,
+        charitableGifts,
+        analysisResults: mergedAnalysis,
+      });
+    } catch {}
   }, [
     estatePlan?.id,
     includeRoth,
-    JSON.stringify(localStrategies),
-    JSON.stringify(localAssumptions),
+    JSON.stringify(committedStrategies),
+    JSON.stringify(committedAssumptions),
     JSON.stringify(activeSummary),
     JSON.stringify(summary),
     JSON.stringify(withRothSummary),
@@ -581,6 +586,9 @@ export function EstatePlanningNewCenter() {
   const trustFundingTotal = useMemo(() => {
     return (localStrategies.trustFunding || []).reduce((total, trust) => total + (Number(trust?.amount) || 0), 0);
   }, [localStrategies.trustFunding]);
+  const trustFundingPrimary = (localStrategies.trustFunding && localStrategies.trustFunding.length)
+    ? Number(localStrategies.trustFunding[0]?.amount || 0)
+    : undefined;
 
   const liquidityStatusBadge = activeSummary
     ? activeSummary.liquidity.gap > 0
@@ -1169,6 +1177,39 @@ export function EstatePlanningNewCenter() {
                         />
                       </div>
 
+                      <div className="flex items-center gap-3 pt-2">
+                        <Button
+                          className="bg-purple-600 hover:bg-purple-700"
+                          onClick={() => {
+                            try {
+                              const prospective = calculateEstateProjection({
+                                baseEstateValue: projectedEstateValue || estateProjection?.projectedEstateValue || 0,
+                                assetComposition,
+                                strategies: { ...localStrategies },
+                                assumptions: { ...localAssumptions },
+                                profile,
+                              });
+                              const baseNet = Number(estateProjection?.netToHeirs || 0);
+                              const newNet = Number(prospective?.netToHeirs || 0);
+                              const delta = newNet - baseNet;
+                              const t = toast({
+                                title: delta >= 0 ? "Net to heirs increased" : "Net to heirs decreased",
+                                description: `${delta >= 0 ? "+" : ""}${formatCurrency(delta)} vs baseline`,
+                                variant: delta >= 0 ? "default" : "destructive",
+                              });
+                              setTimeout(() => t.dismiss(), 3000);
+                            } catch {}
+                            setCommittedStrategies({ ...localStrategies });
+                            setCommittedAssumptions({ ...localAssumptions });
+                            isEditingRef.current = false;
+                            lastEditAtRef.current = Date.now();
+                          }}
+                        >
+                          Calculate
+                        </Button>
+                        <span className="text-xs text-gray-400">Updates KPIs, syncs other tabs, and saves.</span>
+                      </div>
+
                       <Separator className="border-gray-800" />
                       <div className="grid gap-4 md:grid-cols-2">
                         <StrategyToggle
@@ -1181,31 +1222,41 @@ export function EstatePlanningNewCenter() {
                           label="ILIT death benefit"
                           description="Proceeds inside an irrevocable life insurance trust stay outside the taxable estate yet boost liquidity."
                           value={localStrategies.ilitDeathBenefit ?? ""}
-                          onChange={(value) => handleStrategyNumberChange("ilitDeathBenefit", value)}
+                          onFocus={() => { isEditingRef.current = true; lastEditAtRef.current = Date.now(); }}
+                          onBlur={() => { isEditingRef.current = false; lastEditAtRef.current = Date.now(); }}
+                          onChange={(value) => { lastEditAtRef.current = Date.now(); handleStrategyNumberChange("ilitDeathBenefit", value); }}
                         />
                         <StrategyInput
                           label="Lifetime gifts already made"
                           description="Reduces taxable estate and lifetime exemption."
                           value={localStrategies.lifetimeGifts ?? ""}
-                          onChange={(value) => handleStrategyNumberChange("lifetimeGifts", value)}
+                          onFocus={() => { isEditingRef.current = true; lastEditAtRef.current = Date.now(); }}
+                          onBlur={() => { isEditingRef.current = false; lastEditAtRef.current = Date.now(); }}
+                          onChange={(value) => { lastEditAtRef.current = Date.now(); handleStrategyNumberChange("lifetimeGifts", value); }}
                         />
                         <StrategyInput
                           label="Annual gifting (per year)"
                           description="Modeled at current annual exclusion levels through longevity age."
                           value={localStrategies.annualGiftAmount ?? ""}
-                          onChange={(value) => handleStrategyNumberChange("annualGiftAmount", value)}
+                          onFocus={() => { isEditingRef.current = true; lastEditAtRef.current = Date.now(); }}
+                          onBlur={() => { isEditingRef.current = false; lastEditAtRef.current = Date.now(); }}
+                          onChange={(value) => { lastEditAtRef.current = Date.now(); handleStrategyNumberChange("annualGiftAmount", value); }}
                         />
                         <StrategyInput
                           label="Trust funding"
                           description="Total assets transferred into irrevocable trusts (GRAT, SLAT, etc.)."
-                          value={trustFundingTotal || ""}
-                          onChange={(value) => handleStrategyNumberChange("trustFunding", value)}
+                          value={trustFundingPrimary ?? ""}
+                          onFocus={() => { isEditingRef.current = true; lastEditAtRef.current = Date.now(); }}
+                          onBlur={() => { isEditingRef.current = false; lastEditAtRef.current = Date.now(); }}
+                          onChange={(value) => { lastEditAtRef.current = Date.now(); handleStrategyNumberChange("trustFunding", value); }}
                         />
                         <StrategyInput
                           label="Charitable bequest"
                           description="Removes charitably directed assets from taxable estate and highlights legacy impact."
                           value={localStrategies.charitableBequest ?? ""}
-                          onChange={(value) => handleStrategyNumberChange("charitableBequest", value)}
+                          onFocus={() => { isEditingRef.current = true; lastEditAtRef.current = Date.now(); }}
+                          onBlur={() => { isEditingRef.current = false; lastEditAtRef.current = Date.now(); }}
+                          onChange={(value) => { lastEditAtRef.current = Date.now(); handleStrategyNumberChange("charitableBequest", value); }}
                         />
                       </div>
 
@@ -1229,7 +1280,10 @@ export function EstatePlanningNewCenter() {
                             min={100}
                             max={200}
                             step={5}
-                            onValueChange={([value]) => handleAssumptionChange("liquidityTargetPercent", value)}
+                            onPointerDown={() => { isEditingRef.current = true; markEdited(); }}
+                            onPointerUp={() => { isEditingRef.current = false; markEdited(); }}
+                            onValueCommit={([value]) => { handleAssumptionChange("liquidityTargetPercent", value); }}
+                            onValueChange={([value]) => { markEdited(); }}
                           />
                           <p className="mt-3 text-xs text-gray-500">
                             Liquidity required: {formatCurrency(activeSummary.liquidity.required)} · Available today: {formatCurrency(activeSummary.liquidity.available)}
@@ -1475,7 +1529,7 @@ function StrategyToggle({ label, description, checked, onChange }: { label: stri
   );
 }
 
-function StrategyInput({ label, description, value, onChange }: { label: string; description: string; value: string | number; onChange: (value: number) => void }) {
+function StrategyInput({ label, description, value, onChange, onFocus, onBlur }: { label: string; description: string; value: string | number; onChange: (value: number) => void; onFocus?: () => void; onBlur?: () => void }) {
   return (
     <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-4 space-y-2">
       <div className="space-y-1">
@@ -1483,13 +1537,19 @@ function StrategyInput({ label, description, value, onChange }: { label: string;
         <p className="text-xs text-gray-400">{description}</p>
       </div>
       <Input
-        type="number"
-        inputMode="decimal"
+        type="text"
+        inputMode="numeric"
         className="bg-gray-900/60 border-gray-700 text-sm text-white"
-        value={value}
+        value={String(value ?? "")}
+        onFocus={onFocus}
         onChange={(event) => onChange(parseNumericInput(event.target.value))}
+        onKeyDown={(e) => {
+          const inc = (mult: number) => onChange((Number(value) || 0) + mult);
+          if (e.key === 'ArrowUp') { e.preventDefault(); inc(e.shiftKey ? 10000 : 1000); }
+          if (e.key === 'ArrowDown') { e.preventDefault(); inc(e.shiftKey ? -10000 : -1000); }
+        }}
+        onBlur={() => { onBlur?.(); }}
         placeholder="0"
-        min={0}
       />
     </div>
   );
@@ -1559,4 +1619,4 @@ function parseNumericInput(value: string): number {
   const parsed = Number(trimmed.replace(numericSanitizer, ""));
   return Number.isFinite(parsed) ? parsed : NaN;
 }
-  const markEdited = () => { lastEditAtRef.current = Date.now(); };
+  
