@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEstatePlanningNew } from "@/hooks/useEstatePlanningNew";
 import { estatePlanningService } from "@/services/estate-planning.service";
@@ -190,6 +190,7 @@ export function EstatePlanningNewCenter() {
   const [localStrategies, setLocalStrategies] = useState<EstateStrategyInputs>(strategies);
   const [localAssumptions, setLocalAssumptions] = useState<EstateAssumptionInputs>(assumptions);
   const [includeRoth, setIncludeRoth] = useState(false);
+  const lastEditAtRef = useRef(0);
 
   // Initialize toggle from persisted estate plan preferences if available
   useEffect(() => {
@@ -200,10 +201,12 @@ export function EstatePlanningNewCenter() {
   }, [(estatePlan as any)?.id]);
 
   useEffect(() => {
+    if (Date.now() - lastEditAtRef.current < 1200) return;
     setLocalStrategies((prev) => ({ ...prev, ...strategies }));
   }, [strategies]);
 
   useEffect(() => {
+    if (Date.now() - lastEditAtRef.current < 1200) return;
     setLocalAssumptions((prev) => ({ ...prev, ...assumptions }));
   }, [assumptions]);
 
@@ -591,6 +594,7 @@ export function EstatePlanningNewCenter() {
     : (monteCarlo?.successProbability !== undefined ? percentFormatter.format(monteCarlo.successProbability) : "—");
 
   const handleStrategyNumberChange = (key: keyof EstateStrategyInputs, value: number) => {
+    markEdited();
     setLocalStrategies((prev) => {
       const next = { ...prev } as EstateStrategyInputs;
       if (key === "trustFunding") {
@@ -604,10 +608,12 @@ export function EstatePlanningNewCenter() {
   };
 
   const handleStrategyBooleanChange = (key: keyof EstateStrategyInputs, value: boolean) => {
+    markEdited();
     setLocalStrategies((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleAssumptionChange = (key: keyof EstateAssumptionInputs, value: number) => {
+    markEdited();
     setLocalAssumptions((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -1553,3 +1559,4 @@ function parseNumericInput(value: string): number {
   const parsed = Number(trimmed.replace(numericSanitizer, ""));
   return Number.isFinite(parsed) ? parsed : NaN;
 }
+  const markEdited = () => { lastEditAtRef.current = Date.now(); };
