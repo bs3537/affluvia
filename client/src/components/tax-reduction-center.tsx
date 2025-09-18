@@ -21,7 +21,6 @@ import {
   Loader2,
   Brain,
   Target,
-  PiggyBank,
   ChevronDown,
   ChevronUp,
   Lightbulb,
@@ -1635,7 +1634,7 @@ function TaxReductionCenterContent() {
                         : (storedRothAnalysis as any)?.summary?.estateValueIncrease;
 
                     return (
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
                         {/* Lifetime Tax Savings Tile */}
                         <Card className="bg-gradient-to-r from-green-950 to-green-800 border-2 border-green-400/40 shadow-xl shadow-green-400/20 backdrop-blur-sm">
                           <CardContent className="p-6">
@@ -1657,34 +1656,15 @@ function TaxReductionCenterContent() {
                           </CardContent>
                         </Card>
 
-                        {/* Estate Value Tile */}
-                        <Card className="bg-gradient-to-r from-blue-950 to-blue-800 border-2 border-blue-400/40 shadow-xl shadow-blue-400/20 backdrop-blur-sm">
-                          <CardContent className="p-6">
-                            <div className="flex items-center justify-between mb-4">
-                              <div className="flex items-center">
-                                <PiggyBank className="h-7 w-7 text-blue-300 mr-3" />
-                                <h3 className="text-sm font-semibold text-blue-100">Estate Value Increase</h3>
-                              </div>
-                              <Badge className="bg-blue-950/60 text-blue-200 border-blue-400/30 font-medium">
-                                vs No Conversion
-                              </Badge>
-                            </div>
-                            <div className="text-4xl font-bold text-blue-50 mb-3">
-                              ${Math.round(estateValueBenefit).toLocaleString()}
-                            </div>
-                            <p className="text-sm text-blue-200">
-                              Additional after-tax value for heirs with recommended strategy
-                            </p>
-                          </CardContent>
-                        </Card>
+                        {/* Estate Value Tile removed per request */}
 
-                        {/* After‑Tax Estate Value Change (New) */}
+                        {/* After‑Tax Estate Value Change */}
                         <Card className="bg-gradient-to-r from-indigo-950 to-indigo-800 border-2 border-indigo-400/40 shadow-xl shadow-indigo-400/20 backdrop-blur-sm">
                           <CardContent className="p-6">
                             <div className="flex items-center justify-between mb-4">
                               <div className="flex items-center">
                                 <Scale className="h-7 w-7 text-indigo-300 mr-3" />
-                                <h3 className="text-sm font-semibold text-indigo-100">After‑Tax Estate Value Change (New)</h3>
+                                <h3 className="text-sm font-semibold text-indigo-100">After‑Tax Estate Value Change</h3>
                               </div>
                               <Badge className="bg-indigo-950/60 text-indigo-200 border-indigo-400/30 font-medium">
                                 vs No Conversion
