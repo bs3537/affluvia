@@ -1205,7 +1205,7 @@ export function EstatePlanningNewCenter() {
 
                       <Separator className="border-gray-800" />
 
-                      <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+                      <div className="grid gap-4">
                         <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
                           <h3 className="text-sm font-semibold text-gray-200 mb-3">Liquidity target</h3>
                           <p className="text-xs text-gray-400 mb-2">
@@ -1229,33 +1229,7 @@ export function EstatePlanningNewCenter() {
                             Liquidity required: {formatCurrency(activeSummary.liquidity.required)} · Available today: {formatCurrency(activeSummary.liquidity.available)}
                           </p>
                         </div>
-                        <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
-                          <h3 className="text-sm font-semibold text-gray-200 mb-3">Strategy impact check</h3>
-                          <ul className="space-y-2 text-sm text-gray-300">
-                            <li className="flex items-center gap-2">
-                              <ArrowRight className="h-4 w-4 text-purple-400" />
-                              Net to heirs {activeSummary.netToHeirs >= (estateProjection?.netToHeirs || 0) ? "increased" : "changed"} to {formatCurrency(activeSummary.netToHeirs)}
-                            </li>
-                            <li className="flex items-center gap-2">
-                              <ArrowRight className="h-4 w-4 text-purple-400" />
-                              Estate tax liability now {formatCurrency(activeSummary.totalTax)}
-                            </li>
-                            <li className="flex items-center gap-2">
-                              <ArrowRight className="h-4 w-4 text-purple-400" />
-                              Liquidity gap {activeSummary.liquidity.gap > 0 ? `is ${formatCurrency(activeSummary.liquidity.gap)}` : "closed"}
-                            </li>
-                          </ul>
-                          <Button
-                            variant="ghost"
-                            className="mt-4 text-sm text-purple-200 hover:text-white"
-                            onClick={() => {
-                              setLocalStrategies(strategies);
-                              setLocalAssumptions(assumptions);
-                            }}
-                          >
-                            Reset to saved baseline
-                          </Button>
-                        </div>
+                        {/* Strategy impact check removed per request */}
                       </div>
                     </>
                   ) : (
