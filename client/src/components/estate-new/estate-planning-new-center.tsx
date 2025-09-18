@@ -1138,6 +1138,28 @@ export function EstatePlanningNewCenter() {
                 <CardContent className="space-y-6">
                   {summary ? (
                     <>
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <SummaryTile
+                          label="Net to Heirs"
+                          value={formatCurrency(activeSummary.netToHeirs)}
+                          helper={`Change vs baseline: ${(activeSummary.netToHeirs - (estateProjection?.netToHeirs || 0) >= 0 ? "+" : "")}${formatCurrency(activeSummary.netToHeirs - (estateProjection?.netToHeirs || 0))}`}
+                          accent="emerald"
+                        />
+                        <SummaryTile
+                          label="Estate Taxes"
+                          value={formatCurrency(activeSummary.totalTax)}
+                          helper={`Change vs baseline: ${(activeSummary.totalTax - (estateProjection?.totalTax || 0) >= 0 ? "+" : "")}${formatCurrency(activeSummary.totalTax - (estateProjection?.totalTax || 0))}`}
+                          accent="orange"
+                        />
+                        <SummaryTile
+                          label="Liquidity Gap"
+                          value={activeSummary.liquidity.gap > 0 ? formatCurrency(activeSummary.liquidity.gap) : "Closed"}
+                          helper={`Change vs baseline: ${(activeSummary.liquidity.gap - (estateProjection?.liquidity?.gap || 0) >= 0 ? "+" : "")}${formatCurrency(activeSummary.liquidity.gap - (estateProjection?.liquidity?.gap || 0))}`}
+                          accent="sky"
+                        />
+                      </div>
+
+                      <Separator className="border-gray-800" />
                       <div className="grid gap-4 md:grid-cols-2">
                         <StrategyToggle
                           label="Bypass trust on first death"
