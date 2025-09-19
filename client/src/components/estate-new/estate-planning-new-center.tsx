@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertCircle,
   ArrowRight,
@@ -589,6 +590,61 @@ export function EstatePlanningNewCenter() {
     return Math.max(0, netAfterIncome - settlement);
   }, [estateProjection]);
 
+  // Checklist helpers
+  const isMarriedOrPartnered =
+    String((profile as any)?.maritalStatus || "").toLowerCase() === "married" ||
+    String((profile as any)?.maritalStatus || "").toLowerCase() === "partnered";
+
+  const clientFirstName = (profile as any)?.firstName || "Client";
+  const spouseFirstName = ((profile as any)?.spouseName || "").split(" ")[0] || "Spouse";
+
+  type ChecklistItem = { type: string; label: string; sublabel: string; defaultName: string };
+  const CHECKLIST_ITEMS: ChecklistItem[] = [
+    { type: "will", label: "Will", sublabel: "Document created", defaultName: "Last Will and Testament" },
+    { type: "poa", label: "Power of Attorney", sublabel: "Document created", defaultName: "Financial Power of Attorney" },
+    { type: "healthcare_directive", label: "Living Will", sublabel: "Document created", defaultName: "Healthcare Directive / Living Will" },
+    { type: "healthcare_proxy", label: "Health Care Proxy", sublabel: "Document created", defaultName: "Health Care Proxy" },
+    { type: "beneficiary_form", label: "Beneficiary Designations", sublabel: "Created and reviewed", defaultName: "Beneficiary Designations" },
+    { type: "trust", label: "Living Trust", sublabel: "Document created", defaultName: "Revocable Living Trust" },
+  ];
+
+  function isChecked(type: string, forSpouse: boolean) {
+    return Array.isArray(documents)
+      ? documents.some((d: any) => String(d.documentType) === type && Boolean(d.forSpouse) === forSpouse && String(d.status) === "executed")
+      : false;
+  }
+
+  const upsertChecklist = useMutation({
+    mutationFn: async (payload: { type: string; forSpouse: boolean; checked: boolean }) => {
+      const existing = Array.isArray(documents)
+        ? documents.find((d: any) => String(d.documentType) === payload.type && Boolean(d.forSpouse) === payload.forSpouse)
+        : undefined;
+      if (existing) {
+        return estatePlanningService.updateEstateDocument(existing.id, { status: payload.checked ? "executed" : "draft" } as any);
+      }
+      if (payload.checked && estatePlan?.id) {
+        const meta = CHECKLIST_ITEMS.find((i) => i.type === payload.type);
+        return estatePlanningService.createEstateDocument({
+          estatePlanId: estatePlan.id,
+          documentType: payload.type,
+          documentName: meta?.defaultName || payload.type,
+          status: "executed",
+          forSpouse: payload.forSpouse,
+        } as any);
+      }
+      return null;
+    },
+    onSuccess: () => {
+      if (estatePlan?.id) {
+        queryClient.invalidateQueries({ queryKey: ["estate-documents", estatePlan.id] });
+      }
+      toast({ title: "Checklist updated" });
+    },
+    onError: () => {
+      toast({ title: "Save failed", variant: "destructive" });
+    }
+  });
+
   // Build compact waterfall data from active summary
   type WaterfallRow = { name: string; offset: number; value: number; color: string };
   const waterfallData: WaterfallRow[] = useMemo(() => {
@@ -788,14 +844,15 @@ export function EstatePlanningNewCenter() {
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
             <TabsList className="flex flex-wrap gap-2 bg-transparent p-0">
-              {[
-                { id: "overview", label: "Overview", icon: DollarSign },
-                { id: "tax", label: "Tax Analysis", icon: Scale },
-                { id: "strategies", label: "Strategies", icon: Lightbulb },
-                { id: "beneficiaries", label: "Beneficiaries & Flow", icon: Users },
-                { id: "documents", label: "Documents & Tasks", icon: Shield },
-                { id: "recommendations", label: "Recommendations", icon: Target },
-              ].map((section) => {
+            {[
+              { id: "overview", label: "Overview", icon: DollarSign },
+              { id: "tax", label: "Tax Analysis", icon: Scale },
+              { id: "strategies", label: "Strategies", icon: Lightbulb },
+              { id: "checklist", label: "Checklist", icon: CheckCircle2 },
+              { id: "beneficiaries", label: "Beneficiaries & Flow", icon: Users },
+              { id: "documents", label: "Documents & Tasks", icon: Shield },
+              { id: "recommendations", label: "Recommendations", icon: Target },
+            ].map((section) => {
                 const Icon = section.icon;
                 return (
                   <TabsTrigger
@@ -972,6 +1029,65 @@ export function EstatePlanningNewCenter() {
                       </Card>
                     </div>
                   )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="checklist" className="space-y-4">
+              <Card className="bg-gray-900/40 border-gray-700">
+                <CardHeader className="space-y-2">
+                  <CardTitle className="text-xl text-white">Estate Checklist</CardTitle>
+                  <p className="text-sm text-gray-400">
+                    To protect and control your family's future, keep track of progress on essential estate documents.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-hidden rounded-xl border border-gray-800">
+                    <table className="min-w-full divide-y divide-gray-800 text-sm">
+                      <thead className="bg-gray-950/60 text-gray-400">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-medium"></th>
+                          <th className="px-4 py-3 text-center font-medium text-gray-300">{clientFirstName}</th>
+                          {isMarriedOrPartnered && (
+                            <th className="px-4 py-3 text-center font-medium text-gray-300">{spouseFirstName}</th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800">
+                        {CHECKLIST_ITEMS.map((item) => (
+                          <>
+                            <tr key={`${item.type}-label`} className="bg-gray-900/30">
+                              <td className="px-4 py-3 font-semibold text-gray-200">{item.label}</td>
+                              <td className="px-4 py-3"></td>
+                              {isMarriedOrPartnered && <td className="px-4 py-3"></td>}
+                            </tr>
+                            <tr key={`${item.type}-row`} className="bg-gray-950/40">
+                              <td className="px-4 py-3 text-gray-400"> {item.sublabel} </td>
+                              <td className="px-4 py-3 text-center">
+                                <Checkbox
+                                  checked={isChecked(item.type, false)}
+                                  onCheckedChange={(v) => upsertChecklist.mutate({ type: item.type, forSpouse: false, checked: Boolean(v) })}
+                                />
+                              </td>
+                              {isMarriedOrPartnered && (
+                                <td className="px-4 py-3 text-center">
+                                  <Checkbox
+                                    checked={isChecked(item.type, true)}
+                                    onCheckedChange={(v) => upsertChecklist.mutate({ type: item.type, forSpouse: true, checked: Boolean(v) })}
+                                  />
+                                </td>
+                              )}
+                            </tr>
+                          </>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex justify-center pt-4">
+                    <Button variant="outline" className="border-purple-500/40 text-purple-200 hover:bg-purple-500/10" onClick={() => setActiveTab("recommendations")}>
+                      ACTION ITEMS
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
