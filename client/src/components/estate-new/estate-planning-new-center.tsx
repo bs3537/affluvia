@@ -2053,7 +2053,11 @@ function DocumentStatusBadge({ status }: { status: string }) {
             <div className="space-y-2 text-sm">
               <p>Typical witness requirement: <span className="text-white font-medium">{rules?.witnessCount ?? 2}</span> witnesses.</p>
               <p>Self‑proving affidavit: <span className="text-white font-medium">{rules?.allowSelfProving ? 'generally available' : 'not typically available'}</span>.</p>
-              {rules?.notes && <p className="text-amber-300">Note: {rules.notes}</p>}
+              {rules?.notes && (
+                <div className="rounded border border-amber-700 bg-amber-900/20 p-2 text-amber-200">
+                  <span className="font-medium">Heads‑up:</span> {rules.notes}
+                </div>
+              )}
               {rules?.tip && <p className="text-gray-300">Tip: {rules.tip}</p>}
               {rules?.citationUrl && (
                 <p>
@@ -2296,6 +2300,10 @@ function DocumentStatusBadge({ status }: { status: string }) {
                     <span>Per capita at each generation</span>
                   </label>
                 </div>
+                <p className="text-xs text-gray-500">
+                  Per stirpes generally means a deceased beneficiary’s share goes to their descendants by branch. Per capita at each generation
+                  divides shares equally among living beneficiaries at the nearest generation with survivors.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label className="text-white">Pet guardian (optional)</Label>
