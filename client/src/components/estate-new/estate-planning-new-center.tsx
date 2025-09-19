@@ -926,7 +926,6 @@ export function EstatePlanningNewCenter() {
               { id: "strategies", label: "Strategies", icon: Lightbulb },
               { id: "checklist", label: "Checklist", icon: CheckCircle2 },
               { id: "beneficiaries-table", label: "Beneficiaries", icon: Users },
-              { id: "documents", label: "Documents & Tasks", icon: Shield },
               { id: "recommendations", label: "Recommendations", icon: Target },
             ].map((section) => {
                 const Icon = section.icon;
