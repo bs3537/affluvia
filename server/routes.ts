@@ -6702,6 +6702,10 @@ Return ONLY valid JSON like:
       const guardian = String(inputs?.guardianName || "Guardian Name");
       const altGuardian = String(inputs?.altGuardianName || "");
       const residuary = String(inputs?.residuaryPlan || "All to my spouse, or to my children by representation.");
+      const survivorshipDays = Number.isFinite(Number(inputs?.survivorshipDays)) ? Math.max(0, Number(inputs?.survivorshipDays)) : 0;
+      const noContest = Boolean(inputs?.noContest);
+      const petGuardian = String(inputs?.petGuardian || "");
+      const funeralPrefs = String(inputs?.funeralPrefs || "");
 
       // Build Will DOCX (include basic clauses: revocation, executor, guardianship, specific bequests, residuary, digital assets)
       const willDoc = new Document({
@@ -6724,8 +6728,24 @@ Return ONLY valid JSON like:
               new Paragraph({ text: String(inputs?.specificBequests || "None.") }),
               new Paragraph({ text: "6. DISPOSITION OF RESIDUARY ESTATE." }),
               new Paragraph({ text: residuary }),
-              new Paragraph({ text: "7. OMITTED ITEMS; DIGITAL ASSETS." }),
+              ...(survivorshipDays ? [
+                new Paragraph({ text: "7. SURVIVORSHIP." }),
+                new Paragraph({ text: `A beneficiary must survive me by ${survivorshipDays} days to take under this Will.` })
+              ] : []),
+              new Paragraph({ text: `${survivorshipDays ? '8' : '7'}. OMITTED ITEMS; DIGITAL ASSETS.` }),
               new Paragraph({ text: "My Executor may access my digital assets consistent with applicable law (e.g., RUFADAA) and this Will." }),
+              ...(petGuardian ? [
+                new Paragraph({ text: `${survivorshipDays ? '9' : '8'}. PETS.` }),
+                new Paragraph({ text: `I designate ${petGuardian} to care for my pets and authorize my Executor to distribute reasonable funds for their care.` })
+              ] : []),
+              ...(funeralPrefs ? [
+                new Paragraph({ text: `${survivorshipDays ? (petGuardian? '10':'9') : (petGuardian? '9':'8')}. FUNERAL PREFERENCES.` }),
+                new Paragraph({ text: funeralPrefs })
+              ] : []),
+              ...(noContest ? [
+                new Paragraph({ text: `${survivorshipDays ? (petGuardian? (funeralPrefs? '11':'10') : (funeralPrefs? '10':'9')) : (petGuardian? (funeralPrefs? '10':'9') : (funeralPrefs? '9':'8'))}. NO‑CONTEST CLAUSE.` }),
+                new Paragraph({ text: "Any beneficiary who contests this Will shall forfeit their interest to the extent permitted by law." })
+              ] : []),
               new Paragraph({ text: "\nIN WITNESS WHEREOF, I have signed this Will on the date below." }),
               new Paragraph({ text: "\n______________________________" }),
               new Paragraph({ text: `${testatorName}, Testator` }),
@@ -6908,13 +6928,14 @@ Return ONLY valid JSON like:
         const docId = req.body.documentId ? parseInt(String(req.body.documentId)) : undefined;
         const notarized = String(req.body.notarized || 'false').toLowerCase() === 'true';
         const witnessesJson = req.body.witnesses ? JSON.parse(String(req.body.witnesses)) : undefined;
+        const executionDate = req.body.executionDate ? new Date(String(req.body.executionDate)) : new Date();
 
         let updated: any = null;
         if (docId && Number.isFinite(docId)) {
           updated = await storage.updateEstateDocument(req.user!.id, docId, {
             status: 'executed',
             documentUrl: url,
-            executionDate: new Date(),
+            executionDate,
             notarized,
             witnesses: witnessesJson,
           } as any);
@@ -6925,7 +6946,7 @@ Return ONLY valid JSON like:
             documentType,
             documentName: documentType === 'will' ? 'Last Will and Testament (Signed)' : 'Estate Document (Signed)',
             status: 'executed',
-            executionDate: new Date(),
+            executionDate,
             notarized,
             witnesses: witnessesJson,
             documentUrl: url,

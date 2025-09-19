@@ -2058,6 +2058,13 @@ function DocumentStatusBadge({ status }: { status: string }) {
     const [bequests, setBequests] = useState<Array<{ description: string; beneficiary: string; amount?: string }>>([
       { description: "", beneficiary: "", amount: "" }
     ]);
+    const [resParts, setResParts] = useState<Array<{ beneficiary: string; percent: string }>>([
+      { beneficiary: "Spouse or partner", percent: "100" }
+    ]);
+    const [survivorshipDays, setSurvivorshipDays] = useState<number>(30);
+    const [noContest, setNoContest] = useState<boolean>(false);
+    const [petGuardian, setPetGuardian] = useState<string>("");
+    const [funeralPrefs, setFuneralPrefs] = useState<string>("");
     const [residuaryPlan, setResiduaryPlan] = useState<string>("All to my spouse, or if not living, to my children in equal shares.");
 
     useEffect(() => {
@@ -2079,12 +2086,18 @@ function DocumentStatusBadge({ status }: { status: string }) {
           const bullets = normalized.map(b => `• ${b.description || 'Item'} to ${b.beneficiary || '—'}${b.amount ? ` (${b.amount})` : ''}`);
           beqText = [beqText, bullets.join('\n')].filter(Boolean).join('\n');
         }
+        // Compose residuary from parts if valid
+        const parts = (resParts || []).filter(p => p.beneficiary && p.percent !== "");
+        let residuaryText = residuaryPlan;
+        if (parts.length) {
+          residuaryText = parts.map(p => `${p.percent}% to ${p.beneficiary}`).join('; ');
+        }
         const res = await fetch('/api/estate/will/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            inputs: { testatorName, maritalStatus, spouseName, state: stateCode, executorName, altExecutorName, guardianName, altGuardianName, specificBequests: beqText, residuaryPlan }
+            inputs: { testatorName, maritalStatus, spouseName, state: stateCode, executorName, altExecutorName, guardianName, altGuardianName, specificBequests: beqText, residuaryPlan: residuaryText, survivorshipDays, noContest, petGuardian, funeralPrefs }
           })
         });
         if (!res.ok) throw new Error('Failed to generate will');
@@ -2210,7 +2223,42 @@ function DocumentStatusBadge({ status }: { status: string }) {
             </div>
             <div className="space-y-2">
               <Label className="text-white">Residuary plan</Label>
-              <Textarea value={residuaryPlan} onChange={(e) => setResiduaryPlan(e.target.value)} className="bg-gray-900/60 border-gray-700 text-white min-h-[100px]" />
+              <Textarea value={residuaryPlan} onChange={(e) => setResiduaryPlan(e.target.value)} className="bg-gray-900/60 border-gray-700 text-white min-h-[80px]" />
+              <div className="space-y-2">
+                <Label className="text-gray-300">Structured residuary (optional)</Label>
+                {resParts.map((p, idx) => (
+                  <div key={idx} className="grid gap-2 md:grid-cols-3">
+                    <Input value={p.beneficiary} onChange={(e)=>{ const v=[...resParts]; v[idx]={...v[idx], beneficiary:e.target.value}; setResParts(v); }} placeholder="Beneficiary" className="bg-gray-900/60 border-gray-700 text-white" />
+                    <Input value={p.percent} onChange={(e)=>{ const v=[...resParts]; v[idx]={...v[idx], percent:e.target.value.replace(/[^0-9.]/g,'')}; setResParts(v); }} placeholder="Percent" className="bg-gray-900/60 border-gray-700 text-white" />
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=> setResParts([...resParts, { beneficiary:'', percent:'' }])}>Add</Button>
+                      {resParts.length>1 && <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=> setResParts(resParts.slice(0,-1))}>Remove</Button>}
+                    </div>
+                  </div>
+                ))}
+                <p className="text-xs text-gray-400">Percentages must total 100% if using structured residuary.</p>
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label className="text-white">Survivorship period (days)</Label>
+                <Input type="number" inputMode="numeric" value={String(survivorshipDays)} onChange={(e)=> setSurvivorshipDays(Math.max(0, Number(e.target.value||0)))} className="bg-gray-900/60 border-gray-700 text-white" />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-white">No‑contest clause</Label>
+                <div className="flex items-center gap-2 text-sm text-gray-300">
+                  <input type="checkbox" className="accent-purple-500" checked={noContest} onChange={(e)=> setNoContest(e.target.checked)} />
+                  <span>Include a no‑contest clause</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-white">Pet guardian (optional)</Label>
+                <Input value={petGuardian} onChange={(e)=> setPetGuardian(e.target.value)} placeholder="Pet guardian name" className="bg-gray-900/60 border-gray-700 text-white" />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-white">Funeral preferences (optional)</Label>
+                <Textarea value={funeralPrefs} onChange={(e)=> setFuneralPrefs(e.target.value)} placeholder="Burial/cremation preferences, ceremony wishes, etc." className="bg-gray-900/60 border-gray-700 text-white min-h-[80px]" />
+              </div>
             </div>
           </div>
         )}
@@ -2241,6 +2289,9 @@ function DocumentStatusBadge({ status }: { status: string }) {
                 {generateMutation.isPending ? 'Generating…' : 'Generate Will Packet'}
               </Button>
               <StateDetailsButton stateCode={stateCode} />
+              {(rules?.allowSelfProving) && (
+                <a className="text-xs text-purple-300 underline" href="https://app.proof.com/signup/upload" target="_blank" rel="noreferrer">Schedule remote notary (where permitted)</a>
+              )}
               {links.will && <a className="text-sm text-teal-300 underline" href={links.will} target="_blank" rel="noreferrer">Will (DOCX)</a>}
               {links.willPdf && <a className="text-sm text-teal-300 underline" href={links.willPdf} target="_blank" rel="noreferrer">Will (PDF)</a>}
               {links.affidavit && <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Affidavit (DOCX)</a>}
@@ -2249,13 +2300,37 @@ function DocumentStatusBadge({ status }: { status: string }) {
           </div>
         )}
 
-        <div className="flex items-center justify-between pt-2">
-          <Button variant="outline" disabled={step <= 1} onClick={() => setStep((s) => Math.max(1, s - 1))}>Back</Button>
-          <div className="flex items-center gap-2">
-            {step < maxStep && (
-              <Button onClick={() => setStep((s) => Math.min(maxStep, s + 1))}>Next</Button>
-            )}
-          </div>
+        <WizardNav
+          step={step}
+          setStep={setStep}
+          maxStep={maxStep}
+          canNext={validateWillStep(step)}
+        />
+      </div>
+    );
+
+    function validateWillStep(current: number): boolean {
+      if (current === 1) return Boolean(testatorName) && Boolean(stateCode);
+      if (current === 2) return Boolean(executorName);
+      if (current === 3) {
+        // If structured residuary used, ensure total 100
+        const parts = (resParts || []).filter(p => p.beneficiary && p.percent !== "");
+        if (!parts.length) return true; // fallback to free text
+        const total = parts.reduce((s, p) => s + (parseFloat(p.percent) || 0), 0);
+        return Math.abs(total - 100) < 0.01;
+      }
+      return true;
+    }
+  }
+
+  function WizardNav({ step, setStep, maxStep, canNext }: { step: number; setStep: (n: number)=>void; maxStep: number; canNext: boolean }) {
+    return (
+      <div className="flex items-center justify-between pt-2">
+        <Button variant="outline" disabled={step <= 1} onClick={() => setStep(Math.max(1, step - 1))}>Back</Button>
+        <div className="flex items-center gap-2">
+          {step < maxStep && (
+            <Button disabled={!canNext} onClick={() => setStep(Math.min(maxStep, step + 1))}>Next</Button>
+          )}
         </div>
       </div>
     );
@@ -2267,6 +2342,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
     const queryClient = useQueryClient();
     const [pending, setPending] = useState(false);
     const [notarized, setNotarized] = useState(false);
+    const [execDate, setExecDate] = useState<string>("");
     const [w1, setW1] = useState('');
     const [w2, setW2] = useState('');
     const onChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2283,6 +2359,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
       fd.append('notarized', String(notarized));
       const witnesses = [w1, w2].filter(Boolean).map(n => ({ name: n }));
       if (witnesses.length) fd.append('witnesses', JSON.stringify(witnesses));
+      if (execDate) fd.append('executionDate', execDate);
       setPending(true);
       try {
         const res = await fetch('/api/estate-documents/upload', { method: 'POST', credentials: 'include', body: fd });
@@ -2308,6 +2385,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
         </span>
         <input value={w1} onChange={(e)=>setW1(e.target.value)} placeholder="Witness 1" className="bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-gray-200" />
         <input value={w2} onChange={(e)=>setW2(e.target.value)} placeholder="Witness 2" className="bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-gray-200" />
+        <input type="date" value={execDate} onChange={(e)=>setExecDate(e.target.value)} className="bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-gray-200" />
         {pending && <span>Uploading…</span>}
       </div>
     );
