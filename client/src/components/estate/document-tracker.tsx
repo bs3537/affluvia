@@ -34,6 +34,8 @@ interface DocumentTrackerProps {
 export function DocumentTracker({ estatePlanId }: DocumentTrackerProps) {
   const [showAddDocument, setShowAddDocument] = useState(false);
   const [editingDocument, setEditingDocument] = useState<EstateDocument | null>(null);
+  const [willGen, setWillGen] = useState<{ files: Array<{ kind: string; urlPath: string }> } | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
   const queryClient = useQueryClient();
 
   // Fetch documents
@@ -154,6 +156,21 @@ export function DocumentTracker({ estatePlanId }: DocumentTrackerProps) {
   const isMarried = profile?.maritalStatus === 'married';
   const spouseName = profile?.spouseName || 'Spouse';
   const userName = profile ? `${profile.firstName} ${profile.lastName}` : 'User';
+  
+  async function handleGenerateWill() {
+    setIsGenerating(true);
+    try {
+      const resp = await fetch('/api/wills/generate', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+      if (!resp.ok) throw new Error(await resp.text());
+      const data = await resp.json();
+      setWillGen({ files: (data.files || []).map((f: any) => ({ kind: f.kind, urlPath: f.urlPath })) });
+      queryClient.invalidateQueries({ queryKey: ['estate-documents'] });
+    } catch (e) {
+      console.error('Failed to generate will', e);
+    } finally {
+      setIsGenerating(false);
+    }
+  }
   
   const DocumentForm = ({ document }: { document?: EstateDocument | null }) => {
     const [formData, setFormData] = useState({
@@ -459,6 +476,29 @@ export function DocumentTracker({ estatePlanId }: DocumentTrackerProps) {
             use this system to track where documents are located, who has copies, and access instructions.
           </AlertDescription>
         </Alert>
+
+        {/* Quick Will Draft Generator (Beta) */}
+        <Card className="bg-gray-800/50 border-gray-700">
+          <CardContent className="py-4 flex items-start justify-between gap-4">
+            <div>
+              <div className="text-white font-semibold">Create a Will Draft</div>
+              <div className="text-gray-400 text-sm">Generates HTML drafts: instructions, will, personal property memo, digital assets, funeral wishes, and beneficiary messages.</div>
+            </div>
+            <Button onClick={handleGenerateWill} disabled={isGenerating} className="bg-indigo-600 hover:bg-indigo-500">
+              {isGenerating ? 'Generating…' : 'Generate Will Draft'}
+            </Button>
+          </CardContent>
+          {willGen && (
+            <CardContent className="pt-0">
+              <div className="text-white font-medium mb-2">Your documents</div>
+              <ul className="list-disc list-inside text-indigo-300">
+                {willGen.files.map((f) => (
+                  <li key={f.kind}><a href={f.urlPath} target="_blank" rel="noreferrer" className="hover:underline">{f.kind}</a></li>
+                ))}
+              </ul>
+            </CardContent>
+          )}
+        </Card>
       </div>
 
       {/* Document Groups */}

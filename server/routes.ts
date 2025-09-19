@@ -29,6 +29,7 @@ import { setupActingAsMiddleware } from './middleware/acting-as';
 import { setupReportRoutes } from './routes/report';
 import plaidRoutes from './routes/plaid';
 import notificationRoutes from './routes/notifications';
+import willsRoutes from './routes/wills';
 import retirementCalculationRoutes from './routes/retirement-calculations';
 import { calculateFinancialMetricsWithPlaid } from './financial-calculations-enhanced';
 import { calculateFastFinancialMetrics } from './financial-calculations-fast';
@@ -487,6 +488,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Setup notification routes
   app.use('/api', notificationRoutes);
+  app.use('/api/wills', willsRoutes);
   app.use('/', retirementCalculationRoutes);
 
   // Acting-as middleware (ensures advisor can view client data across existing routes)

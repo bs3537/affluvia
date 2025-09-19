@@ -21,6 +21,7 @@ import { useToast } from "@/hooks/use-toast";
   import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { US_STATES } from "@/lib/us-states";
+import { WillWizard as WillCreatorWizard } from "@/features/will/WillWizard";
 import {
   AlertCircle,
   ArrowRight,
@@ -202,7 +203,7 @@ export function EstatePlanningNewCenter() {
   const lastEditAtRef = useRef(0);
   const markEdited = () => { try { lastEditAtRef.current = Date.now(); } catch {} };
 
-  // Initialize toggle from persisted estate plan preferences if available
+  // Initialize toggle from persisted estate plan preferences if available (respond to analysisResults changes as well)
   useEffect(() => {
     const persisted = (estatePlan as any)?.analysisResults?.estateNew?.includeRoth;
     if (typeof persisted === "boolean") {
@@ -214,7 +215,10 @@ export function EstatePlanningNewCenter() {
       const ss = sessionStorage.getItem("estateNew_includeRoth");
       if (ss === "true" || ss === "false") setIncludeRoth(ss === "true");
     } catch {}
-  }, [(estatePlan as any)?.id]);
+  }, [
+    (estatePlan as any)?.id,
+    (estatePlan as any)?.analysisResults?.estateNew?.includeRoth,
+  ]);
 
   useEffect(() => {
     if (isEditingRef.current || Date.now() - lastEditAtRef.current < 1200) return;
@@ -378,19 +382,26 @@ export function EstatePlanningNewCenter() {
   // Persist includeRoth immediately when toggled so it survives refreshes
   const persistIncludeRoth = useMutation({
     mutationFn: async (next: boolean) => {
-      if (!estatePlan?.id) return null;
+      // Ensure an estate plan exists; create one if needed so the toggle persists on first use
+      let planId = estatePlan?.id as number | undefined;
+      if (!planId) {
+        if (!profile) return null; // no profile to seed from
+        const created = await estatePlanningService.createInitialEstatePlanFromProfile(profile).catch(() => null);
+        planId = created?.id;
+      }
+      if (!planId) return null;
       const current = (estatePlan as any)?.analysisResults || {};
       const nextAnalysis = {
         ...current,
         estateNew: { ...(current.estateNew || {}), includeRoth: next }
       };
-      return estatePlanningService.updateEstatePlan(estatePlan.id, { analysisResults: nextAnalysis });
+      return estatePlanningService.updateEstatePlan(planId, { analysisResults: nextAnalysis });
     },
-    onSuccess: () => {
+    onSuccess: (_data, next) => {
       // Throttle the downstream snapshot autosave to avoid double PATCH
       lastSaveTimeRef.current = Date.now();
-      try { sessionStorage.setItem("estateNew_includeRoth", String(includeRoth)); } catch {}
-      // Refresh estate-plan query so new analysisResults load on next mount
+      try { sessionStorage.setItem("estateNew_includeRoth", String(next)); } catch {}
+      // Refresh estate-plan query so new analysisResults load
       queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
     }
   });
@@ -1903,7 +1914,7 @@ export function EstatePlanningNewCenter() {
                     } catch {}
                     return null;
                   })()}
-                  <WillWizard />
+                  <WillCreatorWizard />
                 </CardContent>
               </Card>
             </TabsContent>
