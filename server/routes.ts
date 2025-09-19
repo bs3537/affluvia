@@ -6807,35 +6807,75 @@ Return ONLY valid JSON like:
         // Will PDF
         const willPdf = await PDFDocument.create();
         const font = await willPdf.embedFont(StandardFonts.TimesRoman);
-        const page = willPdf.addPage();
-        const { width, height } = page.getSize();
-        const drawLines = (yStart: number, lines: string[], size = 11, leading = 14) => {
-          let y = yStart;
-          lines.forEach((line) => {
-            page.drawText(line, { x: 50, y, size, font, color: rgb(0, 0, 0) });
+        const bold = await willPdf.embedFont(StandardFonts.TimesRomanBold);
+        let page = willPdf.addPage();
+        const margin = 50;
+        let y = page.getSize().height - margin;
+        const write = (text: string, size = 12, isBold = false, leading = 16) => {
+          // Simple wrap: split at ~90 chars
+          const maxChars = 90;
+          const lines = [] as string[];
+          let t = text;
+          while (t.length > maxChars) {
+            let idx = t.lastIndexOf(' ', maxChars);
+            if (idx < 0) idx = maxChars;
+            lines.push(t.slice(0, idx));
+            t = t.slice(idx + 1);
+          }
+          lines.push(t);
+          lines.forEach(line => {
+            if (y < margin + leading) {
+              page = willPdf.addPage();
+              y = page.getSize().height - margin;
+            }
+            page.drawText(line, { x: margin, y, size, font: isBold ? bold : font, color: rgb(0,0,0) });
             y -= leading;
           });
         };
-        drawLines(height - 60, [
-          'LAST WILL AND TESTAMENT',
-          `Testator: ${testatorName}`,
-          '',
-          '1. Revocation of prior wills.',
-          '2. Family Information.',
-          spouseName ? `   Married to ${spouseName}.` : '   Not married.',
-          '3. Executor.',
-          `   I nominate ${executor} as Executor.`,
-          '4. Guardian of minor children.',
-          `   I nominate ${guardian}.`,
-          '5. Specific Bequests.',
-          `   ${String(inputs?.specificBequests || 'None.')}`,
-          '6. Residuary Estate.',
-          `   ${residuary}`,
-          '7. Digital Assets.',
-          '   My Executor may access digital assets consistent with applicable law.',
-          '',
-          '______________________________  Testator',
-        ], 12, 16);
+        const heading = (t: string) => write(t, 14, true, 20);
+        heading('LAST WILL AND TESTAMENT');
+        write(`Testator: ${testatorName}`);
+        write('');
+        write('1. REVOCATION OF PRIOR WILLS.', 12, true);
+        write('I revoke all prior wills and codicils.');
+        write('2. FAMILY INFORMATION.', 12, true);
+        write(spouseName ? `I am married to ${spouseName}.` : 'I am not married.');
+        write('3. EXECUTOR.', 12, true);
+        write(`I nominate ${executor} to serve as Executor of my estate, to serve without bond.`);
+        if (altExecutor) write(`If ${executor} is unable or unwilling to serve, I nominate ${altExecutor} as alternate Executor.`);
+        write('4. GUARDIAN OF MINOR CHILDREN.', 12, true);
+        write(`If I leave minor children at my death, I nominate ${guardian} as guardian.`);
+        if (altGuardian) write(`If ${guardian} is unable or unwilling to serve, I nominate ${altGuardian} as alternate guardian.`);
+        write('5. SPECIFIC BEQUESTS.', 12, true);
+        write(String(inputs?.specificBequests || 'None.'));
+        write('6. DISPOSITION OF RESIDUARY ESTATE.', 12, true);
+        write(residuary);
+        if (survivorshipDays) {
+          write('7. SURVIVORSHIP.', 12, true);
+          write(`A beneficiary must survive me by ${survivorshipDays} days to take under this Will.`);
+        }
+        const idxBase = survivorshipDays ? 8 : 7;
+        write(`${idxBase}. OMITTED ITEMS; DIGITAL ASSETS.`, 12, true);
+        write('My Executor may access my digital assets consistent with applicable law (e.g., RUFADAA) and this Will.');
+        let idx = idxBase + 1;
+        if (petGuardian) { write(`${idx}. PETS.`, 12, true); write(`I designate ${petGuardian} to care for my pets and authorize my Executor to distribute reasonable funds for their care.`); idx++; }
+        if (funeralPrefs) { write(`${idx}. FUNERAL PREFERENCES.`, 12, true); write(funeralPrefs); idx++; }
+        // Anti-lapse / per stirpes default for residuary
+        write(`${idx}. ANTI‑LAPSE; PER STIRPES.`, 12, true);
+        write('If any residuary beneficiary does not survive the survivorship period, that beneficiary\'s share shall pass to their then‑living descendants, by representation; if none, such share shall be added to the remaining residuary shares.');
+        if (noContest) { idx++; write(`${idx}. NO‑CONTEST CLAUSE.`, 12, true); write('Any beneficiary who contests this Will shall forfeit their interest to the extent permitted by law.'); }
+        // Signature block
+        if (y < 140) { page = willPdf.addPage(); y = page.getSize().height - margin; }
+        write(''); write('IN WITNESS WHEREOF, I have signed this Will on the date below.');
+        y -= 10;
+        // lines
+        const line = (label: string) => {
+          page.drawLine({ start: { x: margin, y: y }, end: { x: page.getSize().width - margin, y: y }, thickness: 1 });
+          y -= 14; page.drawText(label, { x: margin, y: y, size: 10, font }); y -= 20;
+        };
+        line('Testator Signature');
+        line('Witness 1 Signature / Name / Address');
+        line('Witness 2 Signature / Name / Address');
         const willPdfBytes = await willPdf.save();
         const willPdfFile = `will_${userId}_${stamp}.pdf`;
         const willPdfPath = path.join(willsDir, willPdfFile);

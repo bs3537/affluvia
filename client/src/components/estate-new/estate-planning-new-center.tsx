@@ -1851,6 +1851,28 @@ export function EstatePlanningNewCenter() {
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-5">
+                  {/* Executed / action nudges */}
+                  {(() => {
+                    try {
+                      const willDocs = (documents || []).filter((d: any) => String(d.documentType) === 'will' && !d.forSpouse);
+                      const executed = willDocs.find((d: any) => String(d.status) === 'executed');
+                      if (executed) {
+                        return (
+                          <div className="rounded-lg border border-emerald-700 bg-emerald-900/20 p-3 text-sm text-emerald-200">
+                            Executed will on file{executed.executionDate ? ` (dated ${dateFormatter.format(new Date(executed.executionDate))})` : ''}.
+                          </div>
+                        );
+                      }
+                      if (willDocs.length) {
+                        return (
+                          <div className="rounded-lg border border-amber-700 bg-amber-900/20 p-3 text-sm text-amber-200">
+                            Don’t forget to print, sign with two witnesses, and upload the signed PDF in the Checklist.
+                          </div>
+                        );
+                      }
+                    } catch {}
+                    return null;
+                  })()}
                   <WillWizard />
                 </CardContent>
               </Card>
