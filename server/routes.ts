@@ -6706,6 +6706,7 @@ Return ONLY valid JSON like:
       const noContest = Boolean(inputs?.noContest);
       const petGuardian = String(inputs?.petGuardian || "");
       const funeralPrefs = String(inputs?.funeralPrefs || "");
+      const distMethod = String(inputs?.distMethod || 'per-stirpes');
 
       // Build Will DOCX (include basic clauses: revocation, executor, guardianship, specific bequests, residuary, digital assets)
       const willDoc = new Document({
@@ -6860,9 +6861,13 @@ Return ONLY valid JSON like:
         let idx = idxBase + 1;
         if (petGuardian) { write(`${idx}. PETS.`, 12, true); write(`I designate ${petGuardian} to care for my pets and authorize my Executor to distribute reasonable funds for their care.`); idx++; }
         if (funeralPrefs) { write(`${idx}. FUNERAL PREFERENCES.`, 12, true); write(funeralPrefs); idx++; }
-        // Anti-lapse / per stirpes default for residuary
-        write(`${idx}. ANTI‑LAPSE; PER STIRPES.`, 12, true);
-        write('If any residuary beneficiary does not survive the survivorship period, that beneficiary\'s share shall pass to their then‑living descendants, by representation; if none, such share shall be added to the remaining residuary shares.');
+        // Anti-lapse and distribution method default for residuary
+        write(`${idx}. ANTI‑LAPSE; DISTRIBUTION METHOD.`, 12, true);
+        if (distMethod === 'per-capita') {
+          write('If any residuary beneficiary does not survive the survivorship period, that beneficiary\'s share shall pass per capita at each generation to the then‑living descendants of such beneficiary; if none, such share shall be added to the remaining residuary shares.');
+        } else {
+          write('If any residuary beneficiary does not survive the survivorship period, that beneficiary\'s share shall pass to their then‑living descendants, by representation (per stirpes); if none, such share shall be added to the remaining residuary shares.');
+        }
         if (noContest) { idx++; write(`${idx}. NO‑CONTEST CLAUSE.`, 12, true); write('Any beneficiary who contests this Will shall forfeit their interest to the extent permitted by law.'); }
         // Signature block
         if (y < 140) { page = willPdf.addPage(); y = page.getSize().height - margin; }

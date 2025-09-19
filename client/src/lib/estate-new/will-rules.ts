@@ -11,6 +11,8 @@ export type WillStateRule = {
 // Minimal starter rules (conservative defaults). Many states: 2 witnesses; self‑proving affidavit generally allowed.
 const RULES: Record<string, WillStateRule> = {
   AL: { state: 'AL', witnessCount: 2, allowSelfProving: true, citationUrl: 'https://www.nolo.com/legal-encyclopedia/self-proving-affidavits.html' },
+  AR: { state: 'AR', witnessCount: 2, allowSelfProving: true },
+  DE: { state: 'DE', witnessCount: 2, allowSelfProving: true },
   AK: { state: 'AK', witnessCount: 2, allowSelfProving: true },
   AZ: { state: 'AZ', witnessCount: 2, allowSelfProving: true, eWillAllowed: true, citationUrl: 'https://www.uniformlaws.org/acts/catalog/current/E', tip: 'Community property state; spousal rights can affect distribution.' },
   CA: { state: 'CA', witnessCount: 2, allowSelfProving: true, citationUrl: 'https://www.nolo.com/legal-encyclopedia/how-sign-your-will-the-will-signing-ceremony.html', tip: 'Community property state; consider spousal consent and characterization.' },

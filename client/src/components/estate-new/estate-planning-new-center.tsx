@@ -2083,8 +2083,8 @@ function DocumentStatusBadge({ status }: { status: string }) {
     const [guardianName, setGuardianName] = useState<string>("");
     const [altGuardianName, setAltGuardianName] = useState<string>("");
     const [specificBequests, setSpecificBequests] = useState<string>("");
-    const [bequests, setBequests] = useState<Array<{ description: string; beneficiary: string; amount?: string }>>([
-      { description: "", beneficiary: "", amount: "" }
+    const [bequests, setBequests] = useState<Array<{ description: string; beneficiary: string; amount?: string; alt?: string }>>([
+      { description: "", beneficiary: "", amount: "", alt: "" }
     ]);
     const [resParts, setResParts] = useState<Array<{ beneficiary: string; percent: string }>>([
       { beneficiary: "Spouse or partner", percent: "100" }
@@ -2111,7 +2111,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
         let beqText = specificBequests?.trim() || "";
         const normalized = (bequests || []).filter(b => (b.description || b.beneficiary || b.amount));
         if (normalized.length) {
-          const bullets = normalized.map(b => `• ${b.description || 'Item'} to ${b.beneficiary || '—'}${b.amount ? ` (${b.amount})` : ''}`);
+          const bullets = normalized.map(b => `• ${b.description || 'Item'} to ${b.beneficiary || '—'}${b.amount ? ` (${b.amount})` : ''}${b.alt ? `; if not living, then to ${b.alt}` : ''}`);
           beqText = [beqText, bullets.join('\n')].filter(Boolean).join('\n');
         }
         // Compose residuary from parts if valid
@@ -2125,7 +2125,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            inputs: { testatorName, maritalStatus, spouseName, state: stateCode, executorName, altExecutorName, guardianName, altGuardianName, specificBequests: beqText, residuaryPlan: residuaryText, survivorshipDays, noContest, petGuardian, funeralPrefs }
+            inputs: { testatorName, maritalStatus, spouseName, state: stateCode, executorName, altExecutorName, guardianName, altGuardianName, specificBequests: beqText, residuaryPlan: residuaryText, survivorshipDays, noContest, petGuardian, funeralPrefs, distMethod }
           })
         });
         if (!res.ok) throw new Error('Failed to generate will');
@@ -2239,6 +2239,9 @@ function DocumentStatusBadge({ status }: { status: string }) {
                     <Input value={b.amount} onChange={(e)=>{
                       const v=[...bequests]; v[idx]={...v[idx],amount:e.target.value}; setBequests(v);
                     }} placeholder="Amount/Notes (optional)" className="bg-gray-900/60 border-gray-700 text-white" />
+                    <Input value={b.alt} onChange={(e)=>{
+                      const v=[...bequests]; v[idx]={...v[idx],alt:e.target.value}; setBequests(v);
+                    }} placeholder="Alternate beneficiary (optional)" className="bg-gray-900/60 border-gray-700 text-white md:col-span-3" />
                   </div>
                 ))}
                 <div className="flex gap-2">
@@ -2277,6 +2280,19 @@ function DocumentStatusBadge({ status }: { status: string }) {
                 <div className="flex items-center gap-2 text-sm text-gray-300">
                   <input type="checkbox" className="accent-purple-500" checked={noContest} onChange={(e)=> setNoContest(e.target.checked)} />
                   <span>Include a no‑contest clause</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-white">Residuary distribution method</Label>
+                <div className="flex items-center gap-4 text-sm text-gray-300">
+                  <label className="inline-flex items-center gap-1">
+                    <input type="radio" name="dist" checked={distMethod==='per-stirpes'} onChange={()=>setDistMethod('per-stirpes')} className="accent-purple-500" />
+                    <span>Per stirpes (by representation)</span>
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input type="radio" name="dist" checked={distMethod==='per-capita'} onChange={()=>setDistMethod('per-capita')} className="accent-purple-500" />
+                    <span>Per capita at each generation</span>
+                  </label>
                 </div>
               </div>
               <div className="space-y-2">
@@ -2437,3 +2453,4 @@ function parseNumericInput(value: string): number {
   return Number.isFinite(parsed) ? parsed : NaN;
 }
   
+    const [distMethod, setDistMethod] = useState<'per-stirpes'|'per-capita'>('per-stirpes');
