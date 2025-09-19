@@ -2045,12 +2045,12 @@ function DocumentStatusBadge({ status }: { status: string }) {
         toast({ title: 'Will generated', description: 'Download your documents and follow signing instructions.' });
         queryClient.invalidateQueries({ queryKey: ['estate-documents'] });
         setStep(maxStep);
-        setLinks({ will: data?.willDocxUrl, affidavit: data?.affidavitDocxUrl });
+        setLinks({ will: data?.willDocxUrl, willPdf: data?.willPdfUrl, affidavit: data?.affidavitDocxUrl, affidavitPdf: data?.affidavitPdfUrl });
       },
       onError: () => toast({ title: 'Generation failed', variant: 'destructive' })
     });
 
-    const [links, setLinks] = useState<{ will?: string; affidavit?: string }>({});
+    const [links, setLinks] = useState<{ will?: string; willPdf?: string; affidavit?: string; affidavitPdf?: string }>({});
 
     const StepHeader = (
       <div className="flex items-center justify-between">
@@ -2062,6 +2062,15 @@ function DocumentStatusBadge({ status }: { status: string }) {
         </div>
       </div>
     );
+
+    // Compute state rules for instructions
+    let rules: any = undefined;
+    try {
+      // Lazy import to keep bundle lean
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require('@/lib/estate-new/will-rules');
+      rules = mod.getWillRules?.(stateCode);
+    } catch {}
 
     return (
       <div className="space-y-4">
@@ -2136,6 +2145,11 @@ function DocumentStatusBadge({ status }: { status: string }) {
                 {spouseName && <li><strong>Spouse:</strong> {spouseName}</li>}
                 <li><strong>Executor:</strong> {executorName || '—'}</li>
                 <li><strong>Guardian:</strong> {guardianName || '—'}</li>
+                {rules && (
+                  <li className="pt-1 text-amber-300">
+                    Typical signing: {rules.witnessCount} witnesses; self‑proving affidavit {rules.allowSelfProving ? 'available' : 'not available'}{rules.notes ? ` — ${rules.notes}` : ''}.
+                  </li>
+                )}
               </ul>
             </div>
             <div className="text-xs text-gray-500">
@@ -2145,12 +2159,10 @@ function DocumentStatusBadge({ status }: { status: string }) {
               <Button className="bg-purple-600 hover:bg-purple-700" disabled={generateMutation.isPending} onClick={() => generateMutation.mutate()}>
                 {generateMutation.isPending ? 'Generating…' : 'Generate Will Packet'}
               </Button>
-              {links.will && (
-                <a className="text-sm text-teal-300 underline" href={links.will} target="_blank" rel="noreferrer">Download Will (DOCX)</a>
-              )}
-              {links.affidavit && (
-                <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Download Self‑Proving Affidavit (DOCX)</a>
-              )}
+              {links.will && <a className="text-sm text-teal-300 underline" href={links.will} target="_blank" rel="noreferrer">Will (DOCX)</a>}
+              {links.willPdf && <a className="text-sm text-teal-300 underline" href={links.willPdf} target="_blank" rel="noreferrer">Will (PDF)</a>}
+              {links.affidavit && <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Affidavit (DOCX)</a>}
+              {links.affidavitPdf && <a className="text-sm text-teal-300 underline" href={links.affidavitPdf} target="_blank" rel="noreferrer">Affidavit (PDF)</a>}
             </div>
           </div>
         )}

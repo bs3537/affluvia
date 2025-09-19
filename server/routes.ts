@@ -6701,7 +6701,7 @@ Return ONLY valid JSON like:
       const guardian = String(inputs?.guardianName || "Guardian Name");
       const residuary = String(inputs?.residuaryPlan || "All to my spouse, or to my children by representation.");
 
-      // Build Will DOCX
+      // Build Will DOCX (include basic clauses: revocation, executor, guardianship, specific bequests, residuary, digital assets)
       const willDoc = new Document({
         sections: [
           {
@@ -6740,7 +6740,7 @@ Return ONLY valid JSON like:
       const willPath = path.join(willsDir, willFile);
       await fs.writeFile(willPath, willBuffer);
 
-      // Build simple self‑proving affidavit DOCX (generic, user must verify state requirements)
+      // Build simple self‑proving affidavit DOCX (generic; user must verify availability in their state)
       const affDoc = new Document({
         sections: [
           {
@@ -6775,12 +6775,93 @@ Return ONLY valid JSON like:
         parsedInsights: { state, generatedAt: now.toISOString(), version: 'mvp-1' },
       } as any);
 
-      res.json({
-        documentId: created.id,
-        willDocxUrl: `/uploads/wills/${willFile}`,
-        affidavitDocxUrl: `/uploads/wills/${affFile}`,
-        note: 'Print and sign with witnesses per your state. Affidavit is optional and may require a notary. This is not legal advice.'
-      });
+      // Create lightweight PDF versions using pdf-lib (plain text layout)
+      try {
+        const pdfLib = await import('pdf-lib');
+        const { PDFDocument, StandardFonts, rgb } = pdfLib as any;
+
+        // Will PDF
+        const willPdf = await PDFDocument.create();
+        const font = await willPdf.embedFont(StandardFonts.TimesRoman);
+        const page = willPdf.addPage();
+        const { width, height } = page.getSize();
+        const drawLines = (yStart: number, lines: string[], size = 11, leading = 14) => {
+          let y = yStart;
+          lines.forEach((line) => {
+            page.drawText(line, { x: 50, y, size, font, color: rgb(0, 0, 0) });
+            y -= leading;
+          });
+        };
+        drawLines(height - 60, [
+          'LAST WILL AND TESTAMENT',
+          `Testator: ${testatorName}`,
+          '',
+          '1. Revocation of prior wills.',
+          '2. Family Information.',
+          spouseName ? `   Married to ${spouseName}.` : '   Not married.',
+          '3. Executor.',
+          `   I nominate ${executor} as Executor.`,
+          '4. Guardian of minor children.',
+          `   I nominate ${guardian}.`,
+          '5. Specific Bequests.',
+          `   ${String(inputs?.specificBequests || 'None.')}`,
+          '6. Residuary Estate.',
+          `   ${residuary}`,
+          '7. Digital Assets.',
+          '   My Executor may access digital assets consistent with applicable law.',
+          '',
+          '______________________________  Testator',
+        ], 12, 16);
+        const willPdfBytes = await willPdf.save();
+        const willPdfFile = `will_${userId}_${stamp}.pdf`;
+        const willPdfPath = path.join(willsDir, willPdfFile);
+        await fs.writeFile(willPdfPath, willPdfBytes);
+
+        // Affidavit PDF
+        const affPdf = await PDFDocument.create();
+        const aPage = affPdf.addPage();
+        const sz = aPage.getSize();
+        const write = (yStart: number, lines: string[], size = 11, leading = 14) => {
+          let y = yStart;
+          lines.forEach((line) => {
+            aPage.drawText(line, { x: 50, y, size, font, color: rgb(0, 0, 0) });
+            y -= leading;
+          });
+        };
+        write(sz.height - 60, [
+          'SELF-PROVING AFFIDAVIT',
+          `STATE: ${state}  COUNTY: __________`,
+          `${testatorName} signed the attached Will in our presence; each witness signed in the presence of the Testator and each other.`,
+          '',
+          '______________________________  Testator',
+          'Witness 1: ____________________________   Address: ____________________________',
+          'Witness 2: ____________________________   Address: ____________________________',
+          '',
+          'Subscribed and sworn before me on ____________ by the Testator and witnesses above.',
+          '______________________________  Notary Public   My Commission Expires: ____________'
+        ], 12, 16);
+        const affPdfBytes = await affPdf.save();
+        const affPdfFile = `affidavit_${userId}_${stamp}.pdf`;
+        const affPdfPath = path.join(willsDir, affPdfFile);
+        await fs.writeFile(affPdfPath, affPdfBytes);
+
+        return res.json({
+          documentId: created.id,
+          willDocxUrl: `/uploads/wills/${willFile}`,
+          affidavitDocxUrl: `/uploads/wills/${affFile}`,
+          willPdfUrl: `/uploads/wills/${willPdfFile}`,
+          affidavitPdfUrl: `/uploads/wills/${affPdfFile}`,
+          note: 'Print and sign with witnesses per your state. Affidavit may require a notary. This is not legal advice.'
+        });
+      } catch {
+        // Fallback: return DOCX only
+        return res.json({
+          documentId: created.id,
+          willDocxUrl: `/uploads/wills/${willFile}`,
+          affidavitDocxUrl: `/uploads/wills/${affFile}`,
+          note: 'Print and sign with witnesses per your state. Affidavit may require a notary. This is not legal advice.'
+        });
+      }
     } catch (error) {
       next(error);
     }
