@@ -2012,6 +2012,33 @@ function DocumentStatusBadge({ status }: { status: string }) {
   }
 
   // --- Will Creator Wizard (MVP) ---
+  import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+  function StateDetailsButton({ stateCode }: { stateCode: string }) {
+    const [open, setOpen] = useState(false);
+    let rules: any = undefined;
+    try {
+      const mod = require('@/lib/estate-new/will-rules');
+      rules = mod.getWillRules?.(stateCode);
+    } catch {}
+    return (
+      <>
+        <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=>setOpen(true)}>State details</Button>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent className="bg-gray-900 border-gray-700 text-gray-200 max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Signing details for {stateCode || 'your state'}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2 text-sm">
+              <p>Typical witness requirement: <span className="text-white font-medium">{rules?.witnessCount ?? 2}</span> witnesses.</p>
+              <p>Self‑proving affidavit: <span className="text-white font-medium">{rules?.allowSelfProving ? 'generally available' : 'not typically available'}</span>.</p>
+              {rules?.notes && <p className="text-amber-300">Note: {rules.notes}</p>}
+              <p className="text-gray-400 text-xs pt-2">This guidance is informational and not legal advice. Always follow your local statute and clerk guidance.</p>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </>
+    );
+  }
   function WillWizard() {
     const { toast } = useToast();
     const queryClient = useQueryClient();
@@ -2024,8 +2051,13 @@ function DocumentStatusBadge({ status }: { status: string }) {
     const [spouseName, setSpouseName] = useState<string>("");
     const [stateCode, setStateCode] = useState<string>(String((typeof window !== 'undefined' ? (window as any).PROFILE_STATE : '') || ''));
     const [executorName, setExecutorName] = useState<string>("");
+    const [altExecutorName, setAltExecutorName] = useState<string>("");
     const [guardianName, setGuardianName] = useState<string>("");
+    const [altGuardianName, setAltGuardianName] = useState<string>("");
     const [specificBequests, setSpecificBequests] = useState<string>("");
+    const [bequests, setBequests] = useState<Array<{ description: string; beneficiary: string; amount?: string }>>([
+      { description: "", beneficiary: "", amount: "" }
+    ]);
     const [residuaryPlan, setResiduaryPlan] = useState<string>("All to my spouse, or if not living, to my children in equal shares.");
 
     useEffect(() => {
@@ -2040,12 +2072,19 @@ function DocumentStatusBadge({ status }: { status: string }) {
 
     const generateMutation = useMutation({
       mutationFn: async () => {
+        // Compose structured bequests into text if present
+        let beqText = specificBequests?.trim() || "";
+        const normalized = (bequests || []).filter(b => (b.description || b.beneficiary || b.amount));
+        if (normalized.length) {
+          const bullets = normalized.map(b => `• ${b.description || 'Item'} to ${b.beneficiary || '—'}${b.amount ? ` (${b.amount})` : ''}`);
+          beqText = [beqText, bullets.join('\n')].filter(Boolean).join('\n');
+        }
         const res = await fetch('/api/estate/will/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            inputs: { testatorName, maritalStatus, spouseName, state: stateCode, executorName, guardianName, specificBequests, residuaryPlan }
+            inputs: { testatorName, maritalStatus, spouseName, state: stateCode, executorName, altExecutorName, guardianName, altGuardianName, specificBequests: beqText, residuaryPlan }
           })
         });
         if (!res.ok) throw new Error('Failed to generate will');
@@ -2125,8 +2164,16 @@ function DocumentStatusBadge({ status }: { status: string }) {
               <Input value={executorName} onChange={(e) => setExecutorName(e.target.value)} placeholder="Executor full name" className="bg-gray-900/60 border-gray-700 text-white" />
             </div>
             <div className="space-y-2">
+              <Label className="text-white">Alternate executor (optional)</Label>
+              <Input value={altExecutorName} onChange={(e) => setAltExecutorName(e.target.value)} placeholder="Alternate executor full name" className="bg-gray-900/60 border-gray-700 text-white" />
+            </div>
+            <div className="space-y-2">
               <Label className="text-white">Guardian (if minors)</Label>
               <Input value={guardianName} onChange={(e) => setGuardianName(e.target.value)} placeholder="Guardian full name" className="bg-gray-900/60 border-gray-700 text-white" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-white">Alternate guardian (optional)</Label>
+              <Input value={altGuardianName} onChange={(e) => setAltGuardianName(e.target.value)} placeholder="Alternate guardian full name" className="bg-gray-900/60 border-gray-700 text-white" />
             </div>
           </div>
         )}
@@ -2136,6 +2183,30 @@ function DocumentStatusBadge({ status }: { status: string }) {
             <div className="space-y-2">
               <Label className="text-white">Specific gifts (optional)</Label>
               <Textarea value={specificBequests} onChange={(e) => setSpecificBequests(e.target.value)} placeholder={'Example:\n• My watch to Alex.\n• $5,000 to Local Charity.'} className="bg-gray-900/60 border-gray-700 text-white min-h-[120px]" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-white">Structured gifts (optional)</Label>
+              <div className="space-y-2">
+                {bequests.map((b, idx) => (
+                  <div key={idx} className="grid gap-2 md:grid-cols-3">
+                    <Input value={b.description} onChange={(e)=>{
+                      const v=[...bequests]; v[idx]={...v[idx],description:e.target.value}; setBequests(v);
+                    }} placeholder="Description (e.g., Rolex watch)" className="bg-gray-900/60 border-gray-700 text-white" />
+                    <Input value={b.beneficiary} onChange={(e)=>{
+                      const v=[...bequests]; v[idx]={...v[idx],beneficiary:e.target.value}; setBequests(v);
+                    }} placeholder="Beneficiary" className="bg-gray-900/60 border-gray-700 text-white" />
+                    <Input value={b.amount} onChange={(e)=>{
+                      const v=[...bequests]; v[idx]={...v[idx],amount:e.target.value}; setBequests(v);
+                    }} placeholder="Amount/Notes (optional)" className="bg-gray-900/60 border-gray-700 text-white" />
+                  </div>
+                ))}
+                <div className="flex gap-2">
+                  <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=> setBequests([...bequests, {description:'',beneficiary:'',amount:''}])}>Add another</Button>
+                  {bequests.length>1 && (
+                    <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=> setBequests(bequests.slice(0,-1))}>Remove last</Button>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="space-y-2">
               <Label className="text-white">Residuary plan</Label>
@@ -2169,6 +2240,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
               <Button className="bg-purple-600 hover:bg-purple-700" disabled={generateMutation.isPending} onClick={() => generateMutation.mutate()}>
                 {generateMutation.isPending ? 'Generating…' : 'Generate Will Packet'}
               </Button>
+              <StateDetailsButton stateCode={stateCode} />
               {links.will && <a className="text-sm text-teal-300 underline" href={links.will} target="_blank" rel="noreferrer">Will (DOCX)</a>}
               {links.willPdf && <a className="text-sm text-teal-300 underline" href={links.willPdf} target="_blank" rel="noreferrer">Will (PDF)</a>}
               {links.affidavit && <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Affidavit (DOCX)</a>}
@@ -2194,6 +2266,9 @@ function DocumentStatusBadge({ status }: { status: string }) {
     const { toast } = useToast();
     const queryClient = useQueryClient();
     const [pending, setPending] = useState(false);
+    const [notarized, setNotarized] = useState(false);
+    const [w1, setW1] = useState('');
+    const [w2, setW2] = useState('');
     const onChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -2205,6 +2280,9 @@ function DocumentStatusBadge({ status }: { status: string }) {
       fd.append('document', file);
       fd.append('documentType', documentType);
       if (docId) fd.append('documentId', String(docId));
+      fd.append('notarized', String(notarized));
+      const witnesses = [w1, w2].filter(Boolean).map(n => ({ name: n }));
+      if (witnesses.length) fd.append('witnesses', JSON.stringify(witnesses));
       setPending(true);
       try {
         const res = await fetch('/api/estate-documents/upload', { method: 'POST', credentials: 'include', body: fd });
@@ -2224,6 +2302,12 @@ function DocumentStatusBadge({ status }: { status: string }) {
           <span className="underline">Upload signed PDF</span>
           <input type="file" accept="application/pdf" className="hidden" onChange={onChange} disabled={pending} />
         </label>
+        <span className="inline-flex items-center gap-1">
+          <input type="checkbox" className="accent-purple-500" checked={notarized} onChange={(e)=>setNotarized(e.target.checked)} />
+          <span>Notarized</span>
+        </span>
+        <input value={w1} onChange={(e)=>setW1(e.target.value)} placeholder="Witness 1" className="bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-gray-200" />
+        <input value={w2} onChange={(e)=>setW2(e.target.value)} placeholder="Witness 2" className="bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-gray-200" />
         {pending && <span>Uploading…</span>}
       </div>
     );

@@ -6698,7 +6698,9 @@ Return ONLY valid JSON like:
       const spouseName = String(inputs?.spouseName || (inputs?.maritalStatus === 'married' ? ("Spouse") : ""));
       const state = String(inputs?.state || (inputs?.profileState || (req as any)?.user?.state) || "");
       const executor = String(inputs?.executorName || "Executor Name");
+      const altExecutor = String(inputs?.altExecutorName || "");
       const guardian = String(inputs?.guardianName || "Guardian Name");
+      const altGuardian = String(inputs?.altGuardianName || "");
       const residuary = String(inputs?.residuaryPlan || "All to my spouse, or to my children by representation.");
 
       // Build Will DOCX (include basic clauses: revocation, executor, guardianship, specific bequests, residuary, digital assets)
@@ -6714,8 +6716,10 @@ Return ONLY valid JSON like:
               new Paragraph({ text: spouseName ? `I am married to ${spouseName}.` : "I am not married." }),
               new Paragraph({ text: "3. EXECUTOR." }),
               new Paragraph({ text: `I nominate ${executor} to serve as Executor of my estate, to serve without bond.` }),
+              ...(altExecutor ? [ new Paragraph({ text: `If ${executor} is unable or unwilling to serve, I nominate ${altExecutor} as alternate Executor.` }) ] : []),
               new Paragraph({ text: "4. GUARDIAN OF MINOR CHILDREN." }),
               new Paragraph({ text: `If I leave minor children at my death, I nominate ${guardian} as guardian.` }),
+              ...(altGuardian ? [ new Paragraph({ text: `If ${guardian} is unable or unwilling to serve, I nominate ${altGuardian} as alternate guardian.` }) ] : []),
               new Paragraph({ text: "5. SPECIFIC BEQUESTS." }),
               new Paragraph({ text: String(inputs?.specificBequests || "None.") }),
               new Paragraph({ text: "6. DISPOSITION OF RESIDUARY ESTATE." }),
