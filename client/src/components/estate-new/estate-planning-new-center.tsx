@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEstatePlanningNew } from "@/hooks/useEstatePlanningNew";
 import { estatePlanningService } from "@/services/estate-planning.service";
 import { calculateEstateProjection, EstateStrategyInputs, EstateAssumptionInputs } from "@/lib/estate-new/analysis";
+import { getFederalExemption } from "@shared/estate-tax-config";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -98,7 +99,7 @@ function formatPercent(value?: number | null) {
   return percentFormatter.format(value / 100);
 }
 
-const PIE_COLORS = ["#a855f7", "#f97316", "#22d3ee", "#94a3b8"];
+const PIE_COLORS = ["#a855f7", "#f97316", "#22d3ee", "#94a3b8", "#ef4444"];
 
 // Custom tooltips for pie charts to ensure readable white text on dark background
 const DistributionTooltip = ({ active, payload }: any) => {
@@ -344,30 +345,45 @@ export function EstatePlanningNewCenter() {
   const activeSummary = includeRoth && withRothSummary ? withRothSummary : summary;
 
   // Persist all displayed state and computed results for Estate Planning New
+  const pendingHashRef = useRef<string | null>(null);
+  const lastSavedHashRef = useRef<string | null>(null);
+  const lastSaveTimeRef = useRef(0);
   const saveEstateNewMutation = useMutation({
     mutationFn: async (updates: any) => {
       if (!estatePlan?.id) return null;
       return estatePlanningService.updateEstatePlan(estatePlan.id, updates);
     },
     onSuccess: () => {
-      if (!isEditingRef.current) {
-        queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
-      }
+      lastSaveTimeRef.current = Date.now();
+      lastSavedHashRef.current = pendingHashRef.current;
+      // Avoid invalidation here to prevent GET/PATCH loops and flicker
+    },
+    onError: () => {
+      // Allow retrying on next change
+      pendingHashRef.current = null;
     }
   });
 
   // Build and save a snapshot whenever relevant inputs/results change (debounced)
   // Note: placed after compositionPieData declaration to avoid TDZ issues.
 
-  const taxPieData = activeSummary
-    ? [
-        // Use final net to heirs after both estate taxes and heirs' income taxes
-        { name: "Net to Heirs", value: Math.max(0, activeSummary.heirTaxEstimate.netAfterIncomeTax) },
-        { name: "Estate Taxes", value: Math.max(0, activeSummary.totalTax) },
-        { name: "Charitable Gifts", value: Math.max(0, activeSummary.charitableImpact.charitableBequests) },
-        { name: "Income Tax Drag", value: Math.max(0, activeSummary.heirTaxEstimate.projectedIncomeTax) },
-      ]
-    : [];
+  const taxPieData = useMemo(() => {
+    if (!activeSummary) return [] as { name: string; value: number }[];
+    const settlement = Math.max(0, Number((activeSummary as any).liquidity?.settlementExpenses || 0));
+    const charitable = Math.max(0, Number(activeSummary.charitableImpact?.charitableBequests || 0));
+    const incomeDrag = Math.max(0, Number(activeSummary.heirTaxEstimate?.projectedIncomeTax || 0));
+    const taxes = Math.max(0, Number(activeSummary.totalTax || 0));
+    const gross = Math.max(0, Number(activeSummary.projectedEstateValue || 0));
+    const finalNet = Math.max(0, gross - taxes - incomeDrag - charitable - settlement);
+
+    return [
+      { name: "Net to Heirs", value: finalNet },
+      { name: "Estate Taxes", value: taxes },
+      { name: "Charitable Gifts", value: charitable },
+      { name: "Income Tax Drag", value: incomeDrag },
+      { name: "Other Expenses", value: settlement },
+    ];
+  }, [activeSummary]);
 
   // Composition pie: retirement vs real estate breakdown (approximated from summary and hook projections)
   const compositionPieData = useMemo(() => {
@@ -400,9 +416,12 @@ export function EstatePlanningNewCenter() {
     ];
   }, [activeSummary, includeRoth, rothAnalysis, retirementAt93, projectedRealEstate]);
 
-  // Save snapshot when committed inputs (via Calculate) change
+  // Save snapshot when committed inputs (via Calculate) change — throttled + hashed to avoid loops
   useEffect(() => {
     if (!estatePlan?.id || !activeSummary) return;
+    if (saveEstateNewMutation.isPending) return;
+    const now = Date.now();
+    if (now - lastSaveTimeRef.current < 5000) return; // throttle saves to at most once per 5s
     try {
       const trustStrategies = Array.isArray(committedStrategies.trustFunding)
         ? committedStrategies.trustFunding
@@ -475,6 +494,19 @@ export function EstatePlanningNewCenter() {
         latestSummary: activeSummary,
       };
 
+      // Compute a minimal hash to detect no-op saves
+      const hashPayload = {
+        includeRoth,
+        strategies: committedStrategies,
+        assumptions: committedAssumptions,
+        latestSummary: activeSummary,
+      };
+      const nextHash = JSON.stringify(hashPayload);
+      if (lastSavedHashRef.current && nextHash === lastSavedHashRef.current) {
+        return; // nothing meaningful changed
+      }
+
+      pendingHashRef.current = nextHash;
       saveEstateNewMutation.mutate({
         trustStrategies,
         charitableGifts,
@@ -487,10 +519,6 @@ export function EstatePlanningNewCenter() {
     JSON.stringify(committedStrategies),
     JSON.stringify(committedAssumptions),
     JSON.stringify(activeSummary),
-    JSON.stringify(summary),
-    JSON.stringify(withRothSummary),
-    JSON.stringify(taxPieData),
-    JSON.stringify(compositionPieData),
   ]);
 
   const taxBarData = activeSummary
@@ -499,7 +527,7 @@ export function EstatePlanningNewCenter() {
           name: "Taxes",
           Federal: activeSummary.federalTax,
           State: activeSummary.stateTax,
-          LiquidityGap: activeSummary.liquidity.gap,
+          HeirIncome: activeSummary.heirTaxEstimate.projectedIncomeTax,
         },
       ]
     : [];
@@ -546,16 +574,25 @@ export function EstatePlanningNewCenter() {
         }
       : null;
 
+  const netAfterAllCosts = useMemo(() => {
+    if (!activeSummary) return 0;
+    const settlement = Math.max(0, Number((activeSummary as any).liquidity?.settlementExpenses || 0));
+    const netAfterIncome = Math.max(0, Number(activeSummary.heirTaxEstimate?.netAfterIncomeTax || 0));
+    return Math.max(0, netAfterIncome - settlement);
+  }, [activeSummary]);
+
   // Build compact waterfall data from active summary
   type WaterfallRow = { name: string; offset: number; value: number; color: string };
   const waterfallData: WaterfallRow[] = useMemo(() => {
     if (!activeSummary) return [];
     const gross = Math.max(0, Number(activeSummary.projectedEstateValue || 0));
     const taxable = Math.max(0, Number(activeSummary.projectedTaxableEstate || 0));
-    const deductions = Math.max(0, gross - taxable);
+    const charitable = Math.max(0, Number(activeSummary.charitableImpact?.charitableBequests || 0));
+    const totalDeductions = Math.max(0, gross - taxable);
+    const adminDed = Math.max(0, totalDeductions - charitable);
     const estateTaxes = Math.max(0, Number(activeSummary.totalTax || 0));
     const heirsIncomeTax = Math.max(0, Number(activeSummary.heirTaxEstimate?.projectedIncomeTax || 0));
-    const netAfterIncome = Math.max(0, Number(activeSummary.heirTaxEstimate?.netAfterIncomeTax || 0));
+    const otherExpenses = Math.max(0, Number((activeSummary as any).liquidity?.settlementExpenses || 0));
 
     let running = gross;
     const rows: WaterfallRow[] = [];
@@ -563,22 +600,38 @@ export function EstatePlanningNewCenter() {
     // 1) Gross Estate (total bar)
     rows.push({ name: "Gross Estate", offset: 0, value: running, color: "#a855f7" });
 
-    // 2) Deductions (drop)
-    rows.push({ name: "Deductions", offset: Math.max(0, running - deductions), value: Math.min(deductions, running), color: "#94a3b8" });
-    running = Math.max(0, running - deductions);
+    // 2) Administrative Deductions (non-charitable)
+    if (adminDed > 0) {
+      rows.push({ name: "Administrative Deductions", offset: Math.max(0, running - adminDed), value: Math.min(adminDed, running), color: "#94a3b8" });
+      running = Math.max(0, running - adminDed);
+    }
 
-    // 3) Estate Taxes (drop)
-    rows.push({ name: "Estate Taxes", offset: Math.max(0, running - estateTaxes), value: Math.min(estateTaxes, running), color: "#f97316" });
-    running = Math.max(0, running - estateTaxes);
+    // 3) Charitable Gifts (drop)
+    if (charitable > 0) {
+      rows.push({ name: "Charitable Gifts", offset: Math.max(0, running - charitable), value: Math.min(charitable, running), color: "#22d3ee" });
+      running = Math.max(0, running - charitable);
+    }
 
-    // 4) Heirs' Income Tax (drop)
-    rows.push({ name: "Heirs' Income Tax", offset: Math.max(0, running - heirsIncomeTax), value: Math.min(heirsIncomeTax, running), color: "#22d3ee" });
-    running = Math.max(0, running - heirsIncomeTax);
+    // 4) Estate Taxes (drop)
+    if (estateTaxes > 0) {
+      rows.push({ name: "Estate Taxes", offset: Math.max(0, running - estateTaxes), value: Math.min(estateTaxes, running), color: "#f97316" });
+      running = Math.max(0, running - estateTaxes);
+    }
 
-    // 5) Net to Heirs (total bar)
-    // Use model-provided net when available to avoid rounding drift
-    const final = netAfterIncome > 0 ? netAfterIncome : running;
-    rows.push({ name: "Net to Heirs", offset: 0, value: Math.max(0, final), color: "#10b981" });
+    // 5) Heirs' Income Tax (drop)
+    if (heirsIncomeTax > 0) {
+      rows.push({ name: "Heirs' Income Tax", offset: Math.max(0, running - heirsIncomeTax), value: Math.min(heirsIncomeTax, running), color: "#60a5fa" });
+      running = Math.max(0, running - heirsIncomeTax);
+    }
+
+    // 6) Other Expenses (probate + funeral)
+    if (otherExpenses > 0) {
+      rows.push({ name: "Other Expenses", offset: Math.max(0, running - otherExpenses), value: Math.min(otherExpenses, running), color: "#ef4444" });
+      running = Math.max(0, running - otherExpenses);
+    }
+
+    // 7) Net to Heirs (final)
+    rows.push({ name: "Net to Heirs", offset: 0, value: Math.max(0, running), color: "#10b981" });
 
     return rows;
   }, [activeSummary]);
@@ -769,28 +822,28 @@ export function EstatePlanningNewCenter() {
                     <div className="grid gap-4 md:grid-cols-3">
                       <Card className="bg-emerald-900/20 border-emerald-700/50">
                         <CardContent className="p-4">
-                          <div className="text-xs text-emerald-300">Net to heirs (Δ)</div>
+                          <div className="text-xs text-emerald-300">Net to heirs (Δ after Roth conversions)</div>
                           <div className="text-lg font-semibold text-white">{formatCurrency(deltas.netToHeirs)}</div>
                           <div className="text-[11px] text-gray-400">
-                            {deltas.netToHeirs >= 0 ? "Increase" : "Decrease"} vs baseline
+                            Change vs baseline after Roth conversions
                           </div>
                         </CardContent>
                       </Card>
                       <Card className="bg-orange-900/20 border-orange-700/50">
                         <CardContent className="p-4">
-                          <div className="text-xs text-orange-300">Total estate taxes (Δ)</div>
+                          <div className="text-xs text-orange-300">Total estate taxes (Δ after Roth conversions)</div>
                           <div className="text-lg font-semibold text-white">{formatCurrency(deltas.totalTax)}</div>
                           <div className="text-[11px] text-gray-400">
-                            {deltas.totalTax <= 0 ? "Lower taxes" : "Higher taxes"} vs baseline
+                            Change vs baseline after Roth conversions
                           </div>
                         </CardContent>
                       </Card>
                       <Card className="bg-red-900/20 border-red-700/50">
                         <CardContent className="p-4">
-                          <div className="text-xs text-red-300">Liquidity gap (Δ)</div>
+                          <div className="text-xs text-red-300">Liquidity gap (Δ after Roth conversions)</div>
                           <div className="text-lg font-semibold text-white">{formatCurrency(deltas.liquidityGap)}</div>
                           <div className="text-[11px] text-gray-400">
-                            {deltas.liquidityGap <= 0 ? "Gap reduced" : "Gap increased"} vs baseline
+                            Change vs baseline after Roth conversions
                           </div>
                         </CardContent>
                       </Card>
@@ -810,22 +863,22 @@ export function EstatePlanningNewCenter() {
                         helper={`Modeled at age ${activeSummary.assumptions.deathAge}`}
                       />
                       <SummaryTile
-                        label="Net to Heirs"
-                        value={formatCurrency(activeSummary.netToHeirs)}
-                        helper="After estate tax impact"
-                        accent="emerald"
-                      />
-                      <SummaryTile
                         label="Estate Taxes"
                         value={formatCurrency(activeSummary.totalTax)}
                         helper={`Effective rate ${formatPercent(activeSummary.effectiveTaxRate)}`}
                         accent="orange"
                       />
                       <SummaryTile
-                        label="After Heir Income Tax"
-                        value={formatCurrency(activeSummary.heirTaxEstimate.netAfterIncomeTax)}
-                        helper={`Assumes ${percentFormatter.format(activeSummary.heirTaxEstimate.assumedRate)} heir tax`}
-                        accent="sky"
+                        label="Net Estate (after estate tax)"
+                        value={formatCurrency(activeSummary.netToHeirs)}
+                        helper="After estate tax only"
+                      />
+                      <SummaryTile
+                        label="Net Estate (after taxes & other costs)"
+                        value={formatCurrency(netAfterAllCosts)}
+                        helper="After heirs’ income tax, probate (5%), and funeral costs"
+                        accent="emerald"
+                        highlight
                       />
                     </div>
                   ) : (
@@ -838,26 +891,28 @@ export function EstatePlanningNewCenter() {
                         <CardHeader>
                           <CardTitle className="text-white text-lg">Distribution Snapshot</CardTitle>
                         </CardHeader>
-                        <CardContent className="h-64">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <RechartsPieChart>
-                              <Pie
-                                data={taxPieData}
-                                innerRadius={60}
-                                outerRadius={100}
-                                paddingAngle={3}
-                                dataKey="value"
-                                label={PieLabel}
-                                labelLine={false}
-                              >
-                                {taxPieData.map((entry, index) => (
-                                  <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                                ))}
-                              </Pie>
-                              <RechartsTooltip content={<DistributionTooltip />} />
-                            </RechartsPieChart>
-                          </ResponsiveContainer>
-                          <div className="mt-4 flex flex-wrap gap-3 text-xs">
+                        <CardContent className="pt-2">
+                          <div className="h-56 sm:h-60">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <RechartsPieChart>
+                                <Pie
+                                  data={taxPieData}
+                                  innerRadius={60}
+                                  outerRadius={100}
+                                  paddingAngle={3}
+                                  dataKey="value"
+                                  label={PieLabel}
+                                  labelLine={false}
+                                >
+                                  {taxPieData.map((entry, index) => (
+                                    <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                                  ))}
+                                </Pie>
+                                <RechartsTooltip content={<DistributionTooltip />} />
+                              </RechartsPieChart>
+                            </ResponsiveContainer>
+                          </div>
+                          <div className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-2 text-[11px]">
                             {taxPieData.map((item, index) => (
                               <div key={item.name} className="flex items-center gap-2">
                                 <span
@@ -918,7 +973,7 @@ export function EstatePlanningNewCenter() {
             <TabsContent value="tax" className="space-y-4">
               <Card className="bg-gray-900/40 border-gray-700">
                 <CardHeader>
-                  <CardTitle className="text-xl text-white">Estate Tax Outlook</CardTitle>
+                  <CardTitle className="text-xl text-white">Tax Outlook</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-6">
                   {activeSummary ? (
@@ -945,8 +1000,13 @@ export function EstatePlanningNewCenter() {
                           <tr>
                             <td className="px-4 py-3 text-gray-200">Federal estate tax</td>
                             <td className="px-4 py-3 text-right text-orange-300">{formatCurrency(activeSummary.federalTax)}</td>
-                            <td className="px-4 py-3 text-right text-gray-400">
-                              Exemption applied: {formatCurrency(activeSummary.assumptions.federalExemption)}
+                            <td className="px-4 py-3 text-right text-gray-400 whitespace-nowrap overflow-hidden text-ellipsis">
+                              {(() => {
+                                const year = Number(activeSummary.assumptions?.yearOfDeath || new Date().getFullYear());
+                                const baseEx = getFederalExemption(year);
+                                const safe = Number.isFinite(baseEx) ? Math.max(0, baseEx) : 0;
+                                return <span>Exemption applied: {formatCurrency(safe)}</span>;
+                              })()}
                             </td>
                           </tr>
                           <tr>
@@ -954,6 +1014,13 @@ export function EstatePlanningNewCenter() {
                             <td className="px-4 py-3 text-right text-orange-300">{formatCurrency(activeSummary.stateTax)}</td>
                             <td className="px-4 py-3 text-right text-gray-400">
                               Based on {activeSummary.assumptions.state || "residence"} thresholds
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="px-4 py-3 text-gray-200">Heirs' income tax</td>
+                            <td className="px-4 py-3 text-right text-sky-300">{formatCurrency(activeSummary.heirTaxEstimate.projectedIncomeTax)}</td>
+                            <td className="px-4 py-3 text-right text-gray-400">
+                              Assumes {percentFormatter.format(activeSummary.heirTaxEstimate.assumedRate)} on {formatCurrency(activeSummary.heirTaxEstimate.taxDeferredBalance)} tax‑deferred balance
                             </td>
                           </tr>
                         </tbody>
@@ -964,175 +1031,208 @@ export function EstatePlanningNewCenter() {
                   )}
 
                   {summary && (
-                    <div className="grid gap-4 md:grid-cols-3">
-                      <Card className="bg-gray-950/40 border-gray-800">
-                        <CardHeader>
-                          <CardTitle className="text-sm font-semibold text-gray-200">Liquidity for settlement</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-2 text-sm text-gray-300">
-                          <div className="flex items-center justify-between">
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-gray-300 hover:text-gray-100 cursor-help">Available liquid assets (incl. Roth)</span>
-                                </TooltipTrigger>
-                                <TooltipContent className="bg-gray-800 border-gray-700 text-gray-100 max-w-[320px]">
-                                  Includes taxable, Roth, ILIT, and in‑estate life insurance; excludes earmarked charitable bequests.
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                            <span className="text-white">{formatCurrency(activeSummary.liquidity.available)}</span>
-                          </div>
-
-                          {/* Liquidity breakdown for clarity */}
-                          <div className="flex items-center justify-between">
-                            <span>Gross liquidity</span>
-                            <span className="text-white">
-                              {formatCurrency(Number(activeSummary.liquidity.available || 0) + Number((activeSummary as any).liquidity?.charitableReserve || 0))}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>Less: charitable reserve</span>
-                            <span className="text-white">{formatCurrency(Number((activeSummary as any).liquidity?.charitableReserve || 0))}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>Required liquidity ({percentFormatter.format((localAssumptions.liquidityTargetPercent ?? 110) / 100)})</span>
-                            <span className="text-white">{formatCurrency(activeSummary.liquidity.required)}</span>
-                          </div>
-                          {/* Settlement expenses breakdown */}
-                          <div className="flex items-center justify-between">
-                            <span>Settlement expenses (probate + funeral)</span>
-                            <span className="text-white">{formatCurrency(Number((summary as any).liquidity?.settlementExpenses || 0))}</span>
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            Probate (5%): {formatCurrency(Number((activeSummary as any).liquidity?.probateCosts || 0))} · Funeral: {formatCurrency(Number((activeSummary as any).liquidity?.funeralCost || 0))}
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>Insurance need</span>
-                            <span className="text-white">{formatCurrency(activeSummary.liquidity.insuranceNeed)}</span>
-                          </div>
-                          {/* Life insurance disclosure */}
-                          {(activeSummary.liquidity.existingLifeInsuranceUser > 0 || activeSummary.liquidity.existingLifeInsuranceSpouse > 0 || activeSummary.liquidity.ilitCoverage > 0) && (
-                            <div className="pt-1 text-xs text-gray-400">
-                              {(() => {
-                                const parts: string[] = [];
-                                if (activeSummary.liquidity.existingLifeInsuranceUser > 0) {
-                                  parts.push(`user in-estate ${formatCurrency(Number(activeSummary.liquidity.existingLifeInsuranceUser))}`);
-                                }
-                                if (activeSummary.liquidity.existingLifeInsuranceSpouse > 0) {
-                                  parts.push(`spouse in-estate ${formatCurrency(Number(activeSummary.liquidity.existingLifeInsuranceSpouse))}`);
-                                }
-                                if (activeSummary.liquidity.ilitCoverage > 0) {
-                                  parts.push(`ILIT ${formatCurrency(Number(activeSummary.liquidity.ilitCoverage))}`);
-                                }
-                                const total = Number(activeSummary.liquidity.existingLifeInsuranceUser || 0) + Number(activeSummary.liquidity.existingLifeInsuranceSpouse || 0) + Number(activeSummary.liquidity.ilitCoverage || 0);
-                                return (
-                                  <span>
-                                    Includes life insurance: {formatCurrency(total)} ({parts.join(', ')})
-                                  </span>
-                                );
-                              })()}
+                    <>
+                      {/* Top: Waterfall (wider) + Taxes */}
+                      <div className="grid gap-4 lg:grid-cols-3">
+                        <Card className="bg-gray-950/40 border-gray-800 lg:col-span-2">
+                          <CardHeader>
+                            <CardTitle className="text-sm font-semibold text-gray-200">Estate Waterfall</CardTitle>
+                          </CardHeader>
+                          <CardContent className="h-80">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={waterfallData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                                <XAxis dataKey="name" stroke="#9CA3AF" tick={{ fontSize: 11 }} interval={0} angle={-12} dy={8} />
+                                <YAxis stroke="#9CA3AF" tick={{ fontSize: 11 }} tickFormatter={(v) => formatCurrency(v, { compact: true })} />
+                                <RechartsTooltip
+                                  formatter={(value: number, name: string, props: any) => [formatMillions(value), props?.payload?.name]}
+                                  contentStyle={{ backgroundColor: "#111827", borderColor: "#1f2937", color: "#E5E7EB" }}
+                                  labelStyle={{ color: "#E5E7EB" }}
+                                  itemStyle={{ color: "#E5E7EB" }}
+                                  cursor={{ fill: "rgba(31,41,55,0.35)" }}
+                                />
+                                <Bar dataKey="offset" stackId="a" fill="transparent" isAnimationActive={false} />
+                                <Bar dataKey="value" stackId="a" radius={[6, 6, 0, 0]}>
+                                  {waterfallData.map((entry, index) => (
+                                    <Cell key={`wf-${index}`} fill={entry.color} />
+                                  ))}
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                            <div className="mt-2 text-[11px] text-gray-500">
+                              Shows progression from gross estate to final net after taxes, heirs’ income tax, charitable gifts, and other expenses.
                             </div>
-                          )}
-                        </CardContent>
-                      </Card>
+                          </CardContent>
+                        </Card>
 
-                      <Card className="bg-gray-950/40 border-gray-800">
-                        <CardHeader>
-                          <CardTitle className="text-sm font-semibold text-gray-200">Tax components</CardTitle>
-                        </CardHeader>
-                        <CardContent className="h-52">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={taxBarData} margin={{ top: 4, right: 8, left: 0, bottom: 24 }}>
-                              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
-                              <XAxis dataKey="name" stroke="#9CA3AF" tick={{ fontSize: 11 }} />
-                              <YAxis stroke="#9CA3AF" tick={{ fontSize: 11 }} tickFormatter={(value) => formatCurrency(value, { compact: true })} />
-                              <RechartsTooltip
-                                formatter={(value: number, name: string) => [formatCurrency(value), name]}
-                                contentStyle={{
-                                  backgroundColor: "#111827",
-                                  borderColor: "#1f2937",
-                                  color: "#E5E7EB",
-                                }}
-                              />
-                              <Legend
-                                verticalAlign="bottom"
-                                align="center"
-                                iconType="square"
-                                formatter={(value: any) => <span className="text-gray-300 text-xs">{value === "LiquidityGap" ? "Liquidity Gap" : value}</span>}
-                                wrapperStyle={{ paddingTop: 6 }}
-                              />
-                              <Bar dataKey="Federal" stackId="a" fill="#60a5fa" radius={[6, 6, 0, 0]} />
-                              <Bar dataKey="State" stackId="a" fill="#f59e0b" radius={[6, 6, 0, 0]} />
-                              <Bar dataKey="LiquidityGap" fill="#ef4444" radius={[6, 6, 0, 0]} />
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </CardContent>
-                      </Card>
+                        <Card className="bg-gray-950/40 border-gray-800">
+                          <CardHeader>
+                            <CardTitle className="text-sm font-semibold text-gray-200">Tax components</CardTitle>
+                          </CardHeader>
+                          <CardContent className="h-80">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={taxBarData} margin={{ top: 4, right: 8, left: 0, bottom: 24 }} barGap={8}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                                <XAxis dataKey="name" stroke="#9CA3AF" tick={{ fontSize: 11 }} />
+                                <YAxis stroke="#9CA3AF" tick={{ fontSize: 11 }} tickFormatter={(value) => formatCurrency(value, { compact: true })} />
+                                <RechartsTooltip
+                                  cursor={{ fill: "rgba(31,41,55,0.35)" }}
+                                  formatter={(value: number, name: string) => {
+                                    const label = name === "HeirIncome" ? "Heir income tax" : name;
+                                    return [formatCurrency(value), label];
+                                  }}
+                                  contentStyle={{ backgroundColor: "#111827", borderColor: "#1f2937", color: "#E5E7EB" }}
+                                  labelStyle={{ color: "#E5E7EB" }}
+                                  itemStyle={{ color: "#E5E7EB" }}
+                                />
+                                <Legend
+                                  verticalAlign="bottom"
+                                  align="center"
+                                  iconType="square"
+                                  formatter={(value: any) => <span className="text-gray-300 text-xs">{value === "HeirIncome" ? "Heir Income Tax" : value}</span>}
+                                  wrapperStyle={{ paddingTop: 6 }}
+                                />
+                                <Bar dataKey="Federal" stackId="a" fill="#60a5fa" radius={[6, 6, 0, 0]} />
+                                <Bar dataKey="State" stackId="a" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                                <Bar dataKey="HeirIncome" fill="#22d3ee" radius={[6, 6, 0, 0]} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </CardContent>
+                        </Card>
+                      </div>
 
-                      <Card className="bg-gray-950/40 border-gray-800">
-                        <CardHeader>
-                          <CardTitle className="text-sm font-semibold text-gray-200">Liquidity coverage</CardTitle>
-                        </CardHeader>
-                        <CardContent className="h-52">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <RechartsPieChart>
-                              <Pie
-                                data={liquidityPieData}
-                                innerRadius={48}
-                                outerRadius={70}
-                                startAngle={90}
-                                endAngle={-270}
-                                paddingAngle={2}
-                                dataKey="value"
-                                labelLine={false}
-                              >
-                                <Cell fill="#10b981" />
-                                <Cell fill="#ef4444" />
-                              </Pie>
-                              <RechartsTooltip
-                                formatter={(value: number, name: string) => [formatCurrency(value), name]}
-                                contentStyle={{ backgroundColor: "#111827", borderColor: "#1f2937", color: "#E5E7EB" }}
+                      {/* Bottom: Liquidity-related */}
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <Card className="bg-gray-950/40 border-gray-800">
+                          <CardHeader>
+                            <CardTitle className="text-sm font-semibold text-gray-200">Liquidity for settlement</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-3 text-sm text-gray-300">
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-300">Coverage status</span>
+                              <span className={`font-semibold ${activeSummary.liquidity.gap > 0 ? "text-red-300" : "text-emerald-300"}`}>
+                                {activeSummary.liquidity.gap > 0 ? `Shortfall ${formatCurrency(activeSummary.liquidity.gap)}` : "Covered"}
+                              </span>
+                            </div>
+                            <div className="h-2 w-full rounded bg-gray-800 overflow-hidden">
+                              <div
+                                className={`h-2 ${activeSummary.liquidity.gap > 0 ? "bg-red-500/70" : "bg-emerald-500/70"}`}
+                                style={{ width: `${Math.min(100, Math.round(liquidityCoverage * 100))}%` }}
                               />
-                            </RechartsPieChart>
-                          </ResponsiveContainer>
-                          <div className="mt-3 text-xs text-gray-400">
-                            Coverage: {percentFormatter.format(liquidityCoverage)}
-                          </div>
-                        </CardContent>
-                      </Card>
+                            </div>
 
-                      <Card className="bg-gray-950/40 border-gray-800">
-                        <CardHeader>
-                          <CardTitle className="text-sm font-semibold text-gray-200">Estate Waterfall</CardTitle>
-                        </CardHeader>
-                        <CardContent className="h-56">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={waterfallData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
-                              <XAxis dataKey="name" stroke="#9CA3AF" tick={{ fontSize: 11 }} interval={0} angle={-12} dy={8} />
-                              <YAxis stroke="#9CA3AF" tick={{ fontSize: 11 }} tickFormatter={(v) => formatCurrency(v, { compact: true })} />
-                              <RechartsTooltip
-                                formatter={(value: number, name: string, props: any) => [formatMillions(value), props?.payload?.name]}
-                                contentStyle={{ backgroundColor: "#111827", borderColor: "#1f2937", color: "#E5E7EB" }}
-                                cursor={{ fill: "rgba(31,41,55,0.35)" }}
-                              />
-                              {/* Invisible offset to position each step */}
-                              <Bar dataKey="offset" stackId="a" fill="transparent" isAnimationActive={false} />
-                              {/* Visible step amount with per-bar color */}
-                              <Bar dataKey="value" stackId="a" radius={[6, 6, 0, 0]}>
-                                {waterfallData.map((entry, index) => (
-                                  <Cell key={`wf-${index}`} fill={entry.color} />
-                                ))}
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
-                          <div className="mt-2 text-[11px] text-gray-500">
-                            Shows progression from gross estate to net to heirs after deductions, estate taxes, and heirs’ income tax.
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
+                            <div className="flex items-center justify-between">
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="text-gray-300 hover:text-gray-100 cursor-help">Available liquid assets (incl. Roth)</span>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="bg-gray-800 border-gray-700 text-gray-100 max-w-[320px]">
+                                    Includes taxable, Roth, ILIT, and in‑estate life insurance; excludes earmarked charitable bequests.
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                              <span className="text-white">{formatCurrency(activeSummary.liquidity.available)}</span>
+                            </div>
+
+                            {/* Liquidity breakdown for clarity */}
+                            <div className="flex items-center justify-between">
+                              <span>Gross liquidity</span>
+                              <span className="text-white">
+                                {formatCurrency(Number(activeSummary.liquidity.available || 0) + Number((activeSummary as any).liquidity?.charitableReserve || 0))}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span>Less: charitable reserve</span>
+                              <span className="text-white">{formatCurrency(Number((activeSummary as any).liquidity?.charitableReserve || 0))}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="text-gray-300 hover:text-gray-100 cursor-help">
+                                      Required liquidity ({percentFormatter.format((localAssumptions.liquidityTargetPercent ?? 110) / 100)})
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="bg-gray-800 border-gray-700 text-gray-100 max-w-[320px]">
+                                    Target buffer to cover modeled estate taxes and settlement costs without forced asset sales.
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                              <span className="text-white">{formatCurrency(activeSummary.liquidity.required)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span>Settlement expenses (probate + funeral)</span>
+                              <span className="text-white">{formatCurrency(Number((summary as any).liquidity?.settlementExpenses || 0))}</span>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              Probate (5%): {formatCurrency(Number((activeSummary as any).liquidity?.probateCosts || 0))} · Funeral: {formatCurrency(Number((activeSummary as any).liquidity?.funeralCost || 0))}
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span>Insurance need</span>
+                              <span className="text-white">{formatCurrency(activeSummary.liquidity.insuranceNeed)}</span>
+                            </div>
+                            {/* Life insurance disclosure */}
+                            {(activeSummary.liquidity.existingLifeInsuranceUser > 0 || activeSummary.liquidity.existingLifeInsuranceSpouse > 0 || activeSummary.liquidity.ilitCoverage > 0) && (
+                              <div className="pt-1 text-xs text-gray-400">
+                                {(() => {
+                                  const parts: string[] = [];
+                                  if (activeSummary.liquidity.existingLifeInsuranceUser > 0) {
+                                    parts.push(`user in-estate ${formatCurrency(Number(activeSummary.liquidity.existingLifeInsuranceUser))}`);
+                                  }
+                                  if (activeSummary.liquidity.existingLifeInsuranceSpouse > 0) {
+                                    parts.push(`spouse in-estate ${formatCurrency(Number(activeSummary.liquidity.existingLifeInsuranceSpouse))}`);
+                                  }
+                                  if (activeSummary.liquidity.ilitCoverage > 0) {
+                                    parts.push(`ILIT ${formatCurrency(Number(activeSummary.liquidity.ilitCoverage))}`);
+                                  }
+                                  const total = Number(activeSummary.liquidity.existingLifeInsuranceUser || 0) + Number(activeSummary.liquidity.existingLifeInsuranceSpouse || 0) + Number(activeSummary.liquidity.ilitCoverage || 0);
+                                  return (
+                                    <span>
+                                      Includes life insurance: {formatCurrency(total)} ({parts.join(', ')})
+                                    </span>
+                                  );
+                                })()}
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+
+                        <Card className="bg-gray-950/40 border-gray-800">
+                          <CardHeader>
+                            <CardTitle className="text-sm font-semibold text-gray-200">Liquidity coverage</CardTitle>
+                          </CardHeader>
+                          <CardContent className="h-52">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <RechartsPieChart>
+                                <Pie
+                                  data={liquidityPieData}
+                                  innerRadius={48}
+                                  outerRadius={70}
+                                  startAngle={90}
+                                  endAngle={-270}
+                                  paddingAngle={2}
+                                  dataKey="value"
+                                  labelLine={false}
+                                >
+                                  <Cell fill="#10b981" />
+                                  <Cell fill="#ef4444" />
+                                </Pie>
+                                <RechartsTooltip
+                                  formatter={(value: number, name: string) => [formatCurrency(value), name]}
+                                  contentStyle={{ backgroundColor: "#111827", borderColor: "#1f2937", color: "#E5E7EB" }}
+                                  labelStyle={{ color: "#E5E7EB" }}
+                                  itemStyle={{ color: "#E5E7EB" }}
+                                />
+                              </RechartsPieChart>
+                            </ResponsiveContainer>
+                            <div className="mt-3 text-xs text-gray-400">
+                              Coverage: {percentFormatter.format(liquidityCoverage)}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    </>
                   )}
                 </CardContent>
               </Card>
@@ -1467,9 +1567,10 @@ interface SummaryTileProps {
   value: string;
   helper?: string;
   accent?: "emerald" | "orange" | "sky" | "default";
+  highlight?: boolean;
 }
 
-function SummaryTile({ label, value, helper, accent = "default" }: SummaryTileProps) {
+function SummaryTile({ label, value, helper, accent = "default", highlight = false }: SummaryTileProps) {
   const accentColor = {
     emerald: "bg-emerald-500/10 text-emerald-300",
     orange: "bg-orange-500/10 text-orange-300",
@@ -1478,7 +1579,7 @@ function SummaryTile({ label, value, helper, accent = "default" }: SummaryTilePr
   }[accent];
 
   return (
-    <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
+    <div className={`rounded-xl border border-gray-800 bg-gray-950/40 p-4 ${highlight ? "ring-2 ring-purple-500/40 shadow-lg shadow-purple-500/20" : ""}`}>
       <div className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${accentColor}`}>{label}</div>
       <p className="mt-3 text-2xl font-semibold text-white">{value}</p>
       {helper && <p className="mt-2 text-xs text-gray-400">{helper}</p>}
