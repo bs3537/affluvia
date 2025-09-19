@@ -20,6 +20,7 @@ import { useToast } from "@/hooks/use-toast";
   import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
   import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { US_STATES } from "@/lib/us-states";
 import {
   AlertCircle,
   ArrowRight,
@@ -206,7 +207,13 @@ export function EstatePlanningNewCenter() {
     const persisted = (estatePlan as any)?.analysisResults?.estateNew?.includeRoth;
     if (typeof persisted === "boolean") {
       setIncludeRoth(persisted);
+      return;
     }
+    // Fallback to session storage in case user reloads immediately after toggling
+    try {
+      const ss = sessionStorage.getItem("estateNew_includeRoth");
+      if (ss === "true" || ss === "false") setIncludeRoth(ss === "true");
+    } catch {}
   }, [(estatePlan as any)?.id]);
 
   useEffect(() => {
@@ -365,6 +372,26 @@ export function EstatePlanningNewCenter() {
     onError: () => {
       // Allow retrying on next change
       pendingHashRef.current = null;
+    }
+  });
+
+  // Persist includeRoth immediately when toggled so it survives refreshes
+  const persistIncludeRoth = useMutation({
+    mutationFn: async (next: boolean) => {
+      if (!estatePlan?.id) return null;
+      const current = (estatePlan as any)?.analysisResults || {};
+      const nextAnalysis = {
+        ...current,
+        estateNew: { ...(current.estateNew || {}), includeRoth: next }
+      };
+      return estatePlanningService.updateEstatePlan(estatePlan.id, { analysisResults: nextAnalysis });
+    },
+    onSuccess: () => {
+      // Throttle the downstream snapshot autosave to avoid double PATCH
+      lastSaveTimeRef.current = Date.now();
+      try { sessionStorage.setItem("estateNew_includeRoth", String(includeRoth)); } catch {}
+      // Refresh estate-plan query so new analysisResults load on next mount
+      queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
     }
   });
 
@@ -875,7 +902,14 @@ export function EstatePlanningNewCenter() {
             >
               <Sparkles className={`h-4 w-4 ${includeRoth ? "text-purple-300" : "text-gray-400"}`} />
               <span className={`text-xs font-medium ${includeRoth ? "text-purple-200" : "text-gray-300"}`}>Include Roth Conversions</span>
-              <Switch checked={includeRoth} onCheckedChange={setIncludeRoth} />
+              <Switch
+                checked={includeRoth}
+                onCheckedChange={(v) => {
+                  setIncludeRoth(v);
+                  try { sessionStorage.setItem("estateNew_includeRoth", String(v)); } catch {}
+                  persistIncludeRoth.mutate(v);
+                }}
+              />
             </div>
             <Button
               size="sm"
@@ -1019,7 +1053,7 @@ export function EstatePlanningNewCenter() {
                       <SummaryTile
                         label="Net Estate (after taxes & other costs)"
                         value={formatCurrency(netAfterAllCosts)}
-                        helper="After heirs’ income tax, probate (5%), and funeral costs"
+                        helper="After heirs' income tax, probate (5%), and funeral costs"
                         accent="emerald"
                         highlight
                       />
@@ -1269,15 +1303,11 @@ export function EstatePlanningNewCenter() {
                             <tr key={`${item.type}-label`} className="bg-gray-900/30">
                               <td className="px-4 py-3 font-semibold text-gray-200">{item.label}</td>
                               <td className="px-4 py-3 text-center">
-                                {item.type === 'will' && (
-                                  <WillUploadInline docId={(documents.find((d: any) => String(d.documentType) === 'will' && !d.forSpouse)?.id)} documentType="will" />
-                                )}
+                                {/* Removed WillUploadInline for will type */}
                               </td>
                               {isMarriedOrPartnered && (
                                 <td className="px-4 py-3 text-center">
-                                  {item.type === 'will' && (
-                                    <WillUploadInline docId={(documents.find((d: any) => String(d.documentType) === 'will' && d.forSpouse)?.id)} documentType="will" />
-                                  )}
+                                  {/* Removed WillUploadInline for will type */}
                                 </td>
                               )}
                             </tr>
@@ -1408,7 +1438,7 @@ export function EstatePlanningNewCenter() {
                               </BarChart>
                             </ResponsiveContainer>
                             <div className="mt-2 text-[11px] text-gray-500">
-                              Shows progression from gross estate to final net after taxes, heirs’ income tax, charitable gifts, and other expenses.
+                              Shows progression from gross estate to final net after taxes, heirs' income tax, charitable gifts, and other expenses.
                             </div>
                           </CardContent>
                         </Card>
@@ -1866,7 +1896,7 @@ export function EstatePlanningNewCenter() {
                       if (willDocs.length) {
                         return (
                           <div className="rounded-lg border border-amber-700 bg-amber-900/20 p-3 text-sm text-amber-200">
-                            Don’t forget to print, sign with two witnesses, and upload the signed PDF in the Checklist.
+                            Don't forget to print, sign with two witnesses, and store your signed will in a safe place.
                           </div>
                         );
                       }
@@ -2044,7 +2074,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
     } catch {}
     return (
       <>
-        <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=>setOpen(true)}>State details</Button>
+        <Button variant="outline" className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50 hover:border-gray-500" onClick={()=>setOpen(true)}>State details</Button>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogContent className="bg-gray-900 border-gray-700 text-gray-200 max-w-lg">
             <DialogHeader>
@@ -2098,6 +2128,9 @@ function DocumentStatusBadge({ status }: { status: string }) {
     const [petGuardian, setPetGuardian] = useState<string>("");
     const [funeralPrefs, setFuneralPrefs] = useState<string>("");
     const [residuaryPlan, setResiduaryPlan] = useState<string>("All to my spouse, or if not living, to my children in equal shares.");
+    const [distMethod, setDistMethod] = useState<'per-stirpes'|'per-capita'>(
+      'per-stirpes'
+    );
 
     useEffect(() => {
       try {
@@ -2110,6 +2143,29 @@ function DocumentStatusBadge({ status }: { status: string }) {
     }, []);
 
     const [generatedDocId, setGeneratedDocId] = useState<number | null>(null);
+
+    // Reset all inputs to initial state (useful to start another will, e.g., for spouse)
+    const resetWillWizard = () => {
+      setStep(1);
+      setTestatorName("");
+      setMaritalStatus("single");
+      setSpouseName("");
+      setExecutorName("");
+      setAltExecutorName("");
+      setGuardianName("");
+      setAltGuardianName("");
+      setSpecificBequests("");
+      setBequests([{ description: "", beneficiary: "", amount: "", alt: "" }]);
+      setResParts([{ beneficiary: "Spouse or partner", percent: "100" }]);
+      setSurvivorshipDays(30);
+      setNoContest(false);
+      setPetGuardian("");
+      setFuneralPrefs("");
+      setResiduaryPlan("All to my spouse, or if not living, to my children in equal shares.");
+      setDistMethod('per-stirpes');
+      setGeneratedDocId(null);
+      setLinks({});
+    };
     const generateMutation = useMutation({
       mutationFn: async () => {
         // Compose structured bequests into text if present
@@ -2180,7 +2236,18 @@ function DocumentStatusBadge({ status }: { status: string }) {
             </div>
             <div className="space-y-2">
               <Label className="text-white">State</Label>
-              <Input value={stateCode} onChange={(e) => setStateCode(e.target.value)} placeholder="e.g., CA" className="bg-gray-900/60 border-gray-700 text-white" />
+              <Select value={stateCode} onValueChange={setStateCode}>
+                <SelectTrigger className="bg-gray-900/60 border-gray-700 text-white">
+                  <SelectValue placeholder="Select a state" />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-800 border-gray-700">
+                  {US_STATES.map((s) => (
+                    <SelectItem key={s.value} value={s.value} className="text-white">
+                      {s.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label className="text-white">Marital status</Label>
@@ -2251,9 +2318,9 @@ function DocumentStatusBadge({ status }: { status: string }) {
                   </div>
                 ))}
                 <div className="flex gap-2">
-                  <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=> setBequests([...bequests, {description:'',beneficiary:'',amount:''}])}>Add another</Button>
+                  <Button variant="outline" className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50 hover:border-gray-500" onClick={()=> setBequests([...bequests, {description:'',beneficiary:'',amount:''}])}>Add another</Button>
                   {bequests.length>1 && (
-                    <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=> setBequests(bequests.slice(0,-1))}>Remove last</Button>
+                    <Button variant="outline" className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50 hover:border-gray-500" onClick={()=> setBequests(bequests.slice(0,-1))}>Remove last</Button>
                   )}
                 </div>
               </div>
@@ -2268,8 +2335,8 @@ function DocumentStatusBadge({ status }: { status: string }) {
                     <Input value={p.beneficiary} onChange={(e)=>{ const v=[...resParts]; v[idx]={...v[idx], beneficiary:e.target.value}; setResParts(v); }} placeholder="Beneficiary" className="bg-gray-900/60 border-gray-700 text-white" />
                     <Input value={p.percent} onChange={(e)=>{ const v=[...resParts]; v[idx]={...v[idx], percent:e.target.value.replace(/[^0-9.]/g,'')}; setResParts(v); }} placeholder="Percent" className="bg-gray-900/60 border-gray-700 text-white" />
                     <div className="flex items-center gap-2">
-                      <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=> setResParts([...resParts, { beneficiary:'', percent:'' }])}>Add</Button>
-                      {resParts.length>1 && <Button variant="outline" className="border-gray-700 text-gray-200" onClick={()=> setResParts(resParts.slice(0,-1))}>Remove</Button>}
+                      <Button variant="outline" className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50 hover:border-gray-500" onClick={()=> setResParts([...resParts, { beneficiary:'', percent:'' }])}>Add</Button>
+                      {resParts.length>1 && <Button variant="outline" className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50 hover:border-gray-500" onClick={()=> setResParts(resParts.slice(0,-1))}>Remove</Button>}
                     </div>
                   </div>
                 ))}
@@ -2301,7 +2368,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
                   </label>
                 </div>
                 <p className="text-xs text-gray-500">
-                  Per stirpes generally means a deceased beneficiary’s share goes to their descendants by branch. Per capita at each generation
+                  Per stirpes generally means a deceased beneficiary's share goes to their descendants by branch. Per capita at each generation
                   divides shares equally among living beneficiaries at the nearest generation with survivors.
                 </p>
               </div>
@@ -2344,6 +2411,13 @@ function DocumentStatusBadge({ status }: { status: string }) {
                 {generateMutation.isPending ? 'Generating…' : 'Generate Will Packet'}
               </Button>
               <StateDetailsButton stateCode={stateCode} />
+              <Button
+                variant="outline"
+                className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50 hover:border-gray-500"
+                onClick={resetWillWizard}
+              >
+                Start new will
+              </Button>
               {(() => {
                 const RON_ENABLED = Boolean((import.meta as any).env?.VITE_RON_ENABLED);
                 if (RON_ENABLED && rules?.allowSelfProving) {
@@ -2360,11 +2434,6 @@ function DocumentStatusBadge({ status }: { status: string }) {
               {links.affidavit && <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Affidavit (DOCX)</a>}
               {links.affidavitPdf && <a className="text-sm text-teal-300 underline" href={links.affidavitPdf} target="_blank" rel="noreferrer">Affidavit (PDF)</a>}
               {links.cover && <a className="text-sm text-teal-300 underline" href={links.cover} target="_blank" rel="noreferrer">Signing checklist (PDF)</a>}
-              {generatedDocId && (
-                <div className="ml-4 inline-block">
-                  <WillUploadInline docId={generatedDocId} documentType="will" />
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -2395,10 +2464,10 @@ function DocumentStatusBadge({ status }: { status: string }) {
   function WizardNav({ step, setStep, maxStep, canNext }: { step: number; setStep: (n: number)=>void; maxStep: number; canNext: boolean }) {
     return (
       <div className="flex items-center justify-between pt-2">
-        <Button variant="outline" disabled={step <= 1} onClick={() => setStep(Math.max(1, step - 1))}>Back</Button>
+        <Button variant="outline" className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50 hover:border-gray-500 disabled:opacity-50 disabled:cursor-not-allowed" disabled={step <= 1} onClick={() => setStep(Math.max(1, step - 1))}>Back</Button>
         <div className="flex items-center gap-2">
           {step < maxStep && (
-            <Button disabled={!canNext} onClick={() => setStep(Math.min(maxStep, step + 1))}>Next</Button>
+            <Button className="bg-purple-600 hover:bg-purple-700 text-white" disabled={!canNext} onClick={() => setStep(Math.min(maxStep, step + 1))}>Next</Button>
           )}
         </div>
       </div>
@@ -2410,10 +2479,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
     const { toast } = useToast();
     const queryClient = useQueryClient();
     const [pending, setPending] = useState(false);
-    const [notarized, setNotarized] = useState(false);
-    const [execDate, setExecDate] = useState<string>("");
-    const [w1, setW1] = useState('');
-    const [w2, setW2] = useState('');
+
     const onChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -2425,10 +2491,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
       fd.append('document', file);
       fd.append('documentType', documentType);
       if (docId) fd.append('documentId', String(docId));
-      fd.append('notarized', String(notarized));
-      const witnesses = [w1, w2].filter(Boolean).map(n => ({ name: n }));
-      if (witnesses.length) fd.append('witnesses', JSON.stringify(witnesses));
-      if (execDate) fd.append('executionDate', execDate);
+      
       setPending(true);
       try {
         const res = await fetch('/api/estate-documents/upload', { method: 'POST', credentials: 'include', body: fd });
@@ -2442,19 +2505,10 @@ function DocumentStatusBadge({ status }: { status: string }) {
         e.currentTarget.value = '';
       }
     };
+
     return (
       <div className="text-xs text-gray-400 flex items-center gap-2">
-        <label className="cursor-pointer inline-flex items-center gap-2">
-          <span className="underline">Upload signed PDF</span>
-          <input type="file" accept="application/pdf" className="hidden" onChange={onChange} disabled={pending} />
-        </label>
-        <span className="inline-flex items-center gap-1">
-          <input type="checkbox" className="accent-purple-500" checked={notarized} onChange={(e)=>setNotarized(e.target.checked)} />
-          <span>Notarized</span>
-        </span>
-        <input value={w1} onChange={(e)=>setW1(e.target.value)} placeholder="Witness 1" className="bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-gray-200" />
-        <input value={w2} onChange={(e)=>setW2(e.target.value)} placeholder="Witness 2" className="bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-gray-200" />
-        <input type="date" value={execDate} onChange={(e)=>setExecDate(e.target.value)} className="bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-gray-200" />
+        {/* Upload label intentionally removed from Will Wizard step 4 UI */}
         {pending && <span>Uploading…</span>}
       </div>
     );
@@ -2468,4 +2522,3 @@ function parseNumericInput(value: string): number {
   return Number.isFinite(parsed) ? parsed : NaN;
 }
   
-    const [distMethod, setDistMethod] = useState<'per-stirpes'|'per-capita'>('per-stirpes');

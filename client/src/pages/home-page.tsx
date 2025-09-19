@@ -440,7 +440,7 @@ export default function HomePage() {
       </header>
 
       {/* Main content */}
-      <main className={`${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'} min-h-screen transition-all duration-300 ease-in-out`}>
+      <main className={`${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'} min-h-screen transition-all duration-300 ease-in-out${showFloatingAssistant && activeView !== 'chatbot' ? ' pb-28 sm:pb-24 md:pb-20' : ''}`}>
         {renderContent()}
       </main>
 

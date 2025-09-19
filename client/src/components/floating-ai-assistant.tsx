@@ -42,7 +42,7 @@ export function FloatingAIAssistant({ onOpenChat }: FloatingAIAssistantProps) {
   return (
     <>
       {/* Floating Button */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-center animate-in slide-in-from-bottom-4 duration-500">
+      <div className="fixed right-6 z-30 flex flex-col items-center animate-in slide-in-from-bottom-4 duration-500 bottom-24 sm:bottom-8 md:bottom-6">
         <div className="relative">
           <Button
             type="button"
@@ -53,6 +53,7 @@ export function FloatingAIAssistant({ onOpenChat }: FloatingAIAssistantProps) {
             }}
             className="w-16 h-16 rounded-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 border-2 border-purple-400/30 group"
             size="icon"
+            aria-label="Open Financial Assistant"
           >
             <div className="relative">
               <Bot className="w-7 h-7 text-white group-hover:scale-110 transition-transform duration-200" />
@@ -79,7 +80,7 @@ export function FloatingAIAssistant({ onOpenChat }: FloatingAIAssistantProps) {
 
       {/* Enhanced Minimized Chat Window */}
       {isMinimized && (
-        <div className="fixed bottom-24 right-6 z-40 animate-in slide-in-from-right-4 duration-300">
+        <div className="fixed bottom-36 sm:bottom-28 md:bottom-24 right-6 z-40 animate-in slide-in-from-right-4 duration-300">
           <div className="bg-gradient-to-r from-gray-800/95 to-gray-700/95 border border-gray-600/50 rounded-xl shadow-2xl backdrop-blur-sm p-4 w-80">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-3">

@@ -6933,14 +6933,14 @@ Return ONLY valid JSON like:
         const affPdf = await PDFDocument.create();
         const aPage = affPdf.addPage();
         const sz = aPage.getSize();
-        const write = (yStart: number, lines: string[], size = 11, leading = 14) => {
+        const writeLines = (yStart: number, lines: string[], size = 11, leading = 14) => {
           let y = yStart;
           lines.forEach((line) => {
             aPage.drawText(line, { x: 50, y, size, font, color: rgb(0, 0, 0) });
             y -= leading;
           });
         };
-        write(sz.height - 60, [
+        writeLines(sz.height - 60, [
           'SELF-PROVING AFFIDAVIT',
           `STATE: ${state}  COUNTY: __________`,
           `${testatorName} signed the attached Will in our presence; each witness signed in the presence of the Testator and each other.`,
