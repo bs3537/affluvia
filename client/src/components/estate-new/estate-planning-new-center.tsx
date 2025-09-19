@@ -1267,8 +1267,18 @@ export function EstatePlanningNewCenter() {
                           <>
                             <tr key={`${item.type}-label`} className="bg-gray-900/30">
                               <td className="px-4 py-3 font-semibold text-gray-200">{item.label}</td>
-                              <td className="px-4 py-3"></td>
-                              {isMarriedOrPartnered && <td className="px-4 py-3"></td>}
+                              <td className="px-4 py-3 text-center">
+                                {item.type === 'will' && (
+                                  <WillUploadInline docId={(documents.find((d: any) => String(d.documentType) === 'will' && !d.forSpouse)?.id)} documentType="will" />
+                                )}
+                              </td>
+                              {isMarriedOrPartnered && (
+                                <td className="px-4 py-3 text-center">
+                                  {item.type === 'will' && (
+                                    <WillUploadInline docId={(documents.find((d: any) => String(d.documentType) === 'will' && d.forSpouse)?.id)} documentType="will" />
+                                  )}
+                                </td>
+                              )}
                             </tr>
                             <tr key={`${item.type}-row`} className="bg-gray-950/40">
                               <td className="px-4 py-3 text-gray-400"> {item.sublabel} </td>
@@ -2175,6 +2185,46 @@ function DocumentStatusBadge({ status }: { status: string }) {
             )}
           </div>
         </div>
+      </div>
+    );
+  }
+
+  // Upload executed will (Checklist helper)
+  function WillUploadInline({ docId, documentType = 'will' }: { docId?: number; documentType?: string }) {
+    const { toast } = useToast();
+    const queryClient = useQueryClient();
+    const [pending, setPending] = useState(false);
+    const onChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (file.type !== 'application/pdf') {
+        toast({ title: 'Please upload a PDF', variant: 'destructive' });
+        return;
+      }
+      const fd = new FormData();
+      fd.append('document', file);
+      fd.append('documentType', documentType);
+      if (docId) fd.append('documentId', String(docId));
+      setPending(true);
+      try {
+        const res = await fetch('/api/estate-documents/upload', { method: 'POST', credentials: 'include', body: fd });
+        if (!res.ok) throw new Error('Upload failed');
+        toast({ title: 'Executed document saved' });
+        queryClient.invalidateQueries({ queryKey: ['estate-documents'] });
+      } catch (err) {
+        toast({ title: 'Upload failed', variant: 'destructive' });
+      } finally {
+        setPending(false);
+        e.currentTarget.value = '';
+      }
+    };
+    return (
+      <div className="text-xs text-gray-400 flex items-center gap-2">
+        <label className="cursor-pointer inline-flex items-center gap-2">
+          <span className="underline">Upload signed PDF</span>
+          <input type="file" accept="application/pdf" className="hidden" onChange={onChange} disabled={pending} />
+        </label>
+        {pending && <span>Uploading…</span>}
       </div>
     );
   }

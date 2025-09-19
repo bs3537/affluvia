@@ -6882,34 +6882,61 @@ Return ONLY valid JSON like:
       }
       
       // Continue with the regular handler
-    try {
-      if (!req.isAuthenticated()) return res.sendStatus(401);
-      
-      if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
+      try {
+        if (!req.isAuthenticated()) return res.sendStatus(401);
+        
+        if (!req.file) {
+          return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const fs = await import('fs/promises');
+        const path = await import('path');
+        const uploadsDir = path.join(process.cwd(), 'uploads', 'estate-documents');
+        await fs.mkdir(uploadsDir, { recursive: true });
+        const stamp = Date.now();
+        const safeName = String(req.file.originalname || 'document.pdf').replace(/[^A-Za-z0-9._-]/g, '_');
+        const fileName = `${stamp}_${safeName}`;
+        const filePath = path.join(uploadsDir, fileName);
+        await fs.writeFile(filePath, req.file.buffer);
+
+        const url = `/uploads/estate-documents/${fileName}`;
+        const documentType = String(req.body.documentType || 'will');
+        const docId = req.body.documentId ? parseInt(String(req.body.documentId)) : undefined;
+        const notarized = String(req.body.notarized || 'false').toLowerCase() === 'true';
+        const witnessesJson = req.body.witnesses ? JSON.parse(String(req.body.witnesses)) : undefined;
+
+        let updated: any = null;
+        if (docId && Number.isFinite(docId)) {
+          updated = await storage.updateEstateDocument(req.user!.id, docId, {
+            status: 'executed',
+            documentUrl: url,
+            executionDate: new Date(),
+            notarized,
+            witnesses: witnessesJson,
+          } as any);
+        } else {
+          const plan = await storage.getEstatePlan(req.user!.id);
+          updated = await storage.createEstateDocument(req.user!.id, {
+            estatePlanId: plan?.id,
+            documentType,
+            documentName: documentType === 'will' ? 'Last Will and Testament (Signed)' : 'Estate Document (Signed)',
+            status: 'executed',
+            executionDate: new Date(),
+            notarized,
+            witnesses: witnessesJson,
+            documentUrl: url,
+          } as any);
+        }
+
+        return res.json({ document: updated, documentUrl: url });
+      } catch (error) {
+        console.error('Estate document upload error:', error);
+        // Send JSON error response instead of using next()
+        res.status(500).json({ 
+          error: 'Failed to parse document', 
+          message: (error as Error).message 
+        });
       }
-
-      console.log('Estate document upload received:', {
-        filename: req.file.originalname,
-        size: req.file.size,
-        mimetype: req.file.mimetype,
-        documentType: req.body.documentType
-      });
-
-      const documentType = req.body.documentType || 'will';
-      
-      // Parse document with Gemini (using simple version for testing)
-      const insights = await parseEstateDocumentSimple(req.file.buffer, documentType);
-      
-      res.json({ insights });
-    } catch (error) {
-      console.error('Estate document upload error:', error);
-      // Send JSON error response instead of using next()
-      res.status(500).json({ 
-        error: 'Failed to parse document', 
-        message: (error as Error).message 
-      });
-    }
     });
   });
 
