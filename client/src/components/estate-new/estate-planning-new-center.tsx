@@ -17,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertCircle,
   ArrowRight,
@@ -590,6 +591,81 @@ export function EstatePlanningNewCenter() {
     return Math.max(0, netAfterIncome - settlement);
   }, [estateProjection]);
 
+  // ——— Beneficiaries editor helpers ———
+  type FPAsset = { type?: string; owner?: string; value?: number; name?: string; description?: string; beneficiaries?: { primary?: string; contingent?: string }; deathBenefit?: number };
+  const allAssets: FPAsset[] = useMemo(() => Array.isArray((profile as any)?.assets) ? (profile as any).assets : [], [profile]);
+
+  const normalizeOwner = (o?: string) => {
+    const s = String(o || "").toLowerCase();
+    if (["user","self","you","client","primary"].includes(s)) return "user";
+    if (["spouse","partner"].includes(s)) return "spouse";
+    if (s === "joint") return "joint";
+    return "user";
+  };
+
+  const categoryOf = (a: FPAsset): string => {
+    const t = String(a?.type || "").toLowerCase();
+    if (t.includes("bank") || t.includes("checking") || t.includes("savings")) return "Bank";
+    if (t.includes("401k") || t.includes("ira") || t.includes("roth") || t.includes("retirement")) return "Retirement Accounts";
+    if (t.includes("life")) return "Life Insurance";
+    if (t.includes("brokerage") || t.includes("investment") || t.includes("stock") || t.includes("ibkr")) return "Invested Assets";
+    return "Other Assets";
+  };
+
+  const assetsByCategory = useMemo(() => {
+    const map: Record<string, { user: FPAsset[]; spouse: FPAsset[]; joint: FPAsset[] }> = {};
+    for (const a of allAssets) {
+      const cat = categoryOf(a);
+      if (!map[cat]) map[cat] = { user: [], spouse: [], joint: [] };
+      map[cat][normalizeOwner(a.owner)].push(a);
+    }
+    return map;
+  }, [allAssets]);
+
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editPrimary, setEditPrimary] = useState<string>("");
+  const [editContingent, setEditContingent] = useState<string>("");
+  const [editCustomPrimary, setEditCustomPrimary] = useState<string>("");
+  const [editCustomContingent, setEditCustomContingent] = useState<string>("");
+
+  const { mutate: saveAssets, isPending: savingAssets } = useMutation({
+    mutationFn: async (updatedAssets: FPAsset[]) => {
+      const res = await fetch("/api/financial-profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ assets: updatedAssets, isPartialSave: true, skipCalculations: true }),
+      });
+      if (!res.ok) throw new Error("Failed to save beneficiaries");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/financial-profile"] });
+      toast({ title: "Beneficiaries saved" });
+      setEditingIndex(null);
+    },
+    onError: () => toast({ title: "Save failed", variant: "destructive" })
+  });
+
+  const startEdit = (globalIdx: number) => {
+    const a = allAssets[globalIdx] || {} as FPAsset;
+    setEditingIndex(globalIdx);
+    setEditPrimary(a.beneficiaries?.primary || "");
+    setEditContingent(a.beneficiaries?.contingent || "");
+    setEditCustomPrimary("");
+    setEditCustomContingent("");
+  };
+
+  const saveRow = (globalIdx: number) => {
+    const updated = [...allAssets];
+    const p = editPrimary === "Custom" ? (editCustomPrimary || "Custom") : editPrimary;
+    const c = editContingent === "Custom" ? (editCustomContingent || "Custom") : editContingent;
+    const target = { ...(updated[globalIdx] || {}) } as FPAsset;
+    target.beneficiaries = { ...(target.beneficiaries || {}), primary: p || undefined, contingent: c || undefined };
+    updated[globalIdx] = target;
+    saveAssets(updated);
+  };
+
   // Checklist helpers
   const isMarriedOrPartnered =
     String((profile as any)?.maritalStatus || "").toLowerCase() === "married" ||
@@ -849,6 +925,7 @@ export function EstatePlanningNewCenter() {
               { id: "tax", label: "Tax Analysis", icon: Scale },
               { id: "strategies", label: "Strategies", icon: Lightbulb },
               { id: "checklist", label: "Checklist", icon: CheckCircle2 },
+              { id: "beneficiaries-table", label: "Beneficiaries", icon: Users },
               { id: "beneficiaries", label: "Beneficiaries & Flow", icon: Users },
               { id: "documents", label: "Documents & Tasks", icon: Shield },
               { id: "recommendations", label: "Recommendations", icon: Target },
@@ -1029,6 +1106,138 @@ export function EstatePlanningNewCenter() {
                       </Card>
                     </div>
                   )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="beneficiaries-table" className="space-y-4">
+              <Card className="bg-gray-900/40 border-gray-700">
+                <CardHeader>
+                  <CardTitle className="text-xl text-white">Beneficiaries</CardTitle>
+                  <p className="text-sm text-gray-400">
+                    Review accounts by owner and set primary and contingent beneficiaries. Changes are saved to your profile on Save.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-hidden rounded-xl border border-gray-800">
+                    <table className="min-w-full divide-y divide-gray-800 text-sm">
+                      <thead className="bg-gray-950/60 text-gray-400">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-medium">Account / Group</th>
+                          <th className="px-4 py-3 text-right font-medium">Account Balance</th>
+                          <th className="px-4 py-3 text-right font-medium">Death Benefit</th>
+                          <th className="px-4 py-3 text-left font-medium">Primary Beneficiary</th>
+                          <th className="px-4 py-3 text-left font-medium">Contingent Beneficiary</th>
+                          <th className="px-4 py-3 text-right font-medium"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800">
+                        {Object.entries(assetsByCategory).map(([category, owners]) => (
+                          <tbody key={category} className="contents">
+                            <tr>
+                              <td className="px-4 py-2 font-semibold text-gray-200 bg-gray-900/30" colSpan={6}>{category}</td>
+                            </tr>
+
+                            {(["user","spouse","joint"] as const).map((ownerKey) => {
+                              const rows = (owners as any)[ownerKey] as FPAsset[];
+                              if (!rows.length) return null;
+                              const ownerLabel =
+                                ownerKey === "user" ? `${clientFirstName}'s Accounts` :
+                                ownerKey === "spouse" ? `${spouseFirstName}'s Accounts` :
+                                "Joint Accounts";
+
+                              return (
+                                <tbody key={`${category}-${ownerKey}`} className="contents">
+                                  <tr>
+                                    <td className="px-4 py-2 text-teal-300" colSpan={6}>{ownerLabel}</td>
+                                  </tr>
+
+                                  {rows.map((a, idxInOwner) => {
+                                    const globalIdx = allAssets.indexOf(a);
+                                    const isEditing = editingIndex === globalIdx;
+                                    const displayName = a.name || a.description || a.type || "Account";
+                                    const balance = Number(a.value || 0);
+                                    const death = Number(typeof a.deathBenefit === "number" ? a.deathBenefit : (category === "Life Insurance" ? a.value || 0 : 0));
+
+                                    return (
+                                      <tr key={`${category}-${ownerKey}-${idxInOwner}`} className={isEditing ? "bg-blue-900/20" : "bg-gray-950/40 hover:bg-gray-900/40"}>
+                                        <td className="px-4 py-3 text-gray-100">{displayName}</td>
+                                        <td className="px-4 py-3 text-right text-gray-100">{formatCurrency(balance)}</td>
+                                        <td className="px-4 py-3 text-right text-gray-100">{death > 0 ? formatCurrency(death) : "—"}</td>
+
+                                        <td className="px-4 py-3">
+                                          {isEditing ? (
+                                            <div className="flex items-center gap-2">
+                                              <Select value={editPrimary || ""} onValueChange={(v) => setEditPrimary(v)}>
+                                                <SelectTrigger className="bg-gray-900/60 border-gray-700 text-white h-9 w-44">
+                                                  <SelectValue placeholder="Select…" />
+                                                </SelectTrigger>
+                                                <SelectContent className="bg-gray-800 border-gray-700">
+                                                  {isMarriedOrPartnered && <SelectItem value={spouseFirstName} className="text-white">{spouseFirstName}</SelectItem>}
+                                                  <SelectItem value="Charity" className="text-white">Charity</SelectItem>
+                                                  <SelectItem value="Trust" className="text-white">Trust</SelectItem>
+                                                  <SelectItem value="All children" className="text-white">All children</SelectItem>
+                                                  <SelectItem value="All grandchildren" className="text-white">All grandchildren</SelectItem>
+                                                  <SelectItem value="Custom" className="text-white">Custom</SelectItem>
+                                                </SelectContent>
+                                              </Select>
+                                              {editPrimary === "Custom" && (
+                                                <Input value={editCustomPrimary} onChange={(e) => setEditCustomPrimary(e.target.value)} placeholder="Custom name" className="h-9 bg-gray-900/60 border-gray-700 text-white w-40" />
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <span className="text-gray-200">{(a as any).beneficiaries?.primary || "—"}</span>
+                                          )}
+                                        </td>
+
+                                        <td className="px-4 py-3">
+                                          {isEditing ? (
+                                            <div className="flex items-center gap-2">
+                                              <Select value={editContingent || ""} onValueChange={(v) => setEditContingent(v)}>
+                                                <SelectTrigger className="bg-gray-900/60 border-gray-700 text-white h-9 w-44">
+                                                  <SelectValue placeholder="Select…" />
+                                                </SelectTrigger>
+                                                <SelectContent className="bg-gray-800 border-gray-700">
+                                                  {isMarriedOrPartnered && <SelectItem value={spouseFirstName} className="text-white">{spouseFirstName}</SelectItem>}
+                                                  <SelectItem value="Charity" className="text-white">Charity</SelectItem>
+                                                  <SelectItem value="Trust" className="text-white">Trust</SelectItem>
+                                                  <SelectItem value="All children" className="text-white">All children</SelectItem>
+                                                  <SelectItem value="All grandchildren" className="text-white">All grandchildren</SelectItem>
+                                                  <SelectItem value="Custom" className="text-white">Custom</SelectItem>
+                                                </SelectContent>
+                                              </Select>
+                                              {editContingent === "Custom" && (
+                                                <Input value={editCustomContingent} onChange={(e) => setEditCustomContingent(e.target.value)} placeholder="Custom name" className="h-9 bg-gray-900/60 border-gray-700 text-white w-40" />
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <span className="text-gray-200">{(a as any).beneficiaries?.contingent || "—"}</span>
+                                          )}
+                                        </td>
+
+                                        <td className="px-4 py-3 text-right">
+                                          {isEditing ? (
+                                            <div className="flex items-center gap-2 justify-end">
+                                              <Button variant="outline" className="h-8 border-gray-600 text-gray-200" onClick={() => { setEditingIndex(null); }}>Cancel</Button>
+                                              <Button className="h-8 bg-indigo-600 hover:bg-indigo-700 text-white" disabled={savingAssets} onClick={() => saveRow(globalIdx)}>
+                                                {savingAssets ? "Saving…" : "Save"}
+                                              </Button>
+                                            </div>
+                                          ) : (
+                                            <Button variant="outline" className="h-8 border-gray-600 text-gray-200" onClick={() => startEdit(globalIdx)}>Edit</Button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              );
+                            })}
+                          </tbody>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
