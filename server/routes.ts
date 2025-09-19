@@ -6743,8 +6743,13 @@ Return ONLY valid JSON like:
                 new Paragraph({ text: `${survivorshipDays ? (petGuardian? '10':'9') : (petGuardian? '9':'8')}. FUNERAL PREFERENCES.` }),
                 new Paragraph({ text: funeralPrefs })
               ] : []),
+              // Anti‑lapse and distribution method
+              new Paragraph({ text: `${survivorshipDays ? (petGuardian? (funeralPrefs? '11':'10') : (funeralPrefs? '10':'9')) : (petGuardian? (funeralPrefs? '10':'9') : (funeralPrefs? '9':'8'))}. ANTI‑LAPSE; DISTRIBUTION METHOD.` }),
+              new Paragraph({ text: distMethod === 'per-capita'
+                ? "If any residuary beneficiary does not survive the survivorship period, that beneficiary's share shall pass per capita at each generation to the then‑living descendants of such beneficiary; if none, such share shall be added to the remaining residuary shares."
+                : "If any residuary beneficiary does not survive the survivorship period, that beneficiary's share shall pass to their then‑living descendants, by representation (per stirpes); if none, such share shall be added to the remaining residuary shares." }),
               ...(noContest ? [
-                new Paragraph({ text: `${survivorshipDays ? (petGuardian? (funeralPrefs? '11':'10') : (funeralPrefs? '10':'9')) : (petGuardian? (funeralPrefs? '10':'9') : (funeralPrefs? '9':'8'))}. NO‑CONTEST CLAUSE.` }),
+                new Paragraph({ text: `${survivorshipDays ? (petGuardian? (funeralPrefs? '12':'11') : (funeralPrefs? '11':'10')) : (petGuardian? (funeralPrefs? '11':'10') : (funeralPrefs? '10':'9'))}. NO‑CONTEST CLAUSE.` }),
                 new Paragraph({ text: "Any beneficiary who contests this Will shall forfeit their interest to the extent permitted by law." })
               ] : []),
               new Paragraph({ text: "\nIN WITNESS WHEREOF, I have signed this Will on the date below." }),
@@ -6881,6 +6886,14 @@ Return ONLY valid JSON like:
         line('Testator Signature');
         line('Witness 1 Signature / Name / Address');
         line('Witness 2 Signature / Name / Address');
+        // Add page numbers
+        const pages = willPdf.getPages();
+        const total = pages.length;
+        pages.forEach((p, i) => {
+          const txt = `Page ${i+1} of ${total}`;
+          p.drawText(txt, { x: p.getSize().width - 120, y: 20, size: 10, font, color: rgb(0.2,0.2,0.2) });
+        });
+
         const willPdfBytes = await willPdf.save();
         const willPdfFile = `will_${userId}_${stamp}.pdf`;
         const willPdfPath = path.join(willsDir, willPdfFile);

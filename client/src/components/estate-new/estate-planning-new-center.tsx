@@ -2105,6 +2105,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
       } catch {}
     }, []);
 
+    const [generatedDocId, setGeneratedDocId] = useState<number | null>(null);
     const generateMutation = useMutation({
       mutationFn: async () => {
         // Compose structured bequests into text if present
@@ -2136,6 +2137,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
         queryClient.invalidateQueries({ queryKey: ['estate-documents'] });
         setStep(maxStep);
         setLinks({ will: data?.willDocxUrl, willPdf: data?.willPdfUrl, affidavit: data?.affidavitDocxUrl, affidavitPdf: data?.affidavitPdfUrl, cover: data?.coverSheetPdfUrl });
+        if (data?.documentId) setGeneratedDocId(Number(data.documentId));
       },
       onError: () => toast({ title: 'Generation failed', variant: 'destructive' })
     });
@@ -2350,6 +2352,11 @@ function DocumentStatusBadge({ status }: { status: string }) {
               {links.affidavit && <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Affidavit (DOCX)</a>}
               {links.affidavitPdf && <a className="text-sm text-teal-300 underline" href={links.affidavitPdf} target="_blank" rel="noreferrer">Affidavit (PDF)</a>}
               {links.cover && <a className="text-sm text-teal-300 underline" href={links.cover} target="_blank" rel="noreferrer">Signing checklist (PDF)</a>}
+              {generatedDocId && (
+                <div className="ml-4 inline-block">
+                  <WillUploadInline docId={generatedDocId} documentType="will" />
+                </div>
+              )}
             </div>
           </div>
         )}
