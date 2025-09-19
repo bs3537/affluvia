@@ -50,7 +50,6 @@ export function Sidebar({ activeView, setActiveView, isOpen, onClose, onCollapse
     { id: "tax", label: "Tax Strategies", icon: Receipt },
     // { id: "goals", label: "Goals Center", icon: Target, emoji: "🎯" }, // Temporarily disabled
     { id: "educationfunding", label: "Education Funding", icon: School },
-    { id: "estate", label: "Estate Planning", icon: BookOpen },
     { id: "estate-new", label: "Estaate▌ Planning New", icon: BookOpen }, // Intentional glyph per requirements
     { id: "insights", label: "Insights", icon: Sparkles },
     { id: "chatbot", label: "Financial Assistant", icon: MessageCircle },
