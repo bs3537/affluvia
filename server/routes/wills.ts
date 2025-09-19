@@ -106,8 +106,7 @@ router.post("/generate", async (req, res) => {
     if (format === 'zip' || download === 'zip' || req.query.bundle === 'zip') {
       const ts = Date.now();
       const dir = path.join(process.cwd(), "uploads", "wills", `${userId}-${ts}`);
-      const pdfs = await generatePdfDocuments(dir, willData);
-      if (!pdfs?.length) return res.status(501).json({ error: 'pdf_generation_unavailable' });
+      let pdfs = await generatePdfDocuments(dir, willData);
 
       // Attempt to dynamically import archiver
       let archiver: any;
@@ -128,10 +127,19 @@ router.post("/generate", async (req, res) => {
       });
       archive.pipe(res);
 
-      for (const f of pdfs) {
-        // Put files under a folder named "Will Packet/" inside the zip
-        const nameInZip = `Will Packet/${path.basename(f.name)}`;
-        archive.file(f.filePath, { name: nameInZip });
+      if (pdfs && pdfs.length) {
+        for (const f of pdfs) {
+          const nameInZip = `Will Packet/${path.basename(f.name)}`;
+          archive.file(f.filePath, { name: nameInZip });
+        }
+      } else {
+        // Fallback: zip HTML documents if PDF generation is unavailable
+        const htmls = await generateWillDocuments(dir, willData);
+        res.setHeader('X-Will-Zip-Fallback', 'html');
+        for (const f of htmls) {
+          const nameInZip = `Will Packet (HTML)/${path.basename(f.filePath)}`;
+          archive.file(f.filePath, { name: nameInZip });
+        }
       }
 
       await archive.finalize();

@@ -160,7 +160,7 @@ export function WillWizard() {
                   <Button
                     variant="outline"
                     className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50"
-                    onClick={() => setStep(1)}
+                    onClick={() => { setStep(1); setGenerated(false); }}
                   >
                     Create New Will
                   </Button>
