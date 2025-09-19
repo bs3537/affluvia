@@ -16,8 +16,9 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+  import { Checkbox } from "@/components/ui/checkbox";
+  import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+  import { Textarea } from "@/components/ui/textarea";
 import {
   AlertCircle,
   ArrowRight,
@@ -927,6 +928,7 @@ export function EstatePlanningNewCenter() {
               { id: "checklist", label: "Checklist", icon: CheckCircle2 },
               { id: "beneficiaries-table", label: "Beneficiaries", icon: Users },
               { id: "recommendations", label: "Recommendations", icon: Target },
+              { id: "will", label: "Will Creator", icon: FileText },
             ].map((section) => {
                 const Icon = section.icon;
                 return (
@@ -1828,6 +1830,20 @@ export function EstatePlanningNewCenter() {
                 </CardContent>
               </Card>
             </TabsContent>
+
+            <TabsContent value="will" className="space-y-4">
+              <Card className="bg-gray-900/40 border-gray-700">
+                <CardHeader className="space-y-2">
+                  <CardTitle className="text-xl text-white">Create Your Will (Guided)</CardTitle>
+                  <p className="text-sm text-gray-400">
+                    A simple, state‑aware Last Will & Testament you can print and sign with witnesses. Electronic wills are not valid in every state.
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <WillWizard />
+                </CardContent>
+              </Card>
+            </TabsContent>
           </Tabs>
         </CardContent>
       </Card>
@@ -1972,7 +1988,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
   return <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${variant.className}`}>{variant.label}</span>;
 }
 
-function RecommendationList({ items }: { items: string[] }) {
+  function RecommendationList({ items }: { items: string[] }) {
   return (
     <ul className="space-y-2 text-sm text-gray-300">
       {items.map((item, index) => (
@@ -1983,8 +1999,173 @@ function RecommendationList({ items }: { items: string[] }) {
       ))}
     </ul>
   );
-}
+  }
 
+  // --- Will Creator Wizard (MVP) ---
+  function WillWizard() {
+    const { toast } = useToast();
+    const queryClient = useQueryClient();
+    const [step, setStep] = useState<number>(1);
+    const maxStep = 4;
+
+    // Inputs
+    const [testatorName, setTestatorName] = useState<string>("");
+    const [maritalStatus, setMaritalStatus] = useState<string>("single");
+    const [spouseName, setSpouseName] = useState<string>("");
+    const [stateCode, setStateCode] = useState<string>(String((typeof window !== 'undefined' ? (window as any).PROFILE_STATE : '') || ''));
+    const [executorName, setExecutorName] = useState<string>("");
+    const [guardianName, setGuardianName] = useState<string>("");
+    const [specificBequests, setSpecificBequests] = useState<string>("");
+    const [residuaryPlan, setResiduaryPlan] = useState<string>("All to my spouse, or if not living, to my children in equal shares.");
+
+    useEffect(() => {
+      try {
+        const p = (JSON.parse(sessionStorage.getItem('affluvia_profile_cache') || 'null')) || {};
+        if (!testatorName && p.firstName && p.lastName) setTestatorName(`${p.firstName} ${p.lastName}`);
+        if (!stateCode && p.state) setStateCode(String(p.state));
+        if (p.maritalStatus) setMaritalStatus(String(p.maritalStatus).toLowerCase());
+        if (p.spouseName) setSpouseName(String(p.spouseName));
+      } catch {}
+    }, []);
+
+    const generateMutation = useMutation({
+      mutationFn: async () => {
+        const res = await fetch('/api/estate/will/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            inputs: { testatorName, maritalStatus, spouseName, state: stateCode, executorName, guardianName, specificBequests, residuaryPlan }
+          })
+        });
+        if (!res.ok) throw new Error('Failed to generate will');
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        toast({ title: 'Will generated', description: 'Download your documents and follow signing instructions.' });
+        queryClient.invalidateQueries({ queryKey: ['estate-documents'] });
+        setStep(maxStep);
+        setLinks({ will: data?.willDocxUrl, affidavit: data?.affidavitDocxUrl });
+      },
+      onError: () => toast({ title: 'Generation failed', variant: 'destructive' })
+    });
+
+    const [links, setLinks] = useState<{ will?: string; affidavit?: string }>({});
+
+    const StepHeader = (
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-gray-300">Step {step} of {maxStep}</div>
+        <div className="flex gap-2">
+          {Array.from({ length: maxStep }).map((_, i) => (
+            <div key={i} className={`h-1.5 w-12 rounded ${i < step ? 'bg-purple-500' : 'bg-gray-700'}`} />
+          ))}
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="space-y-4">
+        {StepHeader}
+
+        {step === 1 && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="text-white">Your full name</Label>
+              <Input value={testatorName} onChange={(e) => setTestatorName(e.target.value)} placeholder="Full legal name" className="bg-gray-900/60 border-gray-700 text-white" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-white">State</Label>
+              <Input value={stateCode} onChange={(e) => setStateCode(e.target.value)} placeholder="e.g., CA" className="bg-gray-900/60 border-gray-700 text-white" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-white">Marital status</Label>
+              <Select value={maritalStatus} onValueChange={setMaritalStatus}>
+                <SelectTrigger className="bg-gray-900/60 border-gray-700 text-white">
+                  <SelectValue placeholder="Select" />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-800 border-gray-700">
+                  <SelectItem value="single" className="text-white">Single</SelectItem>
+                  <SelectItem value="married" className="text-white">Married</SelectItem>
+                  <SelectItem value="partnered" className="text-white">Partnered</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {maritalStatus === 'married' && (
+              <div className="space-y-2">
+                <Label className="text-white">Spouse name</Label>
+                <Input value={spouseName} onChange={(e) => setSpouseName(e.target.value)} placeholder="Spouse full name" className="bg-gray-900/60 border-gray-700 text-white" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="text-white">Executor</Label>
+              <Input value={executorName} onChange={(e) => setExecutorName(e.target.value)} placeholder="Executor full name" className="bg-gray-900/60 border-gray-700 text-white" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-white">Guardian (if minors)</Label>
+              <Input value={guardianName} onChange={(e) => setGuardianName(e.target.value)} placeholder="Guardian full name" className="bg-gray-900/60 border-gray-700 text-white" />
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="grid gap-4">
+            <div className="space-y-2">
+              <Label className="text-white">Specific gifts (optional)</Label>
+              <Textarea value={specificBequests} onChange={(e) => setSpecificBequests(e.target.value)} placeholder={'Example:\n• My watch to Alex.\n• $5,000 to Local Charity.'} className="bg-gray-900/60 border-gray-700 text-white min-h-[120px]" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-white">Residuary plan</Label>
+              <Textarea value={residuaryPlan} onChange={(e) => setResiduaryPlan(e.target.value)} className="bg-gray-900/60 border-gray-700 text-white min-h-[100px]" />
+            </div>
+          </div>
+        )}
+
+        {step === 4 && (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-4">
+              <p className="text-sm text-gray-300">Review summary</p>
+              <ul className="mt-2 text-sm text-gray-400 space-y-1">
+                <li><strong>Name:</strong> {testatorName || '—'}</li>
+                <li><strong>State:</strong> {stateCode || '—'}</li>
+                <li><strong>Marital status:</strong> {maritalStatus}</li>
+                {spouseName && <li><strong>Spouse:</strong> {spouseName}</li>}
+                <li><strong>Executor:</strong> {executorName || '—'}</li>
+                <li><strong>Guardian:</strong> {guardianName || '—'}</li>
+              </ul>
+            </div>
+            <div className="text-xs text-gray-500">
+              This tool is not a law firm and does not provide legal advice. Signing rules vary by state; many states require two witnesses, and a notarized self‑proving affidavit is optional but helpful. Electronic wills may not be valid in your state.
+            </div>
+            <div className="flex items-center gap-3">
+              <Button className="bg-purple-600 hover:bg-purple-700" disabled={generateMutation.isPending} onClick={() => generateMutation.mutate()}>
+                {generateMutation.isPending ? 'Generating…' : 'Generate Will Packet'}
+              </Button>
+              {links.will && (
+                <a className="text-sm text-teal-300 underline" href={links.will} target="_blank" rel="noreferrer">Download Will (DOCX)</a>
+              )}
+              {links.affidavit && (
+                <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Download Self‑Proving Affidavit (DOCX)</a>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2">
+          <Button variant="outline" disabled={step <= 1} onClick={() => setStep((s) => Math.max(1, s - 1))}>Back</Button>
+          <div className="flex items-center gap-2">
+            {step < maxStep && (
+              <Button onClick={() => setStep((s) => Math.min(maxStep, s + 1))}>Next</Button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 const numericSanitizer = /[^0-9.-]/g;
 function parseNumericInput(value: string): number {
   if (value == null) return NaN;

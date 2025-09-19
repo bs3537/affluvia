@@ -6677,6 +6677,115 @@ Return ONLY valid JSON like:
     }
   });
 
+  // Will generation (MVP): builds a simple Last Will & Testament DOCX and a self-proving affidavit DOCX
+  app.post("/api/estate/will/generate", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) return res.sendStatus(401);
+
+      const { inputs } = req.body || {};
+      const userId = req.user!.id;
+
+      // Lazy import to avoid cold start cost
+      const { Document, Packer, Paragraph, TextRun, HeadingLevel } = await import('docx');
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+
+      // Basic intake
+      const testatorName = String(inputs?.testatorName || (req.user as any)?.firstName || "Testator");
+      const spouseName = String(inputs?.spouseName || (inputs?.maritalStatus === 'married' ? ("Spouse") : ""));
+      const state = String(inputs?.state || (inputs?.profileState || (req as any)?.user?.state) || "");
+      const executor = String(inputs?.executorName || "Executor Name");
+      const guardian = String(inputs?.guardianName || "Guardian Name");
+      const residuary = String(inputs?.residuaryPlan || "All to my spouse, or to my children by representation.");
+
+      // Build Will DOCX
+      const willDoc = new Document({
+        sections: [
+          {
+            children: [
+              new Paragraph({ text: "LAST WILL AND TESTAMENT", heading: HeadingLevel.HEADING_1 }),
+              new Paragraph({ text: `I, ${testatorName}, of ${state}, declare this to be my Last Will and Testament.` }),
+              new Paragraph({ text: "1. REVOCATION OF PRIOR WILLS." }),
+              new Paragraph({ text: "I revoke all prior wills and codicils." }),
+              new Paragraph({ text: "2. FAMILY INFORMATION." }),
+              new Paragraph({ text: spouseName ? `I am married to ${spouseName}.` : "I am not married." }),
+              new Paragraph({ text: "3. EXECUTOR." }),
+              new Paragraph({ text: `I nominate ${executor} to serve as Executor of my estate, to serve without bond.` }),
+              new Paragraph({ text: "4. GUARDIAN OF MINOR CHILDREN." }),
+              new Paragraph({ text: `If I leave minor children at my death, I nominate ${guardian} as guardian.` }),
+              new Paragraph({ text: "5. SPECIFIC BEQUESTS." }),
+              new Paragraph({ text: String(inputs?.specificBequests || "None.") }),
+              new Paragraph({ text: "6. DISPOSITION OF RESIDUARY ESTATE." }),
+              new Paragraph({ text: residuary }),
+              new Paragraph({ text: "7. OMITTED ITEMS; DIGITAL ASSETS." }),
+              new Paragraph({ text: "My Executor may access my digital assets consistent with applicable law (e.g., RUFADAA) and this Will." }),
+              new Paragraph({ text: "\nIN WITNESS WHEREOF, I have signed this Will on the date below." }),
+              new Paragraph({ text: "\n______________________________" }),
+              new Paragraph({ text: `${testatorName}, Testator` }),
+              new Paragraph({ text: "\nSIGNED by the above-named Testator in our presence and then by us in the Testator’s presence and in the presence of each other:" }),
+              new Paragraph({ text: "\nWitness 1: _________________________    Name: _________________________    Address: _________________________" }),
+              new Paragraph({ text: "\nWitness 2: _________________________    Name: _________________________    Address: _________________________" }),
+            ]
+          }
+        ]
+      });
+
+      const willBuffer = await Packer.toBuffer(willDoc);
+      const willsDir = path.join(process.cwd(), 'uploads', 'wills');
+      await fs.mkdir(willsDir, { recursive: true });
+      const willFile = `will_${userId}_${stamp}.docx`;
+      const willPath = path.join(willsDir, willFile);
+      await fs.writeFile(willPath, willBuffer);
+
+      // Build simple self‑proving affidavit DOCX (generic, user must verify state requirements)
+      const affDoc = new Document({
+        sections: [
+          {
+            children: [
+              new Paragraph({ text: "SELF‑PROVING AFFIDAVIT", heading: HeadingLevel.HEADING_2 }),
+              new Paragraph({ text: `STATE: ${state}  COUNTY: __________` }),
+              new Paragraph({ text: `We, the undersigned, being duly sworn, declare that ${testatorName}, the Testator, signed the attached instrument as the Testator’s Last Will and Testament in our presence; that the Testator signed willingly, and that each of us, at the Testator’s request and in the Testator’s presence and in the presence of each other, signed our names as witnesses.` }),
+              new Paragraph({ text: "\n______________________________  Testator" }),
+              new Paragraph({ text: "\nWitness 1: ____________________________  Address: ____________________________" }),
+              new Paragraph({ text: "\nWitness 2: ____________________________  Address: ____________________________" }),
+              new Paragraph({ text: "\nSubscribed and sworn before me on ____________ by the Testator and witnesses above." }),
+              new Paragraph({ text: "\n______________________________  Notary Public  My Commission Expires: ____________" })
+            ]
+          }
+        ]
+      });
+      const affBuffer = await Packer.toBuffer(affDoc);
+      const affFile = `affidavit_${userId}_${stamp}.docx`;
+      const affPath = path.join(willsDir, affFile);
+      await fs.writeFile(affPath, affBuffer);
+
+      // Register document
+      const estatePlan = await storage.getEstatePlan(userId);
+      const created = await storage.createEstateDocument(userId, {
+        estatePlanId: estatePlan?.id,
+        documentType: 'will',
+        documentName: 'Last Will and Testament',
+        status: 'draft',
+        notarized: false,
+        witnesses: [],
+        documentUrl: `/uploads/wills/${willFile}`,
+        parsedInsights: { state, generatedAt: now.toISOString(), version: 'mvp-1' },
+      } as any);
+
+      res.json({
+        documentId: created.id,
+        willDocxUrl: `/uploads/wills/${willFile}`,
+        affidavitDocxUrl: `/uploads/wills/${affFile}`,
+        note: 'Print and sign with witnesses per your state. Affidavit is optional and may require a notary. This is not legal advice.'
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/estate-documents/upload", (req, res, next) => {
     uploadEstateDoc.single('document')(req, res, async (err) => {
       if (err) {
