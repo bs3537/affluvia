@@ -581,6 +581,14 @@ export function EstatePlanningNewCenter() {
     return Math.max(0, netAfterIncome - settlement);
   }, [activeSummary]);
 
+  const baselineNetAfterAllCosts = useMemo(() => {
+    const base = estateProjection;
+    if (!base) return 0;
+    const settlement = Math.max(0, Number((base as any).liquidity?.settlementExpenses || 0));
+    const netAfterIncome = Math.max(0, Number(base.heirTaxEstimate?.netAfterIncomeTax || 0));
+    return Math.max(0, netAfterIncome - settlement);
+  }, [estateProjection]);
+
   // Build compact waterfall data from active summary
   type WaterfallRow = { name: string; offset: number; value: number; color: string };
   const waterfallData: WaterfallRow[] = useMemo(() => {
@@ -1258,21 +1266,21 @@ export function EstatePlanningNewCenter() {
                     <>
                       <div className="grid gap-4 md:grid-cols-3">
                         <SummaryTile
-                          label="Net to Heirs"
-                          value={formatCurrency(activeSummary.netToHeirs)}
-                          helper={`Change vs baseline: ${(activeSummary.netToHeirs - (estateProjection?.netToHeirs || 0) >= 0 ? "+" : "")}${formatCurrency(activeSummary.netToHeirs - (estateProjection?.netToHeirs || 0))}`}
+                          label="Net Estate (after taxes & other costs)"
+                          value={formatCurrency(netAfterAllCosts)}
+                          helper={`Change vs baseline${includeRoth ? " (after Roth conversions)" : ""}: ${(netAfterAllCosts - baselineNetAfterAllCosts >= 0 ? "+" : "")}${formatCurrency(netAfterAllCosts - baselineNetAfterAllCosts)}`}
                           accent="emerald"
                         />
                         <SummaryTile
                           label="Estate Taxes"
                           value={formatCurrency(activeSummary.totalTax)}
-                          helper={`Change vs baseline: ${(activeSummary.totalTax - (estateProjection?.totalTax || 0) >= 0 ? "+" : "")}${formatCurrency(activeSummary.totalTax - (estateProjection?.totalTax || 0))}`}
+                          helper={`Change vs baseline${includeRoth ? " (after Roth conversions)" : ""}: ${(activeSummary.totalTax - (estateProjection?.totalTax || 0) >= 0 ? "+" : "")}${formatCurrency(activeSummary.totalTax - (estateProjection?.totalTax || 0))}`}
                           accent="orange"
                         />
                         <SummaryTile
                           label="Liquidity Gap"
                           value={activeSummary.liquidity.gap > 0 ? formatCurrency(activeSummary.liquidity.gap) : "Closed"}
-                          helper={`Change vs baseline: ${(activeSummary.liquidity.gap - (estateProjection?.liquidity?.gap || 0) >= 0 ? "+" : "")}${formatCurrency(activeSummary.liquidity.gap - (estateProjection?.liquidity?.gap || 0))}`}
+                          helper={`Change vs baseline${includeRoth ? " (after Roth conversions)" : ""}: ${(activeSummary.liquidity.gap - (estateProjection?.liquidity?.gap || 0) >= 0 ? "+" : "")}${formatCurrency(activeSummary.liquidity.gap - (estateProjection?.liquidity?.gap || 0))}`}
                           accent="sky"
                         />
                       </div>
@@ -1289,12 +1297,18 @@ export function EstatePlanningNewCenter() {
                                 assumptions: { ...localAssumptions },
                                 profile,
                               });
-                              const baseNet = Number(estateProjection?.netToHeirs || 0);
-                              const newNet = Number(prospective?.netToHeirs || 0);
-                              const delta = newNet - baseNet;
+                              const pSettlement = Math.max(0, Number((prospective as any)?.liquidity?.settlementExpenses || 0));
+                              const pNetAfterIncome = Math.max(0, Number(prospective?.heirTaxEstimate?.netAfterIncomeTax || 0));
+                              const pNetAll = Math.max(0, pNetAfterIncome - pSettlement);
+
+                              const bSettlement = Math.max(0, Number((estateProjection as any)?.liquidity?.settlementExpenses || 0));
+                              const bNetAfterIncome = Math.max(0, Number(estateProjection?.heirTaxEstimate?.netAfterIncomeTax || 0));
+                              const bNetAll = Math.max(0, bNetAfterIncome - bSettlement);
+
+                              const delta = pNetAll - bNetAll;
                               const t = toast({
-                                title: delta >= 0 ? "Net to heirs increased" : "Net to heirs decreased",
-                                description: `${delta >= 0 ? "+" : ""}${formatCurrency(delta)} vs baseline`,
+                                title: delta >= 0 ? "Net estate to heirs increased" : "Net estate to heirs decreased",
+                                description: `${delta >= 0 ? "+" : ""}${formatCurrency(delta)} vs baseline${includeRoth ? " (after Roth conversions)" : ""} (after all taxes & costs)`,
                                 variant: delta >= 0 ? "default" : "destructive",
                               });
                               setTimeout(() => t.dismiss(), 3000);
