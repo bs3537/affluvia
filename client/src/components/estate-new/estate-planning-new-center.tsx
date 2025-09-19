@@ -926,7 +926,6 @@ export function EstatePlanningNewCenter() {
               { id: "strategies", label: "Strategies", icon: Lightbulb },
               { id: "checklist", label: "Checklist", icon: CheckCircle2 },
               { id: "beneficiaries-table", label: "Beneficiaries", icon: Users },
-              { id: "beneficiaries", label: "Beneficiaries & Flow", icon: Users },
               { id: "documents", label: "Documents & Tasks", icon: Shield },
               { id: "recommendations", label: "Recommendations", icon: Target },
             ].map((section) => {
@@ -1771,46 +1770,7 @@ export function EstatePlanningNewCenter() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="beneficiaries" className="space-y-4">
-              <Card className="bg-gray-900/40 border-gray-700">
-                <CardHeader className="space-y-2">
-                  <CardTitle className="text-xl text-white">Beneficiaries & Legacy Flow</CardTitle>
-                  <p className="text-sm text-gray-400">
-                    Review how assets flow between spouses, trusts, charities, and heirs—plus titling considerations to avoid probate surprises.
-                  </p>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  {beneficiaries.length ? (
-                    <div className="grid gap-4 md:grid-cols-2">
-                      {beneficiaries.map((beneficiary: any) => (
-                        <BeneficiaryCard key={`${beneficiary.id}-${beneficiary.name}`} beneficiary={beneficiary} />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-400">
-                      No beneficiaries on file. Add designations to retirement accounts, insurance policies, and transfer-on-death assets to keep legacy plans enforceable.
-                    </p>
-                  )}
-
-                  <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-4 space-y-3">
-                    <h3 className="text-sm font-semibold text-gray-200">High-level estate flow</h3>
-                    <div className="flex flex-col gap-3 text-sm text-gray-300 md:flex-row md:items-center md:justify-between">
-                      <FlowNode label="Client Estate" amount={activeSummary ? formatCurrency(activeSummary.projectedEstateValue) : "—"} />
-                      <ArrowRight className="h-4 w-4 text-purple-400 self-center" />
-                      <FlowNode
-                        label="Surviving spouse / trusts"
-                        amount={activeSummary ? formatCurrency(activeSummary.netToHeirs - activeSummary.heirTaxEstimate.projectedIncomeTax) : "—"}
-                      />
-                      <ArrowRight className="h-4 w-4 text-purple-400 self-center" />
-                      <FlowNode label="Final heirs / charity" amount={activeSummary ? formatCurrency(activeSummary.heirTaxEstimate.netAfterIncomeTax) : "—"} />
-                    </div>
-                    <p className="text-xs text-gray-500">
-                      Probate-sensitive assets (those without beneficiary designations or not titled in trust) may delay or reduce distributions. Confirm titling and contingent beneficiaries regularly.
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
+            
 
             <TabsContent value="documents" className="space-y-4">
               <Card className="bg-gray-900/40 border-gray-700">
