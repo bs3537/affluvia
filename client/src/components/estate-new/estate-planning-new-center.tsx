@@ -2054,6 +2054,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
               <p>Typical witness requirement: <span className="text-white font-medium">{rules?.witnessCount ?? 2}</span> witnesses.</p>
               <p>Self‑proving affidavit: <span className="text-white font-medium">{rules?.allowSelfProving ? 'generally available' : 'not typically available'}</span>.</p>
               {rules?.notes && <p className="text-amber-300">Note: {rules.notes}</p>}
+              {rules?.tip && <p className="text-gray-300">Tip: {rules.tip}</p>}
               {rules?.citationUrl && (
                 <p>
                   <a className="text-teal-300 underline" href={rules.citationUrl} target="_blank" rel="noreferrer">Reference</a>
@@ -2306,6 +2307,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
                     Typical signing: {rules.witnessCount} witnesses; self‑proving affidavit {rules.allowSelfProving ? 'available' : 'not available'}{rules.notes ? ` — ${rules.notes}` : ''}.
                   </li>
                 )}
+                {rules?.tip && (<li className="text-xs text-gray-400">Tip: {rules.tip}</li>)}
               </ul>
             </div>
             <div className="text-xs text-gray-500">
@@ -2316,9 +2318,17 @@ function DocumentStatusBadge({ status }: { status: string }) {
                 {generateMutation.isPending ? 'Generating…' : 'Generate Will Packet'}
               </Button>
               <StateDetailsButton stateCode={stateCode} />
-              {(rules?.allowSelfProving) && (
-                <a className="text-xs text-purple-300 underline" href="https://app.proof.com/signup/upload" target="_blank" rel="noreferrer">Schedule remote notary (where permitted)</a>
-              )}
+              {(() => {
+                const RON_ENABLED = Boolean((import.meta as any).env?.VITE_RON_ENABLED);
+                if (RON_ENABLED && rules?.allowSelfProving) {
+                  return (
+                    <a className="text-xs text-purple-300 underline" href="https://app.proof.com/signup/upload" target="_blank" rel="noreferrer">
+                      Start remote notarization (if permitted)
+                    </a>
+                  );
+                }
+                return null;
+              })()}
               {links.will && <a className="text-sm text-teal-300 underline" href={links.will} target="_blank" rel="noreferrer">Will (DOCX)</a>}
               {links.willPdf && <a className="text-sm text-teal-300 underline" href={links.willPdf} target="_blank" rel="noreferrer">Will (PDF)</a>}
               {links.affidavit && <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Affidavit (DOCX)</a>}
