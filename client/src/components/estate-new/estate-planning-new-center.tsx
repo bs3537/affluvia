@@ -1083,10 +1083,41 @@ export function EstatePlanningNewCenter() {
                       </tbody>
                     </table>
                   </div>
-                  <div className="flex justify-center pt-4">
-                    <Button variant="outline" className="border-purple-500/40 text-purple-200 hover:bg-purple-500/10" onClick={() => setActiveTab("recommendations")}>
-                      ACTION ITEMS
-                    </Button>
+                  {/* Existing documents table moved here from Documents & Tasks tab */}
+                  <div className="mt-6">
+                    <h3 className="text-sm font-semibold text-gray-200 mb-2">Existing documents</h3>
+                    {documents.length ? (
+                      <div className="overflow-hidden rounded-xl border border-gray-800">
+                        <table className="min-w-full divide-y divide-gray-800 text-sm">
+                          <thead className="bg-gray-950/60 text-gray-400">
+                            <tr>
+                              <th className="px-4 py-3 text-left font-medium">Document</th>
+                              <th className="px-4 py-3 text-left font-medium">Status</th>
+                              <th className="px-4 py-3 text-left font-medium">Last reviewed</th>
+                              <th className="px-4 py-3 text-left font-medium">Notes</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-800">
+                            {documents.map((doc: any) => (
+                              <tr key={`${doc.id}-${doc.documentName}`} className="bg-gray-950/30 hover:bg-gray-900/40">
+                                <td className="px-4 py-3 text-gray-200">{doc.documentName}</td>
+                                <td className="px-4 py-3">
+                                  <DocumentStatusBadge status={doc.status} />
+                                </td>
+                                <td className="px-4 py-3 text-gray-300">
+                                  {doc.executionDate ? dateFormatter.format(new Date(doc.executionDate)) : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-gray-400">{doc.description || ""}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-400">
+                        No documents on file yet. Use the checklist above to track execution.
+                      </p>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -1581,38 +1612,9 @@ export function EstatePlanningNewCenter() {
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  {documents.length ? (
-                    <div className="overflow-hidden rounded-xl border border-gray-800">
-                      <table className="min-w-full divide-y divide-gray-800 text-sm">
-                        <thead className="bg-gray-950/60 text-gray-400">
-                          <tr>
-                            <th className="px-4 py-3 text-left font-medium">Document</th>
-                            <th className="px-4 py-3 text-left font-medium">Status</th>
-                            <th className="px-4 py-3 text-left font-medium">Last reviewed</th>
-                            <th className="px-4 py-3 text-left font-medium">Notes</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-800">
-                          {documents.map((doc: any) => (
-                            <tr key={`${doc.id}-${doc.documentName}`} className="bg-gray-950/30 hover:bg-gray-900/40">
-                              <td className="px-4 py-3 text-gray-200">{doc.documentName}</td>
-                              <td className="px-4 py-3">
-                                <DocumentStatusBadge status={doc.status} />
-                              </td>
-                              <td className="px-4 py-3 text-gray-300">
-                                {doc.executionDate ? dateFormatter.format(new Date(doc.executionDate)) : "—"}
-                              </td>
-                              <td className="px-4 py-3 text-gray-400">{doc.description || ""}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-400">
-                      Capture will, trust, power of attorney, and healthcare directive status here. Keeping these updated prevents state intestacy rules from overriding your intentions.
-                    </p>
-                  )}
+                  <p className="text-sm text-gray-400">
+                    The documents table now appears under the Checklist tab for easier tracking alongside execution checkboxes.
+                  </p>
 
                   <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
                     <h3 className="text-sm font-semibold text-gray-200 mb-2">Reminders</h3>
