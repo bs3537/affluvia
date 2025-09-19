@@ -1291,41 +1291,14 @@ export function EstatePlanningNewCenter() {
                       </tbody>
                     </table>
                   </div>
-                  {/* Existing documents table moved here from Documents & Tasks tab */}
+                  {/* Reminders (moved from Documents & Tasks tab) */}
                   <div className="mt-6">
-                    <h3 className="text-sm font-semibold text-gray-200 mb-2">Existing documents</h3>
-                    {documents.length ? (
-                      <div className="overflow-hidden rounded-xl border border-gray-800">
-                        <table className="min-w-full divide-y divide-gray-800 text-sm">
-                          <thead className="bg-gray-950/60 text-gray-400">
-                            <tr>
-                              <th className="px-4 py-3 text-left font-medium">Document</th>
-                              <th className="px-4 py-3 text-left font-medium">Status</th>
-                              <th className="px-4 py-3 text-left font-medium">Last reviewed</th>
-                              <th className="px-4 py-3 text-left font-medium">Notes</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-800">
-                            {documents.map((doc: any) => (
-                              <tr key={`${doc.id}-${doc.documentName}`} className="bg-gray-950/30 hover:bg-gray-900/40">
-                                <td className="px-4 py-3 text-gray-200">{doc.documentName}</td>
-                                <td className="px-4 py-3">
-                                  <DocumentStatusBadge status={doc.status} />
-                                </td>
-                                <td className="px-4 py-3 text-gray-300">
-                                  {doc.executionDate ? dateFormatter.format(new Date(doc.executionDate)) : "—"}
-                                </td>
-                                <td className="px-4 py-3 text-gray-400">{doc.description || ""}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <p className="text-sm text-gray-400">
-                        No documents on file yet. Use the checklist above to track execution.
-                      </p>
-                    )}
+                    <h3 className="text-sm font-semibold text-gray-200 mb-2">Reminders</h3>
+                    <ul className="space-y-2 text-sm text-gray-300">
+                      <li>Review documents after major life events (marriage, divorce, new child, relocation to another state).</li>
+                      <li>Coordinate beneficiary designations with will or trust instructions to avoid conflicts.</li>
+                      <li>Store originals securely and share locations with trusted contacts or advisors.</li>
+                    </ul>
                   </div>
                 </CardContent>
               </Card>
@@ -1782,7 +1755,7 @@ export function EstatePlanningNewCenter() {
                 </CardHeader>
                 <CardContent className="space-y-6">
                   <p className="text-sm text-gray-400">
-                    The documents table now appears under the Checklist tab for easier tracking alongside execution checkboxes.
+                    Quick-reference reminders also appear on the Checklist tab.
                   </p>
 
                   <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
