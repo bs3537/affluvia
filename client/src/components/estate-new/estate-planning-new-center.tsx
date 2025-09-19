@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
   import { Checkbox } from "@/components/ui/checkbox";
   import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
   import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertCircle,
   ArrowRight,
@@ -2012,7 +2013,6 @@ function DocumentStatusBadge({ status }: { status: string }) {
   }
 
   // --- Will Creator Wizard (MVP) ---
-  import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
   function StateDetailsButton({ stateCode }: { stateCode: string }) {
     const [open, setOpen] = useState(false);
     let rules: any = undefined;
@@ -2032,6 +2032,11 @@ function DocumentStatusBadge({ status }: { status: string }) {
               <p>Typical witness requirement: <span className="text-white font-medium">{rules?.witnessCount ?? 2}</span> witnesses.</p>
               <p>Self‑proving affidavit: <span className="text-white font-medium">{rules?.allowSelfProving ? 'generally available' : 'not typically available'}</span>.</p>
               {rules?.notes && <p className="text-amber-300">Note: {rules.notes}</p>}
+              {rules?.citationUrl && (
+                <p>
+                  <a className="text-teal-300 underline" href={rules.citationUrl} target="_blank" rel="noreferrer">Reference</a>
+                </p>
+              )}
               <p className="text-gray-400 text-xs pt-2">This guidance is informational and not legal advice. Always follow your local statute and clerk guidance.</p>
             </div>
           </DialogContent>
@@ -2107,7 +2112,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
         toast({ title: 'Will generated', description: 'Download your documents and follow signing instructions.' });
         queryClient.invalidateQueries({ queryKey: ['estate-documents'] });
         setStep(maxStep);
-        setLinks({ will: data?.willDocxUrl, willPdf: data?.willPdfUrl, affidavit: data?.affidavitDocxUrl, affidavitPdf: data?.affidavitPdfUrl });
+        setLinks({ will: data?.willDocxUrl, willPdf: data?.willPdfUrl, affidavit: data?.affidavitDocxUrl, affidavitPdf: data?.affidavitPdfUrl, cover: data?.coverSheetPdfUrl });
       },
       onError: () => toast({ title: 'Generation failed', variant: 'destructive' })
     });
@@ -2296,6 +2301,7 @@ function DocumentStatusBadge({ status }: { status: string }) {
               {links.willPdf && <a className="text-sm text-teal-300 underline" href={links.willPdf} target="_blank" rel="noreferrer">Will (PDF)</a>}
               {links.affidavit && <a className="text-sm text-teal-300 underline" href={links.affidavit} target="_blank" rel="noreferrer">Affidavit (DOCX)</a>}
               {links.affidavitPdf && <a className="text-sm text-teal-300 underline" href={links.affidavitPdf} target="_blank" rel="noreferrer">Affidavit (PDF)</a>}
+              {links.cover && <a className="text-sm text-teal-300 underline" href={links.cover} target="_blank" rel="noreferrer">Signing checklist (PDF)</a>}
             </div>
           </div>
         )}

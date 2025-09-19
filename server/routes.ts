@@ -6841,6 +6841,36 @@ Return ONLY valid JSON like:
         const willPdfPath = path.join(willsDir, willPdfFile);
         await fs.writeFile(willPdfPath, willPdfBytes);
 
+        // Signing Cover Sheet PDF
+        const cover = await PDFDocument.create();
+        const cfont = await cover.embedFont(StandardFonts.TimesRomanBold);
+        const cpage = cover.addPage();
+        const csz = cpage.getSize();
+        const draw = (y: number, text: string, size = 12, bold = false) => {
+          cpage.drawText(text, { x: 50, y, size, font: bold ? cfont : font, color: rgb(0, 0, 0) });
+        };
+        let cy = csz.height - 60;
+        draw(cy, 'WILL SIGNING CHECKLIST', 16, true); cy -= 24;
+        draw(cy, `Testator: ${testatorName}`); cy -= 16;
+        draw(cy, `State: ${state}`); cy -= 16;
+        draw(cy, `Witnesses required: 2 (typical)`, 12); cy -= 20;
+        const steps = [
+          '1. Print the Will (PDF) and the Self‑Proving Affidavit (if applicable).',
+          '2. Arrange two adult witnesses (not beneficiaries if possible).',
+          '3. In the presence of both witnesses, sign and date the Will where indicated.',
+          '4. Have each witness sign and print their name and address.',
+          '5. If completing a self‑proving affidavit, sign before a notary with both witnesses.',
+          '6. Store the original Will securely; share its location with your Executor.',
+          '7. Upload a PDF copy of the executed Will in the app (Checklist → Will → Upload).',
+        ];
+        steps.forEach((t) => { draw(cy, t); cy -= 16; });
+        cy -= 8;
+        draw(cy, 'This checklist is informational and not legal advice.', 10); cy -= 14;
+        const coverBytes = await cover.save();
+        const coverFile = `coversheet_${userId}_${stamp}.pdf`;
+        const coverPath = path.join(willsDir, coverFile);
+        await fs.writeFile(coverPath, coverBytes);
+
         // Affidavit PDF
         const affPdf = await PDFDocument.create();
         const aPage = affPdf.addPage();
@@ -6875,6 +6905,7 @@ Return ONLY valid JSON like:
           affidavitDocxUrl: `/uploads/wills/${affFile}`,
           willPdfUrl: `/uploads/wills/${willPdfFile}`,
           affidavitPdfUrl: `/uploads/wills/${affPdfFile}`,
+          coverSheetPdfUrl: `/uploads/wills/${coverFile}`,
           note: 'Print and sign with witnesses per your state. Affidavit may require a notary. This is not legal advice.'
         });
       } catch {
