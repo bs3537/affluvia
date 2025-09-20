@@ -8447,17 +8447,36 @@ Return ONLY valid JSON like:
         });
       }
 
+      // Optional filter by testator's first name (for Will Creator step 3)
+      const testatorFirstRaw = (req.query.testatorFirst as string | undefined) || undefined;
+      let filtered = assets;
+      if (testatorFirstRaw && typeof testatorFirstRaw === 'string') {
+        const testatorFirst = testatorFirstRaw.trim().toLowerCase();
+        const userFirst = String(profile.firstName || '').trim().split(/\s+/)[0].toLowerCase();
+        let spouseFirst = '';
+        if (profile.spouseName) spouseFirst = String(profile.spouseName).trim().split(/\s+/)[0].toLowerCase();
+        const testatorRole = testatorFirst === spouseFirst ? 'spouse' : 'user';
+        filtered = assets.filter((a: any) => {
+          const ownership = String(a.ownership || '').toLowerCase();
+          if (ownership === 'joint') return true;
+          const ownerRole = (a.accountOwner || a.policyOwner || '').toString().toLowerCase();
+          if (ownerRole === 'user' || ownerRole === 'spouse') return ownerRole === testatorRole;
+          // If explicit owner role is missing, fallback to strict individual only when role matches inferred
+          return ownership === 'individual' && testatorRole === 'user';
+        });
+      }
+
       // Calculate summary statistics
       const summary = {
-        totalAssets: assets.reduce((sum, asset) => sum + asset.value, 0),
-        assetsRequiringBeneficiaries: assets.filter(a => a.requiresBeneficiary).length,
-        assetsWithBeneficiaries: assets.filter(a => a.requiresBeneficiary && a.hasBeneficiary).length,
-        assetsMissingBeneficiaries: assets.filter(a => a.requiresBeneficiary && !a.hasBeneficiary).length,
-        probateAssets: assets.filter(a => a.ownership === 'individual' && !a.requiresBeneficiary).length,
-        nonProbateAssets: assets.filter(a => a.ownership !== 'individual' || a.requiresBeneficiary).length,
+        totalAssets: filtered.reduce((sum, asset) => sum + asset.value, 0),
+        assetsRequiringBeneficiaries: filtered.filter(a => a.requiresBeneficiary).length,
+        assetsWithBeneficiaries: filtered.filter(a => a.requiresBeneficiary && a.hasBeneficiary).length,
+        assetsMissingBeneficiaries: filtered.filter(a => a.requiresBeneficiary && !a.hasBeneficiary).length,
+        probateAssets: filtered.filter(a => a.ownership === 'individual' && !a.requiresBeneficiary).length,
+        nonProbateAssets: filtered.filter(a => a.ownership !== 'individual' || a.requiresBeneficiary).length,
       };
 
-      res.json({ assets, summary });
+      res.json({ assets: filtered, summary });
     } catch (error) {
       console.error('Error fetching ownership data:', error);
       res.status(500).json({ error: 'Failed to fetch ownership data' });

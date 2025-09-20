@@ -67,6 +67,22 @@ router.post("/", async (req, res) => {
   }
 });
 
+router.delete("/current", async (req, res) => {
+  const userId = ensureAuth(req, res);
+  if (!userId) return;
+  try {
+    const existing = (await storage.getFinancialProfile(userId)) || ({} as any);
+    const estatePlanning = { ...(existing as any).estatePlanning };
+    if (estatePlanning && 'will' in estatePlanning) {
+      delete (estatePlanning as any).will;
+    }
+    await storage.updateFinancialProfile(userId, { estatePlanning });
+    res.json({ ok: true, reset: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to reset will' });
+  }
+});
+
 router.post("/generate", async (req, res) => {
   const userId = ensureAuth(req, res);
   if (!userId) return;

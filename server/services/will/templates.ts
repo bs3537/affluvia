@@ -193,3 +193,42 @@ export function renderAffidavit(ctx: WillRenderContext): string {
   </body></html>`;
 }
 
+export function renderAssetInventory(ctx: WillRenderContext): string {
+  const rows = Array.isArray(ctx.assetsList) ? ctx.assetsList : [];
+  const total = rows.reduce((s, r) => s + (Number(r.value) || 0), 0);
+  const table = rows.length
+    ? `<table style="width:100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left; border-bottom:1px solid #111; padding:6px 4px;">Asset</th>
+            <th style="text-align:left; border-bottom:1px solid #111; padding:6px 4px;">Type</th>
+            <th style="text-align:left; border-bottom:1px solid #111; padding:6px 4px;">Ownership</th>
+            <th style="text-align:right; border-bottom:1px solid #111; padding:6px 4px;">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (r) => `<tr>
+                <td style="padding:6px 4px; border-bottom:1px solid #e5e7eb;">${r.name || "Asset"}</td>
+                <td style="padding:6px 4px; border-bottom:1px solid #e5e7eb;">${r.type || ""}</td>
+                <td style="padding:6px 4px; border-bottom:1px solid #e5e7eb;">${r.isJoint ? "Joint" : "Individual"}</td>
+                <td style="padding:6px 4px; border-bottom:1px solid #e5e7eb; text-align:right;">$${(Number(r.value) || 0).toLocaleString()}</td>
+              </tr>`
+            )
+            .join("")}
+          <tr>
+            <td colspan="3" style="padding:8px 4px; text-align:right; font-weight:600;">Total</td>
+            <td style="padding:8px 4px; text-align:right; font-weight:600;">$${total.toLocaleString()}</td>
+          </tr>
+        </tbody>
+      </table>`
+    : `<div class="box">No assets listed.</div>`;
+  return `<!doctype html><html><head><meta charset="utf-8"/><style>${baseCss}
+    table { font-size: 14px; }
+  </style></head><body>
+    <h1>Asset Inventory</h1>
+    <p class="small">This inventory is provided to assist the Executor in identifying and administering the estate. It is not necessarily comprehensive and may be updated over time.</p>
+    ${table}
+  </body></html>`;
+}

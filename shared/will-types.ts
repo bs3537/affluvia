@@ -48,6 +48,24 @@ export const WillForm = z.object({
   digitalExecutor: z
     .object({ useSame: z.boolean().default(true), nominee: ExecutorNominee.optional(), accessComms: z.boolean().default(true) })
     .default({ useSame: true, accessComms: true }),
+  // Optional assets capture for wizard step
+  assets: z
+    .object({
+      mode: z.enum(["list", "estimate"]).optional(),
+      estimateBracket: z.string().optional(),
+      list: z
+        .array(
+          z.object({
+            name: z.string().default("").optional(),
+            value: z.number().default(0),
+            type: z.string().optional(),
+            isJoint: z.boolean().optional(),
+          })
+        )
+        .default([])
+        .optional(),
+    })
+    .optional(),
   residuary: ResiduaryPlan,
   gifts: z
     .array(
@@ -87,6 +105,7 @@ export type WillRenderContext = {
   gifts: Array<{ description: string; primary: BeneficiarySlice[]; contingent?: BeneficiarySlice[] }>;
   provisions: WillForm["provisions"];
   todayISO: string;
+  assetsList?: Array<{ name: string; value: number; type?: string; isJoint?: boolean }>;
 };
 
 export function toRenderContext(form: WillForm): WillRenderContext {
@@ -106,5 +125,11 @@ export function toRenderContext(form: WillForm): WillRenderContext {
     gifts: form.gifts,
     provisions: form.provisions,
     todayISO: new Date().toISOString().slice(0, 10),
+    assetsList: form.assets?.list?.map((a: any) => ({
+      name: String(a?.name || "Asset"),
+      value: Number(a?.value) || 0,
+      type: a?.type ? String(a.type) : undefined,
+      isJoint: Boolean(a?.isJoint),
+    })),
   };
 }

@@ -9,6 +9,7 @@ import {
   renderFuneralWishes,
   renderBeneficiaryMessages,
   renderAffidavit,
+  renderAssetInventory,
 } from "./templates";
 
 export type GeneratedDoc = { kind: string; filePath: string; urlPath: string };
@@ -22,6 +23,7 @@ export async function generateWillDocuments(baseDir: string, data: unknown): Pro
   const docs: Array<[string, string]> = [
     ["instructions", renderInstructions(ctx)],
     ["last-will-and-testament", renderWill(ctx)],
+    ["asset-inventory", renderAssetInventory(ctx)],
     ["personal-property-memo", renderPersonalPropertyMemo(ctx)],
     ["digital-assets", renderDigitalAssetsSheet(ctx)],
     ["funeral-wishes", renderFuneralWishes(ctx)],
@@ -57,6 +59,7 @@ export async function generateCombinedPdfPacket(baseDir: string, data: unknown):
   const parts: Array<[string, string]> = [
     ["Instructions", renderInstructions(ctx)],
     ["Last Will and Testament", renderWill(ctx)],
+    ["Asset Inventory", renderAssetInventory(ctx)],
     ["Personal Property Memorandum", renderPersonalPropertyMemo(ctx)],
     ["Digital Assets & Accounts", renderDigitalAssetsSheet(ctx)],
     ["Funeral Wishes", renderFuneralWishes(ctx)],
@@ -114,6 +117,7 @@ export async function generatePdfDocuments(baseDir: string, data: unknown): Prom
   const parts: Array<{ name: string; html: string }> = [
     { name: "Instructions.pdf", html: renderInstructions(ctx) },
     { name: "Last Will and Testament.pdf", html: renderWill(ctx) },
+    { name: "Asset Inventory.pdf", html: renderAssetInventory(ctx) },
     { name: "Personal Property Memorandum.pdf", html: renderPersonalPropertyMemo(ctx) },
     { name: "Digital Assets & Accounts.pdf", html: renderDigitalAssetsSheet(ctx) },
     { name: "Funeral Wishes.pdf", html: renderFuneralWishes(ctx) },

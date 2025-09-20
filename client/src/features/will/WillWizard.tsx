@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { RefreshCw } from "lucide-react";
 import type { WillForm as WillFormType, ResiduaryPlan, BeneficiarySlice } from "@shared/will-types";
 import { WillForm as WillSchema } from "@shared/will-types";
 
@@ -53,6 +54,7 @@ export function WillWizard() {
   const [step, setStep] = useState(1);
   const maxStep = 8;
   const [generated, setGenerated] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data: initial, isLoading } = useQuery({
     queryKey: ["will-current"],
@@ -160,7 +162,29 @@ export function WillWizard() {
                   <Button
                     variant="outline"
                     className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50"
-                    onClick={() => { setStep(1); setGenerated(false); }}
+                    onClick={async () => {
+                      try {
+                        await fetch('/api/wills/current', { method: 'DELETE', credentials: 'include' });
+                      } catch {}
+                      const blank: WillFormType = {
+                        person: { first: "", last: "" } as any,
+                        maritalStatus: "single",
+                        spouse: undefined,
+                        children: [],
+                        executors: [{ name: "", relationship: "" } as any],
+                        digitalExecutor: { useSame: true, accessComms: true },
+                        assets: { list: [] },
+                        residuary: { primary: { slices: [] }, takersOfLastResort: "heirs" } as any,
+                        gifts: [],
+                        provisions: { independentAdmin: true, noContest: true, selfProving: true, nonprofitConsent: false, includeSpecialNeedsTrust: true },
+                        funeral: { agents: [""] },
+                        messages: [],
+                      } as any;
+                      form.reset(blank);
+                      queryClient.setQueryData(["will-current"], blank);
+                      setStep(1);
+                      setGenerated(false);
+                    }}
                   >
                     Create New Will
                   </Button>
@@ -315,9 +339,15 @@ function Nominees({ form }: { form: ReturnType<typeof useForm<WillFormType>> }) 
 }
 
 function Assets({ form }: { form: ReturnType<typeof useForm<WillFormType>> }) {
+  const queryClient = useQueryClient();
+  const [addOpen, setAddOpen] = useState(false);
+  const [newAssetName, setNewAssetName] = useState("");
+  const [newAssetValue, setNewAssetValue] = useState("");
+  const currentList = (form.watch("assets.list" as any) as Array<any>) || [];
   const mode = form.watch("assets?.mode" as any) as "list" | "estimate" | undefined;
 
   // Pull the user profile to surface assets (manual + Plaid) and home equity
+  const testatorFirst = String(form.watch("person.first") || "").trim();
   const { data: profile } = useQuery({
     queryKey: ["/api/financial-profile"],
     queryFn: async () => {
@@ -326,53 +356,191 @@ function Assets({ form }: { form: ReturnType<typeof useForm<WillFormType>> }) {
       return response.json();
     },
   });
+  const { data: ownerAudit } = useQuery({
+    queryKey: ["/api/ownership-beneficiary-audit", testatorFirst || "", profile?.firstName || ""],
+    queryFn: async () => {
+      const url = new URL("/api/ownership-beneficiary-audit", window.location.origin);
+      const fallbackFirst = String(profile?.firstName || "").trim().split(/\s+/)[0];
+      const name = (testatorFirst || fallbackFirst || "").trim();
+      if (name) url.searchParams.set("testatorFirst", name);
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch ownership audit');
+      return res.json();
+    },
+    // Always enabled; server supports both filtered and unfiltered responses
+    enabled: true,
+  });
+
+  // Build audit-style assets. Prefer server response; fallback to computing from profile
+  const auditAssets = useMemo(() => {
+    if (Array.isArray(ownerAudit?.assets) && ownerAudit.assets.length > 0) {
+      return ownerAudit.assets;
+    }
+    if (!profile) return [] as any[];
+
+    const toLower = (s: any) => String(s || '').trim().toLowerCase();
+    const pfFirst = toLower(profile.firstName?.split(/\s+/)[0]);
+    const spouseFirst = toLower((profile.spouseName || '').split(/\s+/)[0]);
+    const testatorFirstLocal = toLower(testatorFirst);
+    const testatorRole = testatorFirstLocal
+      ? (testatorFirstLocal === spouseFirst ? 'spouse' : 'user')
+      : 'user';
+
+    const mapOwner = (owner: any) => {
+      const o = toLower(owner);
+      if (o === 'joint') return { ownership: 'joint' as const, accountOwner: 'user' as const };
+      if (o === 'spouse') return { ownership: 'individual' as const, accountOwner: 'spouse' as const };
+      return { ownership: 'individual' as const, accountOwner: 'user' as const };
+    };
+
+    const mapType = (t: any) => {
+      const x = toLower(t);
+      if (x === 'checking' || x === 'savings') return 'bank';
+      if (x === 'taxable-brokerage') return 'investment';
+      if (['401k','403b','traditional-ira','roth-ira','hsa','qualified-annuities'].includes(x)) return 'retirement';
+      if (x === 'cash-value-life-insurance') return 'life_insurance';
+      if (x === 'real_estate') return 'real_estate';
+      return x || 'manual';
+    };
+
+    const fromAssets = (profile.assets || []).map((a: any) => {
+      const owner = mapOwner(a.owner);
+      return {
+        type: mapType(a.type),
+        name: a.description || a.type || 'Asset',
+        value: Number(a.value) || 0,
+        ownership: owner.ownership,
+        accountOwner: owner.accountOwner,
+      };
+    });
+
+    const fromResidence = profile.primaryResidence ? [{
+      type: 'real_estate',
+      name: 'Primary Residence',
+      value: Number(profile.primaryResidence.marketValue || 0) - Number(profile.primaryResidence.mortgageBalance || 0),
+      ownership: toLower(profile.primaryResidence.owner) === 'joint' ? 'joint' : 'individual',
+      accountOwner: toLower(profile.primaryResidence.owner) === 'spouse' ? 'spouse' : 'user',
+    }] : [];
+
+    const fromLife = profile.lifeInsurance?.hasPolicy ? [{
+      type: 'life_insurance',
+      name: `Life Insurance - ${profile.lifeInsurance.policyType || 'Policy'}`,
+      value: Number(profile.lifeInsurance.coverageAmount) || 0,
+      ownership: 'individual',
+      accountOwner: toLower(profile.lifeInsurance.policyOwner) === 'spouse' ? 'spouse' : 'user',
+      requiresBeneficiary: true,
+      hasBeneficiary: Boolean(toLower(profile.lifeInsurance?.beneficiaries?.primary || '')),
+      hasContingentBeneficiary: Boolean(toLower(profile.lifeInsurance?.beneficiaries?.contingent || '')),
+    }] : [];
+
+    // Filter to testator's assets + joint
+    const combined = [...fromAssets, ...fromResidence, ...fromLife];
+    const filtered = combined.filter((a: any) => {
+      const ownership = toLower(a.ownership);
+      if (ownership === 'joint') return true;
+      const ownerRole = toLower(a.accountOwner);
+      if (ownerRole === 'user' || ownerRole === 'spouse') return ownerRole === testatorRole;
+      return ownership === 'individual' && testatorRole === 'user';
+    });
+    return filtered;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownerAudit, profile, testatorFirst]);
+  const isJointAsset = (item: any) => String(item?.ownership || (item?.isJoint ? "joint" : "")).toLowerCase() === "joint" || item?.isJoint === true;
+
+  // Create a normalized, de-duplicated view of audit assets for display and adding
+  const auditAssetsUnique = useMemo(() => {
+    const out: any[] = [];
+    const seen = new Set<string>();
+    (auditAssets || []).forEach((a: any) => {
+      const name = (a.name || a.accountName || a.type || "Asset").toString().trim();
+      const value = Number(a.value) || 0;
+      const key = `${name.toLowerCase()}|${value}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({
+          ...a,
+          name,
+          value,
+          type: String(a.type || '').toLowerCase() || 'manual',
+          isJoint: isJointAsset(a),
+        });
+      }
+    });
+    return out;
+  }, [auditAssets]);
 
   const totalAssets = useMemo(() => {
-    if (!profile) return 0;
-    let total = 0;
-    // Manual assets
-    if (Array.isArray(profile.assets)) {
-      total += profile.assets.reduce((sum: number, a: any) => sum + (Number(a?.value) || 0), 0);
-    }
-    // Plaid accounts if present on profile (best-effort)
-    if (Array.isArray(profile.plaidAccounts)) {
-      total += profile.plaidAccounts.reduce((sum: number, acc: any) => sum + (Number(acc?.balance) || 0), 0);
-    }
-    // Primary residence equity
-    if (profile.primaryResidence) {
-      const mv = Number(profile.primaryResidence.marketValue) || 0;
-      const mb = Number(profile.primaryResidence.mortgageBalance) || 0;
-      total += Math.max(0, mv - mb);
-    }
-    return total;
-  }, [profile]);
+    return auditAssetsUnique.reduce((sum: number, asset: any) => sum + (Number(asset?.value) || 0), 0);
+  }, [auditAssetsUnique]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(
       Math.round(n || 0)
     );
 
+  const addManualAsset = () => {
+    const v = Number(newAssetValue);
+    const clean = { name: newAssetName.trim() || "Asset", value: Number.isFinite(v) ? v : 0, type: "manual", isJoint: false };
+    const next = [...currentList, clean];
+    form.setValue("assets.list" as any, next);
+    form.setValue("assets.mode" as any, "list");
+    setNewAssetName("");
+    setNewAssetValue("");
+    setAddOpen(false);
+  };
+  const removeManualAsset = (idx: number) => {
+    const next = currentList.filter((_, i) => i !== idx);
+    form.setValue("assets.list" as any, next);
+  };
+
+  // Auto‑populate "Assets Selected for Will" with the testator's assets once
+  const [autoAdded, setAutoAdded] = useState(false);
+  useEffect(() => {
+    if (autoAdded) return;
+    if (!Array.isArray(auditAssetsUnique) || auditAssetsUnique.length === 0) return;
+
+    const exists = new Set(currentList.map((x) => `${(x.name || "").toLowerCase()}|${Number(x.value) || 0}`));
+    const toAdd: any[] = [];
+
+    const addIfNew = (item: any) => {
+      const key = `${(item.name || "").toLowerCase()}|${Number(item.value) || 0}`;
+      if (!exists.has(key)) {
+        exists.add(key);
+        toAdd.push(item);
+      }
+    };
+
+    // Only include the testator's assets (individual or joint). If server already filtered,
+    // this keeps behavior consistent; if unfiltered, it excludes spouse-only items.
+    const isTestatorAsset = (a: any) => {
+      const ownership = String(a?.ownership || "").toLowerCase();
+      const ownerRole = String(a?.accountOwner || a?.policyOwner || "user").toLowerCase();
+      const joint = ownership === "joint";
+      const individualForUser = ownership !== "joint" && ownerRole === "user";
+      return joint || individualForUser;
+    };
+
+    auditAssetsUnique
+      .filter(isTestatorAsset)
+      .forEach((asset: any) =>
+        addIfNew({
+          name: asset.name || asset.type || "Asset",
+          value: Number(asset.value) || 0,
+          type: String(asset.type || "").toLowerCase() || "manual",
+          isJoint: isJointAsset(asset),
+        })
+      );
+
+    if (toAdd.length > 0) {
+      form.setValue("assets.list" as any, [...currentList, ...toAdd]);
+      form.setValue("assets.mode" as any, "list");
+    }
+    setAutoAdded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auditAssetsUnique, currentList, autoAdded]);
+
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
-        <Label className="text-white">How would you like to provide assets?</Label>
-        <div className="grid gap-2 md:grid-cols-2">
-          <Button
-            variant={mode === "list" ? "default" : "outline"}
-            className={mode === "list" ? "bg-purple-600 hover:bg-purple-500 text-white" : "bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50"}
-            onClick={() => form.setValue("assets.mode" as any, "list")}
-          >
-            List each major asset
-          </Button>
-          <Button
-            variant={mode === "estimate" ? "default" : "outline"}
-            className={mode === "estimate" ? "bg-purple-600 hover:bg-purple-500 text-white" : "bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50"}
-            onClick={() => form.setValue("assets.mode" as any, "estimate")}
-          >
-            Estimate total for now
-          </Button>
-        </div>
-      </div>
 
       {totalAssets > 0 && (
         <div className="rounded-lg border border-emerald-700 bg-emerald-900/20 p-3">
@@ -383,69 +551,126 @@ function Assets({ form }: { form: ReturnType<typeof useForm<WillFormType>> }) {
         </div>
       )}
 
-      {mode === "estimate" && (
-        <div className="space-y-2">
-          <Label className="text-white">Approximate value (range)</Label>
-          <Controller
-            control={form.control}
-            name={"assets.estimateBracket" as any}
-            render={({ field }) => (
-              <Select value={field.value} onValueChange={field.onChange}>
-                <SelectTrigger className="bg-gray-900/60 border-gray-700 text-white">
-                  <SelectValue placeholder="Select a range" />
-                </SelectTrigger>
-                <SelectContent className="bg-gray-800 border-gray-700">
-                  {["Less than $200k", "$200k–$500k", "$500k–$1M", "$1M–$2M", "$2M–$5M", "$5M–$10M", "More than $10M"].map((r) => (
-                    <SelectItem key={r} value={r} className="text-white">
-                      {r}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          />
-        </div>
-      )}
-
-      {mode === "list" && (
+      {
         <div className="space-y-3">
-          <div className="text-sm text-gray-400">Assets from your profile are shown below. You can reference these in your will or add additional items.</div>
-          {profile && (
-            <div className="space-y-2">
-              {Array.isArray(profile.assets) && profile.assets.length > 0 && (
-                <div>
-                  <div className="text-sm font-medium text-white mb-2">Manual Assets:</div>
-                  {profile.assets.map((asset: any, i: number) => (
-                    <div key={`ma-${i}`} className="text-sm text-gray-300 bg-gray-800/30 p-2 rounded">
-                      {(asset.name || asset.type || "Asset")} : {fmt(Number(asset.value) || 0)}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {Array.isArray(profile.plaidAccounts) && profile.plaidAccounts.length > 0 && (
-                <div>
-                  <div className="text-sm font-medium text-white mb-2">Connected Accounts:</div>
-                  {profile.plaidAccounts.map((acc: any, i: number) => (
-                    <div key={`pa-${i}`} className="text-sm text-gray-300 bg-gray-800/30 p-2 rounded">
-                      {(acc.name || acc.type || "Account")} : {fmt(Number(acc.balance) || 0)}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {profile.primaryResidence && (
-                <div>
-                  <div className="text-sm font-medium text-white mb-2">Primary Residence:</div>
-                  <div className="text-sm text-gray-300 bg-gray-800/30 p-2 rounded">
-                    Home Equity: {fmt(Math.max(0, (Number(profile.primaryResidence.marketValue) || 0) - (Number(profile.primaryResidence.mortgageBalance) || 0)))}
-                  </div>
-                </div>
-              )}
+          <div className="flex items-center justify-between">
+            <Label className="text-white">Your Assets</Label>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                title="Refresh assets"
+                className="p-2 h-9 w-9 flex items-center justify-center bg-emerald-800/50 border-emerald-600 text-emerald-200 hover:bg-emerald-700/50"
+                onClick={() => {
+                  queryClient.invalidateQueries({ queryKey: ["/api/financial-profile"] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/ownership-beneficiary-audit"] });
+                }}
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50"
+                onClick={() => setAddOpen((o) => !o)}
+              >
+                Add Asset
+              </Button>
+              <Button
+                variant="outline"
+                className="bg-emerald-800/50 border-emerald-600 text-emerald-200 hover:bg-emerald-700/50"
+                onClick={() => {
+                if (!profile) return;
+                const exists = new Set(currentList.map((x) => `${(x.name||"").toLowerCase()}|${Number(x.value)||0}`));
+                const addIfNew = (item: any) => {
+                  const key = `${(item.name||"").toLowerCase()}|${Number(item.value)||0}`;
+                  if (!exists.has(key)) {
+                    exists.add(key);
+                    tmp.push(item);
+                  }
+                };
+                const tmp: any[] = [];
+                auditAssetsUnique.forEach((asset: any) => addIfNew({
+                  name: asset.name || asset.type || "Asset",
+                  value: Number(asset.value) || 0,
+                  type: String(asset.type || '').toLowerCase() || 'manual',
+                  isJoint: isJointAsset(asset),
+                }));
+                form.setValue("assets.list" as any, [...currentList, ...tmp]);
+                form.setValue("assets.mode" as any, "list");
+                }}
+              >
+                Add to Will
+              </Button>
+            </div>
+          </div>
+          {addOpen && (
+            <div className="grid gap-2 md:grid-cols-3 bg-gray-900/40 border border-gray-800 rounded-md p-3">
+              <Input
+                className="bg-gray-900/60 border-gray-700 text-white"
+                placeholder="Asset name"
+                value={newAssetName}
+                onChange={(e) => setNewAssetName(e.target.value)}
+              />
+              <Input
+                className="bg-gray-900/60 border-gray-700 text-white"
+                placeholder="Value"
+                inputMode="numeric"
+                value={newAssetValue}
+                onChange={(e) => setNewAssetValue(e.target.value.replace(/[^0-9.]/g, ""))}
+              />
+              <div className="flex items-center justify-end gap-2">
+                <Button
+                  variant="outline"
+                  className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50"
+                  onClick={() => setAddOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  className="bg-purple-600 hover:bg-purple-500"
+                  onClick={addManualAsset}
+                  disabled={!newAssetName.trim()}
+                >
+                  Save Asset
+                </Button>
+              </div>
             </div>
           )}
+          <div className="text-sm text-gray-400">Assets from your profile (deduplicated):</div>
+          <div className="space-y-2">
+            {auditAssetsUnique.length === 0 && (
+              <div className="text-sm text-gray-500">No assets available.</div>
+            )}
+            {auditAssetsUnique.map((asset: any, i: number) => (
+              <div key={`asset-${i}`} className="text-sm text-gray-300 bg-gray-800/30 p-2 rounded">
+                {(asset.name || asset.type || "Asset")} : {fmt(Number(asset.value) || 0)}
+                {String(asset.ownership || '').toLowerCase() === 'joint' && <span className="text-blue-300 ml-2">(Joint)</span>}
+              </div>
+            ))}
+          </div>
+
+          {/* Assets Selected / Included in Will */}
+          <div className="mt-6">
+            <div className="text-sm font-medium text-white mb-2">Assets Selected for Will:</div>
+            {currentList.length === 0 ? (
+              <div className="text-sm text-gray-400">No assets selected yet. Use Add to Will or add manually.</div>
+            ) : (
+              currentList.map((asset: any, i: number) => (
+                <div key={`selected-${i}`} className="text-sm text-gray-300 bg-gray-800/30 p-2 rounded flex items-center justify-between">
+                  <span>{asset.name || "Asset"} : {fmt(Number(asset.value) || 0)}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="bg-red-900/20 border-red-700 text-red-300 hover:bg-red-900/40"
+                    onClick={() => removeManualAsset(i)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
         </div>
-      )}
+      }
     </div>
   );
 }
@@ -589,11 +814,10 @@ function Residuary({ form }: { form: ReturnType<typeof useForm<WillFormType>> })
 
 function Gifts({ form }: { form: ReturnType<typeof useForm<WillFormType>> }) {
   const fa = useFieldArray({ control: form.control, name: "gifts" });
-  const gifts = form.watch("gifts") || [];
   return (
     <div className="space-y-4">
-      {gifts.map((g, i) => (
-        <div key={i} className="rounded-lg border border-gray-700 p-3 bg-black/20 space-y-3">
+      {fa.fields.map((f, i) => (
+        <div key={f.id} className="rounded-lg border border-gray-700 p-3 bg-black/20 space-y-3">
           <div className="space-y-2">
             <Label className="text-white">Property description</Label>
             <Input className="bg-gray-900/60 border-gray-700 text-white" {...form.register(`gifts.${i}.description` as const)} />
@@ -639,14 +863,30 @@ function Gifts({ form }: { form: ReturnType<typeof useForm<WillFormType>> }) {
 
 function Funeral({ form }: { form: ReturnType<typeof useForm<WillFormType>> }) {
   const fa = useFieldArray({ control: form.control, name: "funeral.agents" as any });
-  const agents = form.watch("funeral.agents") || [];
+  const spouseName = (form.watch("spouse.name") || "").toString().trim();
+  const agents = (form.watch("funeral.agents") as string[]) || [];
+
+  const [prefilled, setPrefilled] = React.useState(false);
+  useEffect(() => {
+    if (prefilled) return;
+    const emptyOrMissing = !agents || agents.length === 0 || agents.every((s) => !String(s || "").trim());
+    if (spouseName && emptyOrMissing) {
+      fa.replace([spouseName]);
+      setPrefilled(true);
+    }
+  }, [spouseName, agents, prefilled, fa]);
+
   return (
     <div className="space-y-3">
       <Label className="text-white">Person(s) to carry out your funeral wishes (in order)</Label>
       <div className="space-y-2">
-        {(agents as string[]).map((a: string, i: number) => (
-          <div key={`${a}-${i}`} className="grid gap-2 md:grid-cols-3">
-            <Input className="bg-gray-900/60 border-gray-700 text-white md:col-span-2" value={a} onChange={(e) => form.setValue(`funeral.agents.${i}` as any, e.target.value)} />
+        {fa.fields.map((f, i) => (
+          <div key={f.id} className="grid gap-2 md:grid-cols-3">
+            <Input
+              className="bg-gray-900/60 border-gray-700 text-white md:col-span-2"
+              placeholder="Full name"
+              {...form.register(`funeral.agents.${i}` as const)}
+            />
             <Button
               variant="outline"
               className="bg-gray-800/50 border-gray-600 text-gray-200 hover:bg-gray-700/50"
