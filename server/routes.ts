@@ -40,6 +40,11 @@ import { setupDashboardSnapshotRoutes } from './routes/dashboard-snapshot';
 import type { DatabaseError } from 'pg';
 import { mapStrategyToRisk, optimizeEducationGoal } from "./education-optimizer";
 import { calculateEstateProjection, buildAssetCompositionFromProfile } from "@shared/estate/analysis";
+import {
+  assembleEstateInsightsContext,
+  generateEstateInsightsFromContext,
+  type EstateInsightsPayload,
+} from "./estate-insights-generator";
 
 const PG_UNDEFINED_TABLE = '42P01';
 
@@ -6613,6 +6618,33 @@ Return ONLY valid JSON like:
       const planId = parseInt(req.params.planId);
       const plan = await storage.updateEstatePlan(req.user!.id, planId, req.body);
       res.json(plan);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/estate-plan/insights", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) return res.sendStatus(401);
+
+      const userId = req.user!.id;
+      const estatePlan = await storage.getEstatePlan(userId);
+      if (!estatePlan) {
+        return res.status(400).json({ error: "Estate plan not found" });
+      }
+
+      const context = await assembleEstateInsightsContext(userId, estatePlan);
+      const insights: EstateInsightsPayload = await generateEstateInsightsFromContext(context);
+
+      const currentAnalysis = (estatePlan.analysisResults || {}) as Record<string, any>;
+      const estateNew = { ...(currentAnalysis.estateNew || {}) };
+      estateNew.insights = insights;
+
+      const updatedAnalysis = { ...currentAnalysis, estateNew };
+
+      await storage.updateEstatePlan(userId, estatePlan.id, { analysisResults: updatedAnalysis });
+
+      res.json({ insights });
     } catch (error) {
       next(error);
     }

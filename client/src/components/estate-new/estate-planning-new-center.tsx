@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEstatePlanningNew } from "@/hooks/useEstatePlanningNew";
 import { estatePlanningService } from "@/services/estate-planning.service";
@@ -24,14 +24,15 @@ import { US_STATES } from "@/lib/us-states";
 import { WillWizard as WillCreatorWizard } from "@/features/will/WillWizard";
 import {
   AlertCircle,
-  ArrowRight,
   BookOpen,
   Briefcase,
   CheckCircle2,
   DollarSign,
   Download,
   FileText,
+  Clock,
   Lightbulb,
+  Loader2,
   RefreshCw,
   Scale,
   Shield,
@@ -106,6 +107,25 @@ function formatPercent(value?: number | null) {
 }
 
 const PIE_COLORS = ["#a855f7", "#f97316", "#22d3ee", "#94a3b8", "#ef4444"];
+
+type EstateInsightRecommendation = {
+  priority: number;
+  title: string;
+  summary: string;
+  actionItems: string[];
+  impact: {
+    type: string;
+    description: string;
+    estimatedDelta?: string;
+  };
+};
+
+type EstateInsightsState = {
+  generatedAt: string;
+  recommendations: EstateInsightRecommendation[];
+  model?: string;
+  contextHash?: string;
+};
 
 // Custom tooltips for pie charts to ensure readable white text on dark background
 const DistributionTooltip = ({ active, payload }: any) => {
@@ -198,6 +218,13 @@ export function EstatePlanningNewCenter() {
   const [activeTab, setActiveTab] = useState("overview");
   const [localStrategies, setLocalStrategies] = useState<EstateStrategyInputs>(strategies);
   const [localAssumptions, setLocalAssumptions] = useState<EstateAssumptionInputs>(assumptions);
+  const estatePlanInsights = ((estatePlan as any)?.analysisResults?.estateNew?.insights ?? null) as EstateInsightsState | null;
+  const [insights, setInsights] = useState<EstateInsightsState | null>(estatePlanInsights);
+  useEffect(() => {
+    if (!estatePlanInsights) return;
+    if (estatePlanInsights.generatedAt === insights?.generatedAt) return;
+    setInsights(estatePlanInsights);
+  }, [estatePlanInsights?.generatedAt]);
   // Tri-state so we can avoid clobbering DB before hydration
   const [includeRoth, setIncludeRoth] = useState<boolean | null>(() => {
     // Try to hydrate immediately from sessionStorage to reduce initial flicker
@@ -211,6 +238,18 @@ export function EstatePlanningNewCenter() {
   const isEditingRef = useRef(false);
   const lastEditAtRef = useRef(0);
   const markEdited = () => { try { lastEditAtRef.current = Date.now(); } catch {} };
+
+  const insightsTimestamp = useMemo(() => {
+    if (!insights?.generatedAt) return null;
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(insights.generatedAt));
+    } catch {
+      return insights.generatedAt;
+    }
+  }, [insights?.generatedAt]);
 
   // Initialize toggle from persisted estate plan preferences if available (respond to analysisResults changes as well)
   useEffect(() => {
@@ -296,6 +335,17 @@ export function EstatePlanningNewCenter() {
       runRothAnalysisMutation.mutate();
     }
   }, [includeRoth, rothLoading, rothAnalysis, runRothAnalysisMutation.isPending]);
+
+  useEffect(() => {
+    if (activeTab !== "insights") return;
+    if (insightsLoading) return;
+    if (insights?.recommendations?.length) {
+      hasRequestedInsightsRef.current = false;
+      return;
+    }
+    if (hasRequestedInsightsRef.current) return;
+    requestInsights("auto");
+  }, [activeTab, insights?.recommendations?.length, insightsLoading, requestInsights]);
 
   // Build estate overlay using Roth engine balances at projected death age
   const withRothSummary = useMemo(() => {
@@ -387,6 +437,44 @@ export function EstatePlanningNewCenter() {
       pendingHashRef.current = null;
     }
   });
+
+  const hasRequestedInsightsRef = useRef(false);
+  const lastInsightsTriggerRef = useRef<"auto" | "manual">("auto");
+  const {
+    mutate: generateInsights,
+    isPending: insightsLoading,
+  } = useMutation<EstateInsightsState, unknown, void>({
+    mutationFn: async () => {
+      const result = await estatePlanningService.generateEstateInsights();
+      return result.insights as EstateInsightsState;
+    },
+    onSuccess: (data) => {
+      hasRequestedInsightsRef.current = false;
+      setInsights(data);
+      queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
+      if (lastInsightsTriggerRef.current === "manual") {
+        toast({ title: "Estate insights updated" });
+      }
+    },
+    onError: (error: unknown) => {
+      hasRequestedInsightsRef.current = false;
+      toast({
+        title: "Unable to generate insights",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const requestInsights = useCallback(
+    (trigger: "auto" | "manual") => {
+      if (insightsLoading) return;
+      hasRequestedInsightsRef.current = true;
+      lastInsightsTriggerRef.current = trigger;
+      generateInsights();
+    },
+    [generateInsights, insightsLoading]
+  );
 
   // Persist includeRoth immediately when toggled so it survives refreshes
   const persistIncludeRoth = useMutation({
@@ -870,20 +958,6 @@ export function EstatePlanningNewCenter() {
     setLocalAssumptions((prev) => ({ ...prev, [key]: value }));
   };
 
-  const reportSummary = activeSummary
-    ? [
-        `Projected estate value at death: ${formatCurrency(activeSummary.projectedEstateValue)}`,
-        `Estimated estate taxes: ${formatCurrency(activeSummary.totalTax)} (${formatPercent(activeSummary.effectiveTaxRate)})`,
-        `Net inheritance for beneficiaries: ${formatCurrency(activeSummary.netToHeirs)}`,
-        activeSummary.liquidity.gap > 0
-          ? `Liquidity shortfall of ${formatCurrency(activeSummary.liquidity.gap)} detected for estate settlement.`
-          : "Liquidity target met for projected estate obligations.",
-        activeSummary.heirTaxEstimate.taxDeferredBalance > 0
-          ? `Heirs may owe approximately ${formatCurrency(activeSummary.heirTaxEstimate.projectedIncomeTax)} in income taxes on inherited tax-deferred accounts.`
-          : "Heirs are positioned for tax-efficient inheritance (limited tax-deferred balances).",
-      ]
-    : [];
-
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 space-y-6">
       <Alert className="bg-blue-900/20 border-blue-800">
@@ -986,7 +1060,7 @@ export function EstatePlanningNewCenter() {
               { id: "strategies", label: "Strategies", icon: Lightbulb },
               { id: "beneficiaries-table", label: "Beneficiaries", icon: Users },
               { id: "checklist", label: "Checklist", icon: CheckCircle2 },
-              { id: "recommendations", label: "Recommendations", icon: Target },
+              { id: "insights", label: "Insights", icon: Target },
               { id: "will", label: "Will Creator", icon: FileText },
             ].map((section) => {
                 const Icon = section.icon;
@@ -1876,61 +1950,74 @@ export function EstatePlanningNewCenter() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="recommendations" className="space-y-4">
+            <TabsContent value="insights" className="space-y-4">
               <Card className="bg-gray-900/40 border-gray-700">
-                <CardHeader className="space-y-2">
-                  <CardTitle className="text-xl text-white">Advisor Playbook & Next Actions</CardTitle>
-                  <p className="text-sm text-gray-400">
-                    Action-oriented summary tailored to taxes, liquidity, beneficiary hygiene, and outstanding documents.
-                  </p>
+                <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="space-y-1.5">
+                    <CardTitle className="text-xl text-white">Estate Insights</CardTitle>
+                    <p className="text-sm text-gray-400">
+                      AI-ranked strategies to maximize your household's after-tax estate value.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {insightsTimestamp && (
+                      <div className="flex items-center gap-1 text-xs text-gray-400">
+                        <Clock className="h-4 w-4 text-purple-300" />
+                        <span>{insightsTimestamp}</span>
+                      </div>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 border border-purple-500/40 bg-purple-500/10 text-purple-100 hover:bg-purple-500/20"
+                      onClick={() => requestInsights("manual")}
+                      disabled={insightsLoading}
+                      title="Refresh insights"
+                    >
+                      {insightsLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                      <span className="sr-only">Refresh insights</span>
+                    </Button>
+                  </div>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  {reportSummary.length ? (
-                    <RecommendationList items={reportSummary} />
+                <CardContent className="space-y-6">
+                  {insightsLoading && !insights?.recommendations?.length ? (
+                    <div className="space-y-3">
+                      {Array.from({ length: 3 }).map((_, idx) => (
+                        <div key={idx} className="rounded-xl border border-gray-800 bg-gray-950/40 p-4">
+                          <div className="h-4 w-32 rounded bg-gray-800/70 animate-pulse" />
+                          <div className="mt-3 h-3 w-full rounded bg-gray-800/50 animate-pulse" />
+                          <div className="mt-2 h-3 w-3/4 rounded bg-gray-800/40 animate-pulse" />
+                        </div>
+                      ))}
+                    </div>
+                  ) : insights?.recommendations?.length ? (
+                    <div className="space-y-4">
+                      {insights.recommendations.map((recommendation) => (
+                        <EstateInsightCard key={recommendation.priority} recommendation={recommendation} />
+                      ))}
+                    </div>
                   ) : (
-                    <p className="text-sm text-gray-400">Run an estate projection to generate tailored recommendations.</p>
+                    <div className="rounded-lg border border-dashed border-purple-500/40 bg-gray-950/40 p-6 text-center text-sm text-gray-400">
+                      Generate estate insights to reveal high-impact estate planning moves tailored to your data.
+                    </div>
                   )}
 
-                  <Separator className="border-gray-800" />
+                  {insights?.model && (
+                    <div className="border border-gray-800 bg-gray-950/40 px-3 py-2 text-xs text-gray-500">
+                      Generated with {insights.model} and your latest Affluvia estate planning data snapshot.
+                    </div>
+                  )}
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Card className="bg-gray-950/40 border-gray-800">
-                      <CardHeader>
-                        <CardTitle className="text-sm font-semibold text-gray-200">Documents & governance</CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-2 text-sm text-gray-300">
-                        {documents.filter((doc: any) => doc.status !== "executed").length ? (
-                          <p>
-                            {documents.filter((doc: any) => doc.status !== "executed").length} document(s) need attention. Prioritize signing or updating wills, trusts, and powers of attorney.
-                          </p>
-                        ) : (
-                          <p>Core estate documents are up to date—schedule periodic reviews to stay compliant with state law changes.</p>
-                        )}
-                        {beneficiaries.some((b: any) => !b.isPrimary && !b.isContingent) && (
-                          <p>Add contingent beneficiaries to retirement and insurance assets to prevent default probate outcomes.</p>
-                        )}
-                      </CardContent>
-                    </Card>
-
-                    <Card className="bg-gray-950/40 border-gray-800">
-                      <CardHeader>
-                        <CardTitle className="text-sm font-semibold text-gray-200">Liquidity & insurance</CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-2 text-sm text-gray-300">
-                        {activeSummary && activeSummary.liquidity.gap > 0 ? (
-                          <p>
-                            Liquidity shortfall projected. Consider layering survivorship life insurance or earmarking brokerage assets to cover {formatCurrency(activeSummary.liquidity.gap)} in expected settlement costs.
-                          </p>
-                        ) : (
-                          <p>Liquidity targets satisfied. Continue monitoring as projections shift with market returns or gifting.</p>
-                        )}
-                        {localStrategies.charitableBequest ? (
-                          <p>Coordinate charitable bequests with advisors to confirm beneficiary language and potential use of donor-advised funds.</p>
-                        ) : (
-                          <p>Clarify charitable goals; gifting during lifetime or via testamentary bequests can shrink taxable estate and reinforce legacy values.</p>
-                        )}
-                      </CardContent>
-                    </Card>
+                  <div className="border-t border-gray-800 pt-4">
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      These AI-generated insights are for educational purposes only and do not constitute legal, tax, or investment advice.
+                      Always consult qualified professionals before implementing estate planning strategies. Affluvia does not provide
+                      fiduciary, legal, or tax services.
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -1984,6 +2071,44 @@ interface SummaryTileProps {
   helper?: string;
   accent?: "emerald" | "orange" | "sky" | "default";
   highlight?: boolean;
+}
+
+function EstateInsightCard({ recommendation }: { recommendation: EstateInsightRecommendation }) {
+  const { priority, title, summary, actionItems, impact } = recommendation;
+
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-950/40 p-5 space-y-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <span className="text-xs font-semibold uppercase tracking-wide text-purple-300">Priority {priority}</span>
+          <h3 className="mt-1 text-lg font-semibold text-white">{title}</h3>
+        </div>
+        <Badge variant="outline" className="border-purple-500/40 text-purple-200 text-xs">
+          {impact?.type || "Impact"}
+        </Badge>
+      </div>
+      {summary && <p className="text-sm leading-relaxed text-gray-300">{summary}</p>}
+      {impact?.description && (
+        <div className="rounded-lg border border-purple-500/20 bg-purple-500/5 p-3 text-xs text-purple-100 space-y-1">
+          <span className="font-semibold text-purple-200">Impact Insight</span>
+          <p className="text-purple-100/90">{impact.description}</p>
+          {impact?.estimatedDelta && (
+            <p className="text-purple-200">Estimated effect: {impact.estimatedDelta}</p>
+          )}
+        </div>
+      )}
+      {actionItems?.length ? (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Action items</p>
+          <ul className="mt-2 space-y-1.5 text-sm text-gray-300 list-disc pl-5">
+            {actionItems.map((item, idx) => (
+              <li key={idx}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function SummaryTile({ label, value, helper, accent = "default", highlight = false }: SummaryTileProps) {
@@ -2114,19 +2239,6 @@ function DocumentStatusBadge({ status }: { status: string }) {
 
   return <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${variant.className}`}>{variant.label}</span>;
 }
-
-  function RecommendationList({ items }: { items: string[] }) {
-  return (
-    <ul className="space-y-2 text-sm text-gray-300">
-      {items.map((item, index) => (
-        <li key={`${item}-${index}`} className="flex items-start gap-2">
-          <ArrowRight className="mt-1 h-4 w-4 text-purple-300" />
-          <span>{item}</span>
-        </li>
-      ))}
-    </ul>
-  );
-  }
 
   // --- Will Creator Wizard (MVP) ---
   function StateDetailsButton({ stateCode }: { stateCode: string }) {

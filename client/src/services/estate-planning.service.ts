@@ -271,6 +271,19 @@ class EstatePlanningService {
     return response.json();
   }
 
+  async generateEstateInsights(): Promise<{ insights: any }> {
+    const response = await fetch('/api/estate-plan/insights', {
+      method: 'POST',
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to generate estate insights');
+    }
+
+    return response.json();
+  }
+
   async deleteEstateScenario(scenarioId: number): Promise<void> {
     const response = await fetch(`/api/estate-scenarios/${scenarioId}`, {
       method: 'DELETE',
