@@ -336,17 +336,6 @@ export function EstatePlanningNewCenter() {
     }
   }, [includeRoth, rothLoading, rothAnalysis, runRothAnalysisMutation.isPending]);
 
-  useEffect(() => {
-    if (activeTab !== "insights") return;
-    if (insightsLoading) return;
-    if (insights?.recommendations?.length) {
-      hasRequestedInsightsRef.current = false;
-      return;
-    }
-    if (hasRequestedInsightsRef.current) return;
-    requestInsights("auto");
-  }, [activeTab, insights?.recommendations?.length, insightsLoading, requestInsights]);
-
   // Build estate overlay using Roth engine balances at projected death age
   const withRothSummary = useMemo(() => {
     // Only compute when toggle is on and baseline summary exists
@@ -475,6 +464,17 @@ export function EstatePlanningNewCenter() {
     },
     [generateInsights, insightsLoading]
   );
+
+  useEffect(() => {
+    if (activeTab !== "insights") return;
+    if (insightsLoading) return;
+    if (insights?.recommendations?.length) {
+      hasRequestedInsightsRef.current = false;
+      return;
+    }
+    if (hasRequestedInsightsRef.current) return;
+    requestInsights("auto");
+  }, [activeTab, insights?.recommendations?.length, insightsLoading, requestInsights]);
 
   // Persist includeRoth immediately when toggled so it survives refreshes
   const persistIncludeRoth = useMutation({
