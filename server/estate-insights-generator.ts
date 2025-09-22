@@ -12,6 +12,15 @@ import type {
 
 const GEMINI_MODEL = "gemini-2.5-flash-lite";
 
+const isUndefinedTableError = (error: unknown): boolean => {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in (error as Record<string, unknown>) &&
+    (error as { code?: string }).code === "42P01"
+  );
+};
+
 function getAgeFromISO(date?: string | null): number | undefined {
   if (!date) return undefined;
   const parsed = new Date(date);
@@ -186,11 +195,33 @@ export async function assembleEstateInsightsContext(userId: number, estatePlan?:
   }
 
   const estatePlanId = resolvedPlan.id;
+  const documentsPromise = storage.getEstateDocuments(userId, estatePlanId).catch((error) => {
+    if (isUndefinedTableError(error)) return [] as EstateDocument[];
+    throw error;
+  });
+
+  const beneficiariesPromise = storage
+    .getEstateBeneficiaries(userId, estatePlanId)
+    .catch((error) => {
+      if (isUndefinedTableError(error)) return [] as EstateBeneficiary[];
+      throw error;
+    });
+
+  const trustsPromise = storage.getEstateTrusts(userId, estatePlanId).catch((error) => {
+    if (isUndefinedTableError(error)) return [] as EstateTrust[];
+    throw error;
+  });
+
+  const scenariosPromise = storage.getEstateScenarios(userId, estatePlanId).catch((error) => {
+    if (isUndefinedTableError(error)) return [] as EstateScenario[];
+    throw error;
+  });
+
   const [documents, beneficiaries, trusts, scenarios] = await Promise.all([
-    storage.getEstateDocuments(userId, estatePlanId),
-    storage.getEstateBeneficiaries(userId, estatePlanId),
-    storage.getEstateTrusts(userId, estatePlanId),
-    storage.getEstateScenarios(userId, estatePlanId),
+    documentsPromise,
+    beneficiariesPromise,
+    trustsPromise,
+    scenariosPromise,
   ]);
 
   const context: EstateInsightsContext = {
@@ -214,7 +245,7 @@ export async function generateEstateInsightsFromContext(context: EstateInsightsC
 
   const systemPrompt = [
     "You are Affluvia's in-house estate planning strategist.",
-    "Think haard.",
+    "Think hard.",
     "Blend the acumen of a CFP, estate attorney, and tax strategist.",
     "Always focus on maximizing after-tax, after-cost estate value for the household.",
     "Consider liquidity, taxes, probate frictions, beneficiary alignment, and charitable intent.",
