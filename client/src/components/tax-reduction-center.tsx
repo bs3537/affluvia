@@ -1162,20 +1162,12 @@ function TaxReductionCenterContent() {
                           </CardDescription>
                         </CardHeader>
                         <CardContent>
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="text-center">
                               <div className="text-3xl font-bold text-green-400">
                                 {formatCurrency(taxRecommendations.totalEstimatedSavings || 0)}
                               </div>
                               <p className="text-sm text-gray-400 mt-1">Total Potential Annual Savings</p>
-                            </div>
-                            <div className="text-center">
-                              <div className="text-lg font-medium text-blue-300">
-                                {taxRecommendations.recommendations.length} Recommendations
-                              </div>
-                              <p className="text-sm text-gray-400 mt-1">
-                                Priority: {taxRecommendations.priority || 'High'}
-                              </p>
                             </div>
                             <div className="text-center">
                               <div className="text-lg font-medium text-purple-300">
@@ -1206,7 +1198,7 @@ function TaxReductionCenterContent() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 border border-green-400/40 bg-green-500/10 text-green-200 hover:bg-green-500/20"
+                                className="h-8 w-8 border border-purple-500/40 bg-purple-500/10 text-purple-200 hover:bg-purple-500/20"
                                 onClick={() => generateRecommendationsMutation.mutate()}
                                 disabled={generateRecommendationsMutation.isPending}
                                 title="Refresh tax insights"
