@@ -5705,6 +5705,7 @@ You are a CFP professional generating a unified list of personalized recommendat
 Requirements:
 - Return exactly 10 insights ranked by priority (1 = highest urgency/impact).
 - Each insight must include: id, priority (1–3), title, explanation, actionItems (3–5 concrete next steps), estimatedImpact (positive $ savings/benefit), and category.
+- Never invent or assume values that are not present in the provided context. If a data point is missing (e.g., health insurance monthly premium or deductible), state that it is unknown and recommend gathering it; do NOT claim "$0 premium" or "zero deductible" unless explicitly present in the context.
 - Show conservative dollar impact (never 0) using the client's own data; if exact math is unavailable, estimate conservatively.
 - Avoid generic advice; make it specific to the user's numbers and state.
 
@@ -5740,6 +5741,7 @@ Return ONLY valid JSON:
 
     // Normalize and enforce non-zero impacts; ensure 10 items and include actionItems
     if (Array.isArray(parsed.insights)) {
+      const hasHIData = !!(profile?.healthInsurance && (profile.healthInsurance.monthlyPremium || profile.healthInsurance.deductible || profile.healthInsurance.outOfPocketMax));
       parsed.insights = parsed.insights.map((i: any, idx: number) => {
         const impact = Number(i?.estimatedImpact);
         let safeImpact = impact;
@@ -5761,11 +5763,19 @@ Return ONLY valid JSON:
           else steps.push('Add a calendar reminder to implement within 14 days');
           steps.push('Mark this item as done when implemented');
         }
+        // Guard against hallucinated health insurance values when profile lacks them
+        let explanation = i.explanation || i.description || 'Actionable step tailored to your profile.';
+        const txt = `${i.title || ''} ${explanation}`;
+        const insuranceLike = /Insurance/i.test(i?.category || '') || /(health\s*insurance|deductible|premium)/i.test(txt);
+        const claimsNumbers = /(no monthly premium|zero deductible|\$\s?\d+[\d,\.]*\s*(deductible|premium))/i.test(txt);
+        if (insuranceLike && !hasHIData && claimsNumbers) {
+          explanation = 'Verify your health insurance details (premium, deductible, out-of-pocket max) since they were not provided in your profile; then compare options to optimize cost and coverage.';
+        }
         return {
           id: i.id || `ci-${idx + 1}`,
           priority: (i.priority === 1 || i.priority === 2) ? i.priority : 3,
           title: i.title || 'Personalized Recommendation',
-          explanation: i.explanation || i.description || 'Actionable step tailored to your profile.',
+          explanation,
           actionItems: steps,
           estimatedImpact: Math.round(safeImpact),
           category: i.category || 'Other'
