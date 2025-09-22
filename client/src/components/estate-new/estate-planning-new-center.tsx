@@ -350,7 +350,7 @@ export function EstatePlanningNewCenter() {
   // Build estate overlay using Roth engine balances at projected death age
   const withRothSummary = useMemo(() => {
     // Only compute when toggle is on and baseline summary exists
-    if (!includeRoth || !summary) return null;
+    if (!includeRoth || !summary || !summary.assumptions) return null;
 
     // Pull Roth engine results (support both shapes)
     const raw = (rothAnalysis as any)?.rawResults || (rothAnalysis as any)?.results;
