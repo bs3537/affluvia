@@ -93,11 +93,13 @@ export function DebtManagementCenter() {
   const [hasSyncedOnce, setHasSyncedOnce] = useState(false);
 
   // Sync debts from intake form mutation
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const syncDebtsMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch("/api/debts/sync-from-intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
       });
       if (!response.ok) {
         const error = await response.json();
@@ -112,6 +114,7 @@ export function DebtManagementCenter() {
       console.log("Sync successful:", data);
       queryClient.invalidateQueries({ queryKey: ["/api/debts"] });
       setHasSyncedOnce(true);
+      try { setLastSyncedAt(new Date().toISOString()); } catch {}
     },
     onError: (error) => {
       console.error("Sync failed:", error);
@@ -211,6 +214,22 @@ export function DebtManagementCenter() {
     );
   }
 
+  const formattedLastUpdated = (() => {
+    try {
+      let ts: string | null = null;
+      if (Array.isArray(debts) && debts.length) {
+        const max = debts.reduce((m: number, d: any) => {
+          const t = new Date(d?.updatedAt || d?.createdAt || 0).getTime();
+          return isFinite(t) && t > m ? t : m;
+        }, 0);
+        if (max > 0) ts = new Date(max).toISOString();
+      }
+      ts = ts || lastSyncedAt;
+      if (!ts) return null;
+      return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(ts));
+    } catch { return null; }
+  })();
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       {/* Header */}
@@ -268,6 +287,9 @@ export function DebtManagementCenter() {
             debts={debts || []}
             summary={debtSummary}
             activePlan={activePlan}
+            onRefresh={() => syncDebtsMutation.mutate()}
+            lastUpdatedLabel={formattedLastUpdated}
+            isRefreshing={syncDebtsMutation.isPending}
             onNavigateToStrategies={() => setActiveTab("strategies-new")}
           />
         </TabsContent>
