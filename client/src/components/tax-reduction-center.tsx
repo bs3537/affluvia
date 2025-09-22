@@ -1121,7 +1121,7 @@ function TaxReductionCenterContent() {
                     </div>
                     {!uploadedFile && (
                       <Button
-                        onClick={() => setShowRecommendations(false)}
+                        onClick={() => { setShowRecommendations(false); setActiveTab("upload"); }}
                         variant="outline"
                         size="sm"
                         className="bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700"
