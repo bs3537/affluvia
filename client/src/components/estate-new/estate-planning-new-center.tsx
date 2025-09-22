@@ -198,7 +198,16 @@ export function EstatePlanningNewCenter() {
   const [activeTab, setActiveTab] = useState("overview");
   const [localStrategies, setLocalStrategies] = useState<EstateStrategyInputs>(strategies);
   const [localAssumptions, setLocalAssumptions] = useState<EstateAssumptionInputs>(assumptions);
-  const [includeRoth, setIncludeRoth] = useState(false);
+  // Tri-state so we can avoid clobbering DB before hydration
+  const [includeRoth, setIncludeRoth] = useState<boolean | null>(() => {
+    // Try to hydrate immediately from sessionStorage to reduce initial flicker
+    try {
+      const ss = sessionStorage.getItem("estateNew_includeRoth");
+      if (ss === "true") return true;
+      if (ss === "false") return false;
+    } catch {}
+    return null;
+  });
   const isEditingRef = useRef(false);
   const lastEditAtRef = useRef(0);
   const markEdited = () => { try { lastEditAtRef.current = Date.now(); } catch {} };
@@ -458,9 +467,12 @@ export function EstatePlanningNewCenter() {
     ];
   }, [activeSummary, includeRoth, rothAnalysis, retirementAt93, projectedRealEstate]);
 
-  // Save snapshot when committed inputs (via Calculate) change — throttled + hashed to avoid loops
+  // Save snapshot when committed inputs (via Calculate) change — throttled + hashed to avoid loops.
+  // IMPORTANT: Do NOT run until includeRoth is hydrated, otherwise we may overwrite
+  // a previously saved value with the initial default.
   useEffect(() => {
     if (!estatePlan?.id || !activeSummary) return;
+    if (includeRoth === null) return; // avoid clobbering persisted state before hydration
     if (saveEstateNewMutation.isPending) return;
     const now = Date.now();
     if (now - lastSaveTimeRef.current < 5000) return; // throttle saves to at most once per 5s
@@ -488,7 +500,7 @@ export function EstatePlanningNewCenter() {
       ] : [];
 
       const estateNew = {
-        includeRoth,
+        includeRoth: Boolean(includeRoth),
         strategies: committedStrategies,
         assumptions: committedAssumptions,
         summaries: {
@@ -914,7 +926,8 @@ export function EstatePlanningNewCenter() {
               <Sparkles className={`h-4 w-4 ${includeRoth ? "text-purple-300" : "text-gray-400"}`} />
               <span className={`text-xs font-medium ${includeRoth ? "text-purple-200" : "text-gray-300"}`}>Include Roth Conversions</span>
               <Switch
-                checked={includeRoth}
+                checked={Boolean(includeRoth)}
+                disabled={includeRoth === null || persistIncludeRoth.isPending}
                 onCheckedChange={(v) => {
                   setIncludeRoth(v);
                   try { sessionStorage.setItem("estateNew_includeRoth", String(v)); } catch {}
@@ -971,8 +984,8 @@ export function EstatePlanningNewCenter() {
               { id: "overview", label: "Overview", icon: DollarSign },
               { id: "tax", label: "Tax Analysis", icon: Scale },
               { id: "strategies", label: "Strategies", icon: Lightbulb },
-              { id: "checklist", label: "Checklist", icon: CheckCircle2 },
               { id: "beneficiaries-table", label: "Beneficiaries", icon: Users },
+              { id: "checklist", label: "Checklist", icon: CheckCircle2 },
               { id: "recommendations", label: "Recommendations", icon: Target },
               { id: "will", label: "Will Creator", icon: FileText },
             ].map((section) => {
@@ -1204,6 +1217,22 @@ export function EstatePlanningNewCenter() {
                                     const displayName = a.name || a.description || a.type || "Account";
                                     const balance = Number(a.value || 0);
                                     const death = Number(typeof a.deathBenefit === "number" ? a.deathBenefit : (category === "Life Insurance" ? a.value || 0 : 0));
+                                    const counterpartOptions = (() => {
+                                      if (!isMarriedOrPartnered) return [] as string[];
+                                      if (ownerKey === "user") {
+                                        return spouseFirstName ? [spouseFirstName] : [];
+                                      }
+                                      if (ownerKey === "spouse") {
+                                        return clientFirstName ? [clientFirstName] : [];
+                                      }
+                                      if (ownerKey === "joint") {
+                                        const opts: string[] = [];
+                                        if (clientFirstName) opts.push(clientFirstName);
+                                        if (spouseFirstName && spouseFirstName !== clientFirstName) opts.push(spouseFirstName);
+                                        return opts;
+                                      }
+                                      return [] as string[];
+                                    })();
 
                                     return (
                                       <tr key={`${category}-${ownerKey}-${idxInOwner}`} className={isEditing ? "bg-blue-900/20" : "bg-gray-950/40 hover:bg-gray-900/40"}>
@@ -1219,7 +1248,11 @@ export function EstatePlanningNewCenter() {
                                                   <SelectValue placeholder="Select…" />
                                                 </SelectTrigger>
                                                 <SelectContent className="bg-gray-800 border-gray-700">
-                                                  {isMarriedOrPartnered && <SelectItem value={spouseFirstName} className="text-white">{spouseFirstName}</SelectItem>}
+                                                  {counterpartOptions.map((name) => (
+                                                    <SelectItem key={`primary-${name}`} value={name} className="text-white">
+                                                      {name}
+                                                    </SelectItem>
+                                                  ))}
                                                   <SelectItem value="Charity" className="text-white">Charity</SelectItem>
                                                   <SelectItem value="Trust" className="text-white">Trust</SelectItem>
                                                   <SelectItem value="All children" className="text-white">All children</SelectItem>
@@ -1244,7 +1277,11 @@ export function EstatePlanningNewCenter() {
                                                   <SelectValue placeholder="Select…" />
                                                 </SelectTrigger>
                                                 <SelectContent className="bg-gray-800 border-gray-700">
-                                                  {isMarriedOrPartnered && <SelectItem value={spouseFirstName} className="text-white">{spouseFirstName}</SelectItem>}
+                                                  {counterpartOptions.map((name) => (
+                                                    <SelectItem key={`contingent-${name}`} value={name} className="text-white">
+                                                      {name}
+                                                    </SelectItem>
+                                                  ))}
                                                   <SelectItem value="Charity" className="text-white">Charity</SelectItem>
                                                   <SelectItem value="Trust" className="text-white">Trust</SelectItem>
                                                   <SelectItem value="All children" className="text-white">All children</SelectItem>
@@ -1264,13 +1301,29 @@ export function EstatePlanningNewCenter() {
                                         <td className="px-4 py-3 text-right">
                                           {isEditing ? (
                                             <div className="flex items-center gap-2 justify-end">
-                                              <Button variant="outline" className="h-8 border-gray-600 text-gray-200" onClick={() => { setEditingIndex(null); }}>Cancel</Button>
-                                              <Button className="h-8 bg-indigo-600 hover:bg-indigo-700 text-white" disabled={savingAssets} onClick={() => saveRow(globalIdx)}>
+                                              <Button
+                                                variant="ghost"
+                                                className="h-8 border border-purple-500/40 bg-purple-500/10 text-purple-100 hover:bg-purple-500/20"
+                                                onClick={() => { setEditingIndex(null); }}
+                                              >
+                                                Cancel
+                                              </Button>
+                                              <Button
+                                                className="h-8 bg-purple-600 hover:bg-purple-700 text-white"
+                                                disabled={savingAssets}
+                                                onClick={() => saveRow(globalIdx)}
+                                              >
                                                 {savingAssets ? "Saving…" : "Save"}
                                               </Button>
                                             </div>
                                           ) : (
-                                            <Button variant="outline" className="h-8 border-gray-600 text-gray-200" onClick={() => startEdit(globalIdx)}>Edit</Button>
+                                            <Button
+                                              variant="ghost"
+                                              className="h-8 border border-purple-500/40 bg-purple-500/10 text-purple-100 hover:bg-purple-500/20"
+                                              onClick={() => startEdit(globalIdx)}
+                                            >
+                                              Edit
+                                            </Button>
                                           )}
                                         </td>
                                       </tr>
