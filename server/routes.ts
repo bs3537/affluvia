@@ -5699,8 +5699,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 You are a CFP professional generating a unified list of personalized recommendations across retirement, tax, debt, estate, education, insurance, and cash-flow.
 
 Requirements:
-- Return 10–12 insights ranked by priority (1 = highest urgency/impact).
-- Each insight must include: id, priority (1–3), title, explanation, estimatedImpact (positive $ savings/benefit), and category.
+- Return exactly 10 insights ranked by priority (1 = highest urgency/impact).
+- Each insight must include: id, priority (1–3), title, explanation, actionItems (3–5 concrete next steps), estimatedImpact (positive $ savings/benefit), and category.
 - Show conservative dollar impact (never 0) using the client's own data; if exact math is unavailable, estimate conservatively.
 - Avoid generic advice; make it specific to the user's numbers and state.
 
@@ -5720,7 +5720,7 @@ Estimation guidance (when exact figures aren’t possible):
 Return ONLY valid JSON:
 {
   "insights": [
-    { "id": "string", "priority": 1|2|3, "title": "...", "explanation": "...", "estimatedImpact": number, "category": "Tax|Retirement|Cash Flow|Debt|Estate|Insurance|Education|Investments|Other" }
+    { "id": "string", "priority": 1|2|3, "title": "...", "explanation": "...", "actionItems": ["step 1", "step 2", "step 3"], "estimatedImpact": number, "category": "Tax|Retirement|Cash Flow|Debt|Estate|Insurance|Education|Investments|Other" }
   ],
   "lastUpdated": "${new Date().toISOString()}"
 }`;
@@ -5734,7 +5734,7 @@ Return ONLY valid JSON:
     }
     const parsed = JSON.parse(match[0]);
 
-    // Normalize and enforce non-zero impacts; ensure at least 10 items if possible
+    // Normalize and enforce non-zero impacts; ensure 10 items and include actionItems
     if (Array.isArray(parsed.insights)) {
       parsed.insights = parsed.insights.map((i: any, idx: number) => {
         const impact = Number(i?.estimatedImpact);
@@ -5744,16 +5744,31 @@ Return ONLY valid JSON:
           const baseFromBudget = Math.max(0, annualBudget) * 0.02; // 2% annual budget
           safeImpact = Math.max(500, Math.round((baseFromAssets || 0) + (baseFromBudget || 0)));
         }
+        const steps: string[] = Array.isArray(i?.actionItems) ? i.actionItems.slice(0, 5) : [];
+        if (steps.length === 0) {
+          // Construct a minimal actionable list if missing
+          const cat = (i?.category || 'General').toString();
+          steps.push('Open the relevant section and review this recommendation');
+          if (/Debt/i.test(cat)) steps.push('Increase payment on highest-APR debt by $100 this month');
+          else if (/Retirement/i.test(cat)) steps.push('Increase retirement contribution by 1% of salary');
+          else if (/Tax/i.test(cat)) steps.push('Schedule a tax review to evaluate Roth/harvesting opportunities');
+          else if (/Estate/i.test(cat)) steps.push('Add/update will and beneficiary designations');
+          else if (/Education/i.test(cat)) steps.push('Start/adjust 529 contribution for target amount');
+          else steps.push('Add a calendar reminder to implement within 14 days');
+          steps.push('Mark this item as done when implemented');
+        }
         return {
           id: i.id || `ci-${idx + 1}`,
           priority: (i.priority === 1 || i.priority === 2) ? i.priority : 3,
           title: i.title || 'Personalized Recommendation',
           explanation: i.explanation || i.description || 'Actionable step tailored to your profile.',
+          actionItems: steps,
           estimatedImpact: Math.round(safeImpact),
           category: i.category || 'Other'
         };
       });
-      // If fewer than 10, keep as-is; prompt aims for 10–12
+      // Enforce exactly 10 items (model may return more)
+      parsed.insights = parsed.insights.slice(0, 10);
     } else {
       parsed.insights = [];
     }

@@ -14,6 +14,7 @@ interface CentralInsight {
   explanation: string;
   estimatedImpact: number;
   category?: string;
+  actionItems?: string[];
 }
 
 interface CentralInsightsResponse {
@@ -148,6 +149,13 @@ export function CentralInsights() {
                       </div>
                     </div>
                     <p className="text-gray-300 text-sm mb-3">{i.explanation}</p>
+                    {Array.isArray(i.actionItems) && i.actionItems.length > 0 && (
+                      <ul className="list-disc list-inside text-gray-300 text-sm mb-3">
+                        {i.actionItems.slice(0,5).map((step, idx) => (
+                          <li key={idx}>{step}</li>
+                        ))}
+                      </ul>
+                    )}
                     <div className="flex items-center gap-2">
                       <DollarSign className="w-4 h-4 text-green-400" />
                       <span className="text-sm text-green-400 font-semibold">Estimated Impact: {formatCurrency(i.estimatedImpact)}</span>
@@ -162,4 +170,3 @@ export function CentralInsights() {
     </div>
   );
 }
-
