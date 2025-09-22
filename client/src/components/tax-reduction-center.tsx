@@ -530,6 +530,19 @@ function TaxReductionCenterContent() {
     retry: 1,
   });
 
+  const recommendationsTimestamp = useMemo(() => {
+    const source = taxRecommendations?.lastUpdated;
+    if (!source) return null;
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(source));
+    } catch {
+      return source;
+    }
+  }, [taxRecommendations?.lastUpdated]);
+
   // Query for user financial profile to check Roth conversion eligibility
   const { data: userProfile, refetch: refetchUserProfile, isRefetching, isLoading: isLoadingProfile } = useQuery({
     queryKey: ["/api/financial-profile", user?.id],
@@ -1176,18 +1189,51 @@ function TaxReductionCenterContent() {
 
                       <Card className="bg-gray-800/50 border-gray-700">
                         <CardHeader>
-                          <CardTitle className="flex items-center gap-2 text-white">
-                            <TrendingDown className="h-5 w-5 text-green-400" />
-                            Top {Math.min(5, taxRecommendations.recommendations.length)} Tax Reduction Strategies
-                          </CardTitle>
-                          <CardDescription className="text-gray-400">
-                            Ranked by urgency and potential impact
-                          </CardDescription>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <CardTitle className="flex items-center gap-2 text-white">
+                                <TrendingDown className="h-5 w-5 text-green-400" />
+                                Tax Insights
+                              </CardTitle>
+                              <CardDescription className="text-gray-400">
+                                Ranked by priority and potential annual savings
+                              </CardDescription>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-gray-400">
+                              {recommendationsTimestamp && (
+                                <span>Updated {recommendationsTimestamp}</span>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 border border-green-400/40 bg-green-500/10 text-green-200 hover:bg-green-500/20"
+                                onClick={() => generateRecommendationsMutation.mutate()}
+                                disabled={generateRecommendationsMutation.isPending}
+                                title="Refresh tax insights"
+                              >
+                                {generateRecommendationsMutation.isPending ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-4 w-4" />
+                                )}
+                                <span className="sr-only">Refresh tax insights</span>
+                              </Button>
+                            </div>
+                          </div>
                         </CardHeader>
                         <CardContent>
                           <div className="space-y-4">
                             {taxRecommendations.recommendations
-                              .sort((a, b) => (b.urgency || 0) - (a.urgency || 0))
+                              .slice()
+                              .sort((a, b) => {
+                                const priorityDiff = (a.priority ?? 1e9) - (b.priority ?? 1e9);
+                                if (priorityDiff !== 0) return priorityDiff;
+                                const urgencyDiff = (b.urgency || 0) - (a.urgency || 0);
+                                if (urgencyDiff !== 0) return urgencyDiff;
+                                const savingsA = a.estimatedAnnualSavings ?? a.estimatedSavings ?? 0;
+                                const savingsB = b.estimatedAnnualSavings ?? b.estimatedSavings ?? 0;
+                                return savingsB - savingsA;
+                              })
                               .slice(0, 5)
                               .map((recommendation, index) => (
                               <Card key={index} className="border-l-4 border-l-green-400 bg-gray-700/30 border-gray-600">
@@ -1248,13 +1294,6 @@ function TaxReductionCenterContent() {
                                       </div>
                                     )}
                                     
-                                    {recommendation.deadline && (
-                                      <div className="flex items-center gap-2 text-sm text-orange-400">
-                                        <AlertCircle className="h-4 w-4" />
-                                        <span><strong>Deadline:</strong> {recommendation.deadline}</span>
-                                      </div>
-                                    )}
-                                    
                                     {recommendation.risks && (
                                       <Alert className="bg-yellow-500/10 border-yellow-500/20 mt-3">
                                         <AlertCircle className="h-4 w-4 text-yellow-400" />
@@ -1281,6 +1320,20 @@ function TaxReductionCenterContent() {
                           Always verify current tax laws and regulations with official IRS publications or professional advisors before making any financial decisions.
                         </AlertDescription>
                       </Alert>
+
+                      <div className="flex justify-end">
+                        <Button
+                          variant="outline"
+                          className="border-gray-600 text-gray-200 hover:bg-gray-700"
+                          onClick={() => {
+                            setShowRecommendations(false);
+                            setActiveTab("upload");
+                          }}
+                        >
+                          <FileUp className="mr-2 h-4 w-4" />
+                          Upload New Tax Return
+                        </Button>
+                      </div>
 
                       {/* Roth Conversion Tile */}
                       <RothConversionTile />
