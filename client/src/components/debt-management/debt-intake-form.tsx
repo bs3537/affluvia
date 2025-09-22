@@ -178,7 +178,7 @@ export function DebtIntakeForm({ debts, onDebtAdded, readOnly = false }: DebtInt
               <div className="text-sm text-gray-300">
                 <p className="font-medium mb-1">These debts are synced from your intake form</p>
                 <p className="text-gray-400">
-                  To update your debts, please modify them in the intake form and click "Sync from Intake" to refresh.
+                  To update your debts, please modify them in the intake form and click the "Refresh" icon to refresh.
                 </p>
               </div>
             </div>

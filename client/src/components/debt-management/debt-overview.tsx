@@ -384,7 +384,7 @@ export function DebtOverview({ debts, summary, activePlan, onRefresh, lastUpdate
       <div className="space-y-4">
         <h3 className="text-lg font-semibold text-white">Active Debts</h3>
         <p className="text-gray-400">
-          These debts are synced from your intake form. To update your debts, please modify them in the intake form and click "Sync from Intake" to refresh.
+          These debts are synced from your intake form. To update your debts, please modify them in the intake form and click the "Refresh" icon to refresh.
         </p>
         {activeDebts.length === 0 ? (
           <Card className="bg-gray-900 border-gray-700">
