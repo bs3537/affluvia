@@ -1324,7 +1324,7 @@ function TaxReductionCenterContent() {
                       <div className="flex justify-end">
                         <Button
                           variant="outline"
-                          className="border-gray-600 text-gray-200 hover:bg-gray-700"
+                          className="border-green-400/40 text-green-200 hover:bg-green-500/15"
                           onClick={() => {
                             setShowRecommendations(false);
                             setActiveTab("upload");
