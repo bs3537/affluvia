@@ -28,7 +28,6 @@ import {
   Briefcase,
   CheckCircle2,
   DollarSign,
-  Download,
   FileText,
   Clock,
   Lightbulb,
@@ -251,6 +250,21 @@ export function EstatePlanningNewCenter() {
     }
   }, [insights?.generatedAt]);
 
+  const estateDataTimestamp = useMemo(() => {
+    const updatedAt = (estatePlan as any)?.analysisResults?.estateNew?.updatedAt;
+    const fallback = insights?.generatedAt;
+    const source = updatedAt || fallback;
+    if (!source) return null;
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(source));
+    } catch {
+      return source;
+    }
+  }, [(estatePlan as any)?.analysisResults?.estateNew?.updatedAt, insights?.generatedAt]);
+
   // Initialize toggle from persisted estate plan preferences if available (respond to analysisResults changes as well)
   useEffect(() => {
     const persisted = (estatePlan as any)?.analysisResults?.estateNew?.includeRoth;
@@ -441,6 +455,7 @@ export function EstatePlanningNewCenter() {
       hasRequestedInsightsRef.current = false;
       setInsights(data);
       queryClient.invalidateQueries({ queryKey: ["estate-plan"] });
+      refetchAll();
       if (lastInsightsTriggerRef.current === "manual") {
         toast({ title: "Estate insights updated" });
       }
@@ -974,7 +989,7 @@ export function EstatePlanningNewCenter() {
                   <div className="flex items-center gap-3">
                     <BookOpen className="h-8 w-8 text-primary" />
                     <div className="flex flex-col">
-                      <CardTitle className="text-3xl text-white">Estate Planning New</CardTitle>
+                      <CardTitle className="text-3xl text-white">Estate Planning</CardTitle>
                       {includeRoth && (
                         <div className="text-xs uppercase tracking-wide text-purple-300 mt-1">Tax Bracket Filling Strategy (Roth conversions through age 72)</div>
                       )}
@@ -1009,23 +1024,22 @@ export function EstatePlanningNewCenter() {
                 }}
               />
             </div>
-            <Button
-              size="sm"
-              onClick={refetchAll}
-              className="bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-600/20"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Refresh Insights
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-purple-500/40 text-purple-200 hover:bg-purple-500/10"
-              onClick={() => window.print()}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Export Summary
-            </Button>
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                size="sm"
+                onClick={() => {
+                  refetchAll();
+                  requestInsights("manual");
+                }}
+                className="bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-600/20"
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Refresh Insights
+              </Button>
+              {estateDataTimestamp && (
+                <span className="text-[11px] text-gray-400">Updated {estateDataTimestamp}</span>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
