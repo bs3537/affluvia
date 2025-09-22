@@ -483,12 +483,37 @@ SIMULATION RESULTS:
     });
   }
 
-  // Education goals
+  // Education goals (include real cost, funding sources, probabilities)
   if (educationGoals && educationGoals.length > 0) {
     contextPrompt += `\n\n=== EDUCATION PLANNING ===`;
     educationGoals.forEach((goal: any) => {
-      contextPrompt += `\n- ${goal.studentName}: ${goal.schoolType} starting ${goal.startYear}, Cost $${goal.totalCost?.toLocaleString() || 0}`;
-      if (goal.currentSavings) contextPrompt += ` (Current savings: $${goal.currentSavings.toLocaleString()})`;
+      const years = Number(goal.years || (goal.endYear && goal.startYear ? (goal.endYear - goal.startYear + 1) : 4));
+      const cpy = Number(goal.costPerYear || 0);
+      const infl = Number(goal.inflationRate || 0) / 100;
+      // Approximate inflated total cost over years (geometric series)
+      const totalCostEst = cpy > 0 ? Math.round(cpy * (infl === 0 ? years : (Math.pow(1 + infl, years) - 1) / infl)) : 0;
+      const projectionTotal = Number(goal.projectionData?.totalProjectedCost || 0);
+      const totalCost = projectionTotal > 0 ? Math.round(projectionTotal) : totalCostEst;
+      const currentSavings = Number(goal.currentSavings || 0);
+      const monthlyContribution = Number(goal.monthlyContribution || 0);
+      const fundingPct = Number(goal.fundingPercentage || 0);
+      const probSuccess = Number(goal.probabilityOfSuccess || 0);
+      const shortfall = totalCost > 0 ? Math.max(0, totalCost - currentSavings) : null;
+
+      contextPrompt += `\n- ${goal.studentName || 'Student'}: ${goal.schoolType || goal.goalType || 'college'} starting ${goal.startYear || 'TBD'}`;
+      contextPrompt += `\n  • Years: ${years}, Est. Total Cost: $${(totalCost || 0).toLocaleString()} ${cpy ? `(~$${cpy.toLocaleString()}/yr, infl ${((infl||0)*100).toFixed(1)}%)` : ''}`;
+      contextPrompt += `\n  • Current savings: $${currentSavings.toLocaleString()}  • Monthly contr.: $${monthlyContribution.toLocaleString()}`;
+      if (shortfall !== null) contextPrompt += `  • Shortfall: $${shortfall.toLocaleString()}`;
+      if (fundingPct) contextPrompt += `  • Funding %: ${fundingPct}%`;
+      if (probSuccess) contextPrompt += `  • Success Prob.: ${probSuccess}%`;
+      // Funding sources detail
+      try {
+        const sources = Array.isArray(goal.fundingSources) ? goal.fundingSources : [];
+        if (sources.length > 0) {
+          const srcTxt = sources.slice(0, 5).map((s: any) => `${s.type || s.name || 'source'}: $${Number(s.amount||0).toLocaleString()}`).join('; ');
+          contextPrompt += `\n  • Funding sources: ${srcTxt}`;
+        }
+      } catch {}
     });
   }
 
