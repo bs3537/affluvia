@@ -566,19 +566,21 @@ export function setupDebtManagementRoutes(app: Express) {
       }
 
       // Convert debts to DebtInfo format for calculation
-      const debtInfos: DebtInfo[] = userDebts.map(debt => ({
+      const debtInfos: DebtInfo[] = userDebts.map((debt: any) => ({
         id: debt.id,
-        name: debt.debtName,
-        balance: parseFloat(debt.currentBalance),
-        interestRate: parseFloat(debt.annualInterestRate),
-        minimumPayment: parseFloat(debt.minimumPayment),
+        debtName: debt.debtName,
+        currentBalance: Number(debt.currentBalance),
+        annualInterestRate: Number(debt.annualInterestRate),
+        minimumPayment: Number(debt.minimumPayment),
       }));
 
-      const calculationService = new DebtCalculationService();
-      const payoffPlan = calculationService.calculatePayoffPlan(
-        debtInfos,
-        strategy,
-        extraPayment || 0
+      const extra = Number(extraPayment || 0);
+      const baseMin = debtInfos.reduce((s, d) => s + d.minimumPayment, 0);
+      const totalMonthlyPayment = baseMin + extra;
+      const payoffPlan = DebtCalculationService.calculatePayoffPlan(
+        debtInfos as any,
+        totalMonthlyPayment,
+        (strategy as any) || 'avalanche'
       );
 
       // Store the payoff plan
@@ -586,12 +588,15 @@ export function setupDebtManagementRoutes(app: Express) {
         .insert(debtPayoffPlans)
         .values({
           userId: req.user.id,
-          planName: `${strategy} Strategy`,
-          strategy,
-          extraMonthlyPayment: extraPayment || 0,
-          projectedPayoffDate: payoffPlan.payoffDate,
-          totalInterestSaved: payoffPlan.interestSaved.toString(),
-          monthsSaved: payoffPlan.monthsSaved,
+          planName: `${(strategy as any) || 'avalanche'} Strategy`,
+          strategy: (strategy as any) || 'avalanche',
+          extraMonthlyPayment: extra,
+          startDate: new Date(),
+          payoffDate: (payoffPlan as any).debtFreeDate,
+          totalInterestPaid: (payoffPlan as any).totalInterestPaid?.toString?.() || '0',
+          totalAmountPaid: (payoffPlan as any).totalAmountPaid?.toString?.() || '0',
+          monthsToPayoff: (payoffPlan as any).totalMonths || 0,
+          interestSaved: (payoffPlan as any).savingsVsMinimum?.toString?.() || '0',
           isActive: true,
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -610,18 +615,25 @@ export function setupDebtManagementRoutes(app: Express) {
         return res.status(401).json({ error: "Not authenticated" });
       }
 
-      const [activePlan] = await db
-        .select()
-        .from(debtPayoffPlans)
-        .where(
-          and(
-            eq(debtPayoffPlans.userId, req.user.id),
-            eq(debtPayoffPlans.isActive, true)
+      try {
+        const [activePlan] = await db
+          .select()
+          .from(debtPayoffPlans)
+          .where(
+            and(
+              eq(debtPayoffPlans.userId, req.user.id),
+              eq(debtPayoffPlans.isActive, true)
+            )
           )
-        )
-        .limit(1);
-
-      res.json(activePlan || null);
+          .limit(1);
+        return res.json(activePlan || null);
+      } catch (e: any) {
+        if (e?.code === '42703') {
+          // Missing columns in this environment, return null rather than 500
+          return res.json(null);
+        }
+        throw e;
+      }
     } catch (error) {
       next(error);
     }
