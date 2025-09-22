@@ -5691,7 +5691,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .reduce((s, a) => s + (Number(a.value) || 0), 0);
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+    const model = genAI.getGenerativeModel({
+      model: process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
+      systemInstruction:
+        "Think Hard. You are a CFP generating comprehensive, cross-domain financial insights. Use only the provided database-backed context. Return strict JSON as instructed."
+    } as any);
 
     const prompt = `${contextPrompt}
 
