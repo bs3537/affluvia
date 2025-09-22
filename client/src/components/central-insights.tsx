@@ -126,7 +126,7 @@ export function CentralInsights() {
               </Button>
             </div>
           </CardTitle>
-          <CardDescription className="text-purple-200/80">Your top personalized recommendations across all planning areas</CardDescription>
+          <CardDescription className="text-purple-200/80">Your top AI-powered insights across all planning areas</CardDescription>
         </CardHeader>
       </Card>
 
