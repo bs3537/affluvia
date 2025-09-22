@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -30,6 +30,7 @@ export function CentralInsights() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
 
   const { data, isLoading, isError, error, refetch } = useQuery<CentralInsightsResponse>({
     queryKey: ['centralInsights', user?.id],
@@ -61,6 +62,21 @@ export function CentralInsights() {
     generateMutation.mutate(undefined, { onSettled: () => setIsRefreshing(false) });
   };
 
+  // Seconds timer during any loading/generation state
+  const isBusy = isLoading || isRefreshing || generateMutation.isPending;
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    if (isBusy) {
+      setElapsedSec(0);
+      timer = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    } else {
+      setElapsedSec(0);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [isBusy]);
+
   const insights = data?.insights || [];
   const lastUpdated = data?.lastUpdated ? new Date(data.lastUpdated) : null;
 
@@ -70,7 +86,7 @@ export function CentralInsights() {
         <CardContent className="py-16">
           <div className="text-center">
             <Loader2 className="h-10 w-10 animate-spin mx-auto text-purple-300" />
-            <p className="mt-4 text-gray-300">Collecting your personalized insights…</p>
+            <p className="mt-4 text-gray-300">Collecting your personalized insights… {elapsedSec}s</p>
           </div>
         </CardContent>
       </Card>
@@ -101,6 +117,9 @@ export function CentralInsights() {
               {lastUpdated && (
                 <span className="text-xs text-purple-200/70">Updated {lastUpdated.toLocaleString()}</span>
               )}
+              {(isRefreshing || generateMutation.isPending) && (
+                <span className="text-xs text-purple-200/70">Generating… {elapsedSec}s</span>
+              )}
               <Button size="sm" onClick={onRefresh} disabled={isRefreshing || generateMutation.isPending} className="bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border border-purple-700/50">
                 {isRefreshing || generateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                 <span className="ml-2">Refresh</span>
@@ -118,10 +137,15 @@ export function CentralInsights() {
             <Brain className="w-10 h-10 text-gray-400 mx-auto mb-3" />
             <p className="text-gray-300 mb-2">No insights yet</p>
             <p className="text-gray-500 mb-4">Generate a unified set of recommendations based on your full profile.</p>
-            <Button onClick={onRefresh} disabled={isRefreshing || generateMutation.isPending} className="bg-[#8A00C4] hover:bg-[#7000A4] text-white">
-              {isRefreshing || generateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              <span className="ml-2">Generate Insights</span>
-            </Button>
+            <div className="flex items-center justify-center gap-3">
+              {(isRefreshing || generateMutation.isPending) && (
+                <span className="text-sm text-purple-200/80">Generating… {elapsedSec}s</span>
+              )}
+              <Button onClick={onRefresh} disabled={isRefreshing || generateMutation.isPending} className="bg-[#8A00C4] hover:bg-[#7000A4] text-white">
+                {isRefreshing || generateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                <span className="ml-2">Generate Insights</span>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
