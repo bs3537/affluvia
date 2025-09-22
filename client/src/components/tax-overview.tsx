@@ -82,6 +82,8 @@ export function TaxOverview() {
     );
   }
 
+  const uiCurrentYear = new Date().getFullYear();
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -133,7 +135,7 @@ export function TaxOverview() {
             <div className="text-xl font-bold text-white">
               {formatCurrency(taxOverview.projectedTotalTax)}
             </div>
-            <p className="text-xs text-gray-400 mt-1">{taxOverview.currentTaxYear} estimate</p>
+            <p className="text-xs text-gray-400 mt-1">{uiCurrentYear} estimate</p>
           </CardContent>
         </Card>
       </div>
