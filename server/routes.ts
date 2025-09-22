@@ -14160,15 +14160,16 @@ ${profile.taxReturns ? '- Tax return data available for enhanced analysis' : '- 
 `;
 
     const prompt = `
-You are a certified tax strategist and financial planner. Based on the comprehensive financial profile above, generate HYPERPERSONALIZED tax reduction recommendations.
+Think hard. You are a certified tax strategist and financial planner. Based on the comprehensive financial profile above, generate HYPERPERSONALIZED tax reduction recommendations.
 
 CRITICAL REQUIREMENTS:
-1. Generate 8-12 specific, actionable tax strategies ranked by URGENCY (1 = implement immediately, 5 = long-term planning)
-2. Calculate PRECISE dollar amounts for tax savings for each recommendation
-3. Consider the user's specific state, income level, age, marital status, and retirement timeline
-4. Factor in 2024 tax law changes and opportunities
-5. Provide specific action items for each recommendation
-6. Consider both current year and multi-year tax optimization
+1. Generate at least 8 specific, actionable tax strategies ranked by PRIORITY (1 = highest). Include an URGENCY score (1-10) as a secondary ranking.
+2. Calculate PRECISE dollar amounts for tax savings for each recommendation.
+3. Consider the user's specific state, income level, age, marital status, and retirement timeline.
+4. Factor in the latest tax law changes and opportunities.
+5. Provide specific action items for each recommendation.
+6. Consider both current-year and multi-year optimization.
+7. Do NOT include any deadlines or due dates in the output.
 
 FOCUS AREAS TO ANALYZE (using ALL available data):
 - Retirement account optimization (traditional vs Roth conversions) - use retirement center data
@@ -14191,7 +14192,8 @@ Return ONLY a valid JSON object with this exact structure:
     {
       "title": "Strategy title",
       "description": "Detailed explanation of the strategy",
-      "urgency": 1-5,
+      "priority": number,
+      "urgency": 1-10,
       "estimatedAnnualSavings": dollar_amount,
       "implementationTimeframe": "immediate/3-6 months/annual/multi-year",
       "actionItems": [
@@ -14200,8 +14202,7 @@ Return ONLY a valid JSON object with this exact structure:
         "Specific step 3"
       ],
       "requirements": ["What's needed to implement"],
-      "risks": "Potential risks or considerations",
-      "deadline": "Tax deadline or timing consideration"
+      "risks": "Potential risks or considerations"
     }
   ],
   "totalEstimatedSavings": total_dollar_amount,
@@ -14220,16 +14221,68 @@ Ensure recommendations are:
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
-    
+
     // Extract JSON from the response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsedResult = JSON.parse(jsonMatch[0]);
-      console.log("Generated tax recommendations:", parsedResult);
-      return parsedResult;
-    } else {
+    if (!jsonMatch) {
       throw new Error("Could not parse AI response");
     }
+
+    const parsedResult: any = JSON.parse(jsonMatch[0]);
+    let recs: any[] = Array.isArray(parsedResult.recommendations) ? parsedResult.recommendations : [];
+
+    // Ensure at least 5 distinct recommendations; expand with a second call if needed
+    if (recs.length < 5) {
+      try {
+        const expandPrompt = `You previously produced ${recs.length} tax strategies. Add ${Math.max(0, 5 - recs.length)} ADDITIONAL, DISTINCT strategies for this same user.\n- Maintain the same schema fields used before (title, description, priority, urgency, estimatedAnnualSavings, implementationTimeframe, actionItems, requirements, risks).\n- Do NOT include any deadline fields.\n- Do NOT repeat existing titles.\nReturn ONLY a JSON array with the NEW additional recommendations (no wrapping object). Existing recommendations:\n${JSON.stringify(recs).slice(0, 6000)}`;
+        const expandRes = await model.generateContent([{ text: expandPrompt }]);
+        const expandText = (await expandRes.response).text();
+        const arrMatch = expandText.match(/\[[\s\S]*\]/);
+        if (arrMatch) {
+          const additional = JSON.parse(arrMatch[0]);
+          if (Array.isArray(additional)) {
+            const seen = new Set(recs.map(r => String(r?.title || "").toLowerCase()));
+            for (const r of additional) {
+              const t = String(r?.title || "").toLowerCase();
+              if (t && !seen.has(t)) {
+                const { deadline, ...clean } = r || {};
+                recs.push(clean);
+                seen.add(t);
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // Final normalization: unique by title, add priority fallback, remove deadlines, sort
+    const uniqueByTitle = new Map<string, any>();
+    for (const r of recs) {
+      const key = String(r?.title || "").toLowerCase();
+      if (key && !uniqueByTitle.has(key)) {
+        const { deadline, ...clean } = r || {};
+        uniqueByTitle.set(key, clean);
+      }
+    }
+    recs = Array.from(uniqueByTitle.values()).map((r: any, i: number) => ({
+      ...r,
+      priority: typeof r?.priority === "number" ? r.priority : i + 1,
+    }));
+
+    recs.sort((a: any, b: any) => {
+      const p = (a.priority ?? 1e9) - (b.priority ?? 1e9);
+      if (p !== 0) return p;
+      const u = (b.urgency || 0) - (a.urgency || 0);
+      if (u !== 0) return u;
+      const sA = a.estimatedAnnualSavings ?? a.estimatedSavings ?? 0;
+      const sB = b.estimatedAnnualSavings ?? b.estimatedSavings ?? 0;
+      return sB - sA;
+    });
+
+    parsedResult.recommendations = recs;
+    parsedResult.lastUpdated = new Date().toISOString();
+    console.log("Generated tax recommendations (normalized):", { count: recs.length });
+    return parsedResult;
 
   } catch (error) {
     console.error("Error generating tax recommendations:", error);
@@ -14240,7 +14293,8 @@ Ensure recommendations are:
         {
           title: "Maximize Retirement Contributions",
           description: "Increase your 401(k) and IRA contributions to reduce taxable income",
-          urgency: 2,
+          priority: 1,
+          urgency: 8,
           estimatedAnnualSavings: 5000,
           implementationTimeframe: "immediate",
           actionItems: [
@@ -14249,13 +14303,13 @@ Ensure recommendations are:
             "Consider catch-up contributions if over 50"
           ],
           requirements: ["Access to payroll system", "Available income for increased contributions"],
-          risks: "Reduced current cash flow",
-          deadline: "December 31, 2024"
+          risks: "Reduced current cash flow"
         },
         {
           title: "Tax-Loss Harvesting",
           description: "Realize capital losses to offset gains and reduce tax liability",
-          urgency: 3,
+          priority: 2,
+          urgency: 7,
           estimatedAnnualSavings: 2000,
           implementationTimeframe: "quarterly",
           actionItems: [
@@ -14264,11 +14318,55 @@ Ensure recommendations are:
             "Reinvest in similar but not identical securities"
           ],
           requirements: ["Taxable investment accounts with losses"],
-          risks: "Wash sale rules, market timing risk",
-          deadline: "December 31, 2024"
+          risks: "Wash sale rules, market timing risk"
+        },
+        {
+          title: "HSA Maximization",
+          description: "Max out HSA contributions for triple tax benefits",
+          priority: 3,
+          urgency: 6,
+          estimatedAnnualSavings: 1200,
+          implementationTimeframe: "annual",
+          actionItems: [
+            "Verify HSA eligibility (HDHP)",
+            "Increase payroll HSA contributions",
+            "Invest HSA balance if allowed"
+          ],
+          requirements: ["HSA-eligible plan"],
+          risks: "Liquidity tradeoff for medical expenses"
+        },
+        {
+          title: "Charitable Bunching with DAF",
+          description: "Bunch donations to exceed standard deduction using a DAF",
+          priority: 4,
+          urgency: 5,
+          estimatedAnnualSavings: 800,
+          implementationTimeframe: "annual",
+          actionItems: [
+            "Estimate multi‑year giving",
+            "Open/seed a donor-advised fund",
+            "Contribute appreciated securities"
+          ],
+          requirements: ["Taxable assets"],
+          risks: "Itemization varies by year"
+        },
+        {
+          title: "Optimize Withholding / Safe Harbor",
+          description: "Adjust withholding to meet safe harbor and avoid penalties",
+          priority: 5,
+          urgency: 4,
+          estimatedAnnualSavings: 600,
+          implementationTimeframe: "immediate",
+          actionItems: [
+            "Update W‑4 elections",
+            "Set quarterly estimates if needed",
+            "Monitor against prior‑year safe harbor"
+          ],
+          requirements: ["Payroll/withholding access"],
+          risks: "Cash flow impact if reduced too much"
         }
       ],
-      totalEstimatedSavings: 7000,
+      totalEstimatedSavings: 9600,
       priority: "quarterly",
       lastUpdated: new Date().toISOString()
     };
