@@ -5706,6 +5706,7 @@ Requirements:
 - Return exactly 10 insights ranked by priority (1 = highest urgency/impact).
 - Each insight must include: id, priority (1–3), title, explanation, actionItems (3–5 concrete next steps), estimatedImpact (positive $ savings/benefit), and category.
 - Never invent or assume values that are not present in the provided context. If a data point is missing (e.g., health insurance monthly premium or deductible), state that it is unknown and recommend gathering it; do NOT claim "$0 premium" or "zero deductible" unless explicitly present in the context.
+ - If the context includes a user's Retirement Optimization plan (optimizationVariables/optimizationResults), include at least one high-priority insight that recommends adhering to that plan and summarize the key variables adjusted and the optimized confidence score (use dashboard Monte Carlo success probability).
 - Show conservative dollar impact (never 0) using the client's own data; if exact math is unavailable, estimate conservatively.
 - Avoid generic advice; make it specific to the user's numbers and state.
 
@@ -5781,6 +5782,26 @@ Return ONLY valid JSON:
           category: i.category || 'Other'
         };
       });
+      // Ensure a retirement optimization adherence insight if optimization exists but model missed it
+      const hasRetOpt = !!(userData?.retirementOptimization && (userData.retirementOptimization.optimizationVariables || userData.retirementOptimization.optimizationResults));
+      if (hasRetOpt && !parsed.insights.some((i: any) => /retirement/i.test(`${i.title} ${i.explanation}`))) {
+        const results = (userData as any).retirementOptimization?.optimizationResults || {};
+        const vars = (userData as any).retirementOptimization?.optimizationVariables || {};
+        parsed.insights.unshift({
+          id: 'ret-opt-adherence',
+          priority: 1,
+          title: 'Follow Your Optimized Retirement Plan',
+          explanation: `Adopt the saved retirement optimization settings${results.optimizedScore ? ` (optimized score: ${results.optimizedScore}% )` : ''}${vars.retirementAge ? `, target retirement age ${vars.retirementAge}` : ''}${vars.monthlyContributions ? `, +$${Number(vars.monthlyContributions).toLocaleString()} contributions` : ''}. This plan was tailored to improve your Monte Carlo success probability.`,
+          actionItems: [
+            'Open Retirement Planning and review your Optimization summary',
+            'Confirm contribution increases and timeline changes in your plan',
+            'Update budget and auto-contributions to match the plan',
+            'Re-run the Monte Carlo to validate the optimized success probability'
+          ],
+          estimatedImpact: 1000,
+          category: 'Retirement'
+        });
+      }
       // Enforce exactly 10 items (model may return more)
       parsed.insights = parsed.insights.slice(0, 10);
     } else {

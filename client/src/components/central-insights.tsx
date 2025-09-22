@@ -152,6 +152,7 @@ export function CentralInsights() {
 
       {/* Insights list */}
       {insights.length > 0 && (
+        <>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {insights.map((i) => (
             <Card key={i.id} className="bg-gray-800 border-gray-700">
@@ -190,6 +191,14 @@ export function CentralInsights() {
             </Card>
           ))}
         </div>
+        {/* Legal disclaimer */}
+        <div className="mt-6 text-xs text-gray-400">
+          <p>
+            Disclaimer: The insights provided are for educational purposes only and do not constitute financial, legal, or tax advice. Consult a qualified professional before making decisions.
+          </p>
+          <p className="mt-1">Note: AI can make mistakes. Please review all numbers and assumptions.</p>
+        </div>
+        </>
       )}
     </div>
   );
