@@ -321,7 +321,13 @@ export function setupDebtManagementRoutes(app: Express) {
         );
 
       res.json(userDebts);
-    } catch (error) {
+    } catch (error: any) {
+      // If the database is missing a column (e.g., debts.notes), avoid 500s and return an empty list
+      // while we guide the environment to run the DB patch.
+      if (error?.code === '42703') {
+        console.warn('[Debt API] Missing column detected while SELECTing debts. Returning empty list until DB patch applied.');
+        return res.json([]);
+      }
       next(error);
     }
   });
@@ -723,6 +729,65 @@ export function setupDebtManagementRoutes(app: Express) {
       res.json({ success: true });
     } catch (error) {
       next(error);
+    }
+  });
+
+  // Generate AI-powered debt insights (Gemini) with full DB context
+  app.get("/api/ai-debt-insights", async (req, res, next) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      // Load most-recent active insights from DB
+      const rows = await db
+        .select()
+        .from(debtAIInsights)
+        .where(eq(debtAIInsights.userId, req.user.id));
+
+      if (!rows || rows.length === 0) {
+        return res.json({ insights: [], generatedAt: null });
+      }
+
+      const latest = rows.reduce((max: any, r: any) => {
+        const t = (r as any).createdAt ? new Date((r as any).createdAt as any).getTime() : 0;
+        return t > max ? t : max;
+      }, 0);
+
+      // Map DB rows to UI payload and sort by priority desc (3=high)
+      const insights = rows
+        .sort((a: any, b: any) => (b.priority || 0) - (a.priority || 0))
+        .map((r: any) => ({
+          id: String(r.id),
+          type: r.insightType === 'warning' ? 'warning' : (r.insightType?.includes('optimization') ? 'opportunity' : 'recommendation'),
+          title: r.insightTitle,
+          content: r.insightContent,
+          priority: (r.priority || 0) >= 3 ? 'high' : (r.priority || 0) === 2 ? 'medium' : 'low',
+          actionable: !!r.isActionable,
+          potentialSavings: undefined,
+          relatedDebtId: r.relatedDebtId || undefined,
+        }));
+
+      return res.json({ insights, generatedAt: latest ? new Date(latest).toISOString() : null });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/ai-debt-insights", async (req, res, next) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      // Use DB as source of truth; ignore client-passed debts/summary/plan
+      const { generateDebtInsightsForUser } = await import('../debt-gemini-insights');
+      const { insights } = await generateDebtInsightsForUser(req.user.id);
+      // Return UI-friendly payload with timestamp
+      return res.json({ insights, generatedAt: new Date().toISOString() });
+    } catch (error: any) {
+      console.error('[Debt AI Insights] Error:', error?.message || error);
+      // Non-fatal: return empty list so UI can fall back
+      return res.status(500).json({ insights: [], error: 'Failed to generate insights' });
     }
   });
 }

@@ -35,7 +35,9 @@ async function validateDatabaseSchema() {
       'section_progress',
       'debts',
       'debt_payoff_plans',
-      'plaid_sync_recovery'
+      'plaid_sync_recovery',
+      // Debt management scenario storage
+      'debt_scenarios'
     ];
 
     // CRITICAL COLUMNS TO CHECK
@@ -71,6 +73,13 @@ async function validateDatabaseSchema() {
         { name: 'banking_assets', type: 'jsonb' },
         { name: 'investment_assets', type: 'jsonb' },
         { name: 'retirement_assets', type: 'jsonb' }
+      ],
+      debt_scenarios: [
+        { name: 'scenario_name', type: 'text' },
+        { name: 'scenario_type', type: 'text' },
+        { name: 'parameters', type: 'jsonb' },
+        { name: 'results', type: 'jsonb' },
+        { name: 'created_at', type: 'timestamp' },
       ],
       section_progress: [
         { name: 'section_name', type: 'character varying', nullable: true }

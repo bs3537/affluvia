@@ -67,12 +67,27 @@ interface AIInsightsProps {
 export function AIInsights({ debts, summary, activePlan }: AIInsightsProps) {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [lastGeneratedAt, setLastGeneratedAt] = useState<string | null>(null);
 
-  // Generate initial insights when component mounts
+  // Load saved insights on mount and when debts change
   useEffect(() => {
-    if (debts.length > 0) {
-      generateInsights();
+    if (debts.length === 0) {
+      setInsights([]);
+      setLastGeneratedAt(null);
+      return;
     }
+    (async () => {
+      try {
+        const resp = await fetch('/api/ai-debt-insights');
+        if (resp.ok) {
+          const data = await resp.json();
+          setInsights(Array.isArray(data.insights) ? data.insights : []);
+          setLastGeneratedAt(data.generatedAt || null);
+        }
+      } catch {
+        // ignore, UI will allow manual refresh
+      }
+    })();
   }, [debts]);
 
   // Generate AI insights mutation
@@ -92,6 +107,7 @@ export function AIInsights({ debts, summary, activePlan }: AIInsightsProps) {
     },
     onSuccess: (data) => {
       setInsights(data.insights || getMockInsights());
+      if (data.generatedAt) setLastGeneratedAt(data.generatedAt);
     },
     onError: () => {
       // Use mock insights as fallback
@@ -228,24 +244,29 @@ export function AIInsights({ debts, summary, activePlan }: AIInsightsProps) {
           <CardTitle className="text-white flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Brain className="w-6 h-6 text-purple-300" />
-              AI-Powered Insights
+              Insights
             </div>
-            <Button
-              size="sm"
-              onClick={generateInsights}
-              disabled={isGenerating}
-              className="bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border border-purple-700/50"
-            >
-              {isGenerating ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <RefreshCw className="w-4 h-4" />
+            <div className="flex items-center gap-3">
+              {lastGeneratedAt && (
+                <span className="text-xs text-purple-200/80">Updated {new Date(lastGeneratedAt).toLocaleString()}</span>
               )}
-              <span className="ml-2">Refresh</span>
-            </Button>
+              <Button
+                size="sm"
+                onClick={generateInsights}
+                disabled={isGenerating}
+                title="Refresh insights"
+                className="bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border border-purple-700/50 p-2"
+              >
+                {isGenerating ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4" />
+                )}
+              </Button>
+            </div>
           </CardTitle>
           <CardDescription className="text-purple-200/80">
-            Personalized recommendations powered by Gemini AI
+            Personalized AI-powered insights
           </CardDescription>
         </CardHeader>
       </Card>
@@ -279,12 +300,7 @@ export function AIInsights({ debts, summary, activePlan }: AIInsightsProps) {
                       </div>
                     )}
                     
-                    {insight.actionable && (
-                      <Button size="sm" className="bg-primary hover:bg-primary/90">
-                        Take Action
-                        <ChevronRight className="w-4 h-4 ml-1" />
-                      </Button>
-                    )}
+                    {/* Action button removed per design change */}
                   </div>
                 </div>
               </CardContent>
