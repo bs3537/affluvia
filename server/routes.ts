@@ -13161,7 +13161,7 @@ async function analyzeTaxReturnWithGemini(
     // Convert PDF buffer to base64 for Gemini
     const pdfBase64 = pdfBuffer.toString('base64');
 
-    const prompt = `You are a certified tax professional analyzing a tax return to provide personalized tax reduction strategies.
+    const prompt = `Think hard. You are a certified tax professional analyzing a tax return to provide personalized tax reduction strategies.
 
 CRITICAL INSTRUCTION: DO NOT extract or return any personal identifying information from the PDF (names, SSNs, addresses, etc.). Only extract numerical data and tax categories.
 
