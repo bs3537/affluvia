@@ -2006,12 +2006,6 @@ export function EstatePlanningNewCenter() {
                     </div>
                   )}
 
-                  {insights?.model && (
-                    <div className="border border-gray-800 bg-gray-950/40 px-3 py-2 text-xs text-gray-500">
-                      Generated with {insights.model} and your latest Affluvia estate planning data snapshot.
-                    </div>
-                  )}
-
                   <div className="border-t border-gray-800 pt-4">
                     <p className="text-xs text-gray-500 leading-relaxed">
                       These AI-generated insights are for educational purposes only and do not constitute legal, tax, or investment advice.
