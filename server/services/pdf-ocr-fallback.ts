@@ -1,6 +1,16 @@
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { execFile } from "node:child_process";
+
+function execFileAsync(cmd: string, args: string[], cwd?: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { cwd }, (error) => {
+      if (error) return reject(error);
+      resolve();
+    });
+  });
+}
 
 export async function ocrPdfToText(buffer: Buffer): Promise<string> {
   try {
@@ -12,21 +22,22 @@ export async function ocrPdfToText(buffer: Buffer): Promise<string> {
     let images: string[] = [];
     try {
       const poppler: any = await import("pdf-poppler");
-      // Convert to PNG pages at 300 DPI
       const outputPrefix = path.join(tmpDir, "page");
-      await poppler.convert(pdfPath, {
-        format: "png",
-        out_dir: tmpDir,
-        out_prefix: "page",
-        page: null,
-        dpi: 300,
-      });
-      // Collect generated images (page-1.png, etc.)
+      await poppler.convert(pdfPath, { format: "png", out_dir: tmpDir, out_prefix: "page", page: null, dpi: 300 });
       const files = await fs.readdir(tmpDir);
       images = files.filter((f) => f.startsWith("page-") && f.endsWith(".png")).map((f) => path.join(tmpDir, f));
-    } catch (e) {
-      console.warn("[OCR] pdf-poppler not available or poppler-utils missing:", (e as any)?.message || e);
-      return "";
+    } catch (e: any) {
+      const msg = (e?.message || e) as string;
+      console.warn("[OCR] pdf-poppler failed, trying system pdftoppm:", msg);
+      try {
+        // System fallback: pdftoppm -png -r 300 input.pdf page
+        await execFileAsync("pdftoppm", ["-png", "-r", "300", pdfPath, "page"], tmpDir);
+        const files = await fs.readdir(tmpDir);
+        images = files.filter((f) => f.startsWith("page-") && f.endsWith(".png")).map((f) => path.join(tmpDir, f));
+      } catch (e2) {
+        console.warn("[OCR] System pdftoppm unavailable:", (e2 as any)?.message || e2);
+        return "";
+      }
     }
 
     if (!images.length) return "";
@@ -56,4 +67,3 @@ export async function ocrPdfToText(buffer: Buffer): Promise<string> {
     return "";
   }
 }
-

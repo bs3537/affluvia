@@ -3,11 +3,13 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
     const mod: any = await import("pdf-parse");
     const pdfParse = (mod && (mod.default || mod)) as Function;
     // Some builds prefer an object with data; others accept Buffer directly
-    const res = await pdfParse(buffer?.byteLength ? buffer : { data: buffer });
+    if (!buffer || !(buffer instanceof Buffer) || buffer.byteLength === 0) return "";
+    let res = await pdfParse(buffer);
     const text = (res?.text || "").toString().trim();
     return text;
   } catch (e) {
-    console.warn("[PDF] Failed to parse via pdf-parse:", (e as any)?.message || e);
+    // Downgrade to debug-level logging to avoid noisy console in production
+    console.info("[PDF] Fast path failed; trying object form:", (e as any)?.message || e);
     try {
       // Second attempt: pass as object
       const mod: any = await import("pdf-parse");
@@ -16,7 +18,7 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
       const text = (res?.text || "").toString().trim();
       return text;
     } catch (e2) {
-      console.warn("[PDF] Second attempt failed:", (e2 as any)?.message || e2);
+      console.info("[PDF] Second attempt failed; will try OCR fallback:", (e2 as any)?.message || e2);
       return "";
     }
   }
