@@ -49,6 +49,8 @@ interface FinancialDataSnapshot {
   totalAssets: number;
   totalLiabilities: number;
   retirementAssets: number;
+  taxablePortfolio?: number; // Taxable brokerage only (used for TLH)
+  investableAssets?: number; // retirementAssets + taxablePortfolio
   highInterestDebt: number;
   
   // Insurance and planning
@@ -165,7 +167,8 @@ async function fetchPlaidAccountData(userId: number): Promise<any> {
       accountName: plaidAccounts.accountName,
       accountType: plaidAccounts.accountType,
       accountSubtype: plaidAccounts.accountSubtype,
-      balance: plaidAccounts.balance,
+      // Use currentBalance from schema; expose as generic balance for calculations below
+      balance: plaidAccounts.currentBalance,
       institutionName: plaidItems.institutionName,
       isActive: plaidAccounts.isActive,
     })
@@ -184,7 +187,7 @@ async function fetchPlaidAccountData(userId: number): Promise<any> {
       totalAssets: plaidAggregatedSnapshot.totalAssets,
       totalLiabilities: plaidAggregatedSnapshot.totalLiabilities,
       netWorth: plaidAggregatedSnapshot.netWorth,
-      accountCount: plaidAggregatedSnapshot.accountCount,
+      // accountCount column name differs across environments; omit to avoid column errors
     })
       .from(plaidAggregatedSnapshot)
       .where(eq(plaidAggregatedSnapshot.userId, userId))
@@ -316,12 +319,28 @@ function extractDashboardData(profileData: any, financialMetrics: any): any {
       retirementScore = profileData.retirementReadinessScore;
     }
 
+    // Emergency score alignment: use the same source the dashboard widget uses
+    // Widget source of truth: profile.emergencyReadinessScore (persisted) → calculations.emergencyScore (fallback)
+    const widgetEmergencyScore = (
+      typeof profileData.emergencyReadinessScore === 'number' ? profileData.emergencyReadinessScore :
+      typeof financialMetrics.emergencyScore === 'number' ? financialMetrics.emergencyScore :
+      // Final fallback to CFP-aligned if neither of the widget sources exists
+      typeof financialMetrics.emergencyReadinessScoreCFP === 'number' ? financialMetrics.emergencyReadinessScoreCFP : 0
+    );
+
+    // Compute canonical Insurance Adequacy using same precedence as widget (if available in calculations)
+    const canonicalIAS = (
+      typeof (financialMetrics as any)?.insuranceAdequacy?.score === 'number' ? (financialMetrics as any).insuranceAdequacy.score :
+      typeof (financialMetrics as any)?.insuranceScore === 'number' ? (financialMetrics as any).insuranceScore :
+      typeof (profileData as any)?.riskManagementScore === 'number' ? (profileData as any).riskManagementScore :
+      null
+    );
+
     dashboardData.healthScores = {
       overall: financialMetrics.healthScore || profileData.financialHealthScore || 0,
-      // Prefer the Emergency Readiness Score from the widget (CFP metric)
-      emergency: (financialMetrics.emergencyReadinessScoreCFP ?? financialMetrics.emergencyScore ?? profileData.emergencyReadinessScore ?? 0),
+      emergency: widgetEmergencyScore,
       retirement: retirementScore,
-      riskManagement: financialMetrics.insuranceScore || profileData.riskManagementScore || 0,
+      riskManagement: (canonicalIAS ?? 0),
       cashFlow: financialMetrics.cashFlowScore || 0
     };
   }
@@ -341,8 +360,8 @@ async function analyzeBehavioralPatterns(userId: number, profileData: any): Prom
     const transactions = await db.select({
       amount: plaidTransactions.amount,
       date: plaidTransactions.date,
+      // Use primaryCategory for analysis; detailedCategory may not exist on older DBs
       category: plaidTransactions.primaryCategory,
-      subcategory: plaidTransactions.detailedCategory,
       merchantName: plaidTransactions.merchantName,
       pending: plaidTransactions.pending
     })
@@ -625,13 +644,68 @@ export async function generateGeminiInsights(
   console.log('  bondAllocation:', bondAllocation);
   console.log('  cashAllocation:', cashAllocation);
 
+  // Align savings rate with the widget (net-based):
+  // - monthly income uses take-home inputs when available
+  // - monthly cash flow accounts for retirement contributions
+  // - savings rate = monthlyCashFlow / monthlyTakeHome
+  const deriveWidgetSavingsRate = () => {
+    try {
+      const monthlyExpensesObj = (profileData as any)?.monthlyExpenses || {};
+      const categorizedExpenses = Object.entries(monthlyExpensesObj)
+        .filter(([key]) => !key.startsWith('_') && key !== 'total')
+        .reduce((sum: number, [, v]: [string, any]) => sum + (parseFloat(v as any) || 0), 0);
+      const manualTotalExpenses = parseFloat((profileData as any)?.totalMonthlyExpenses || monthlyExpensesObj.total || 0) || 0;
+      const plaidImportedExpenses = monthlyExpensesObj._lastAutoFill?.total || 0;
+      const derivedMonthlyExpenses = (typeof financialMetrics.monthlyExpenses === 'number' && financialMetrics.monthlyExpenses > 0)
+        ? financialMetrics.monthlyExpenses
+        : (categorizedExpenses > 0 ? categorizedExpenses : (manualTotalExpenses > 0 ? manualTotalExpenses : plaidImportedExpenses));
+
+      const takeHomeIncome = Number((profileData as any)?.takeHomeIncome) || 0;
+      const spouseTakeHomeIncome = Number((profileData as any)?.spouseTakeHomeIncome) || 0;
+      const otherIncome = Number((profileData as any)?.otherMonthlyIncome) || 0;
+      const derivedMonthlyIncome = takeHomeIncome + spouseTakeHomeIncome + otherIncome;
+
+      // Retirement contributions (employee + IRA annuals to monthly)
+      const rc = (profileData as any)?.retirementContributions || { employee: 0, employer: 0 };
+      const src = (profileData as any)?.spouseRetirementContributions || { employee: 0, employer: 0 };
+      let monthlyRetirementContributions = (Number(rc.employee) || 0) + (Number(src.employee) || 0);
+      const monthlyTraditionalIRA = (Number((profileData as any)?.traditionalIRAContribution) || 0) / 12;
+      const monthlyRothIRA = (Number((profileData as any)?.rothIRAContribution) || 0) / 12;
+      const monthlySpouseTraditionalIRA = (Number((profileData as any)?.spouseTraditionalIRAContribution) || 0) / 12;
+      const monthlySpouseRothIRA = (Number((profileData as any)?.spouseRothIRAContribution) || 0) / 12;
+      monthlyRetirementContributions += monthlyTraditionalIRA + monthlyRothIRA + monthlySpouseTraditionalIRA + monthlySpouseRothIRA;
+
+      const persistedMonthlyCashFlow = ((): number | undefined => {
+        const p = profileData as any;
+        if (typeof p?.monthlyCashFlow === 'number') return p.monthlyCashFlow;
+        if (typeof financialMetrics?.monthlyCashFlow === 'number') return financialMetrics.monthlyCashFlow;
+        return undefined;
+      })();
+      const monthlyCashFlow = typeof persistedMonthlyCashFlow === 'number'
+        ? persistedMonthlyCashFlow
+        : (derivedMonthlyIncome - derivedMonthlyExpenses - monthlyRetirementContributions);
+
+      const savingsRate = derivedMonthlyIncome > 0 ? (monthlyCashFlow / derivedMonthlyIncome) * 100 : 0;
+      return Math.max(-100, Math.min(100, savingsRate));
+    } catch {
+      return typeof financialMetrics.savingsRate === 'number' ? financialMetrics.savingsRate : 0;
+    }
+  };
+
+  const widgetAlignedSavingsRate = (typeof financialMetrics.savingsRate === 'number')
+    ? financialMetrics.savingsRate
+    : deriveWidgetSavingsRate();
+
   const snapshot: FinancialDataSnapshot = {
     netWorth: financialMetrics.netWorth || 0,
     monthlyIncome: (parseFloat(profileData.annualIncome) || 0) / 12 + (parseFloat(profileData.spouseAnnualIncome) || 0) / 12,
     monthlyExpenses: totalMonthlyExpenses,
     monthlyCashFlow: financialMetrics.monthlyCashFlow || 0,
     emergencyMonths: financialMetrics.emergencyMonths || 0,
-    savingsRate: financialMetrics.savingsRate || 0,
+    savingsRate: widgetAlignedSavingsRate,
+    // Persist retirement expenses for drift checks
+    // Derive from intake Step 11 with fallbacks
+    // (not part of interface; attached via any)
     
     age: currentAge,
     maritalStatus: profileData.maritalStatus || 'single',
@@ -643,12 +717,15 @@ export async function generateGeminiInsights(
     retirementAssets: 0, // Calculate from assets
     highInterestDebt: 0, // Calculate from liabilities
     
+    // Separate user vs spouse coverage to avoid conflating
     hasLifeInsurance: !!(
-      (profileData.lifeInsurance?.coverageAmount && parseFloat(profileData.lifeInsurance.coverageAmount) > 0) ||
-      (profileData.spouseLifeInsurance?.coverageAmount && parseFloat(profileData.spouseLifeInsurance.coverageAmount) > 0) ||
-      (profileData.lifeInsurance && parseFloat(profileData.lifeInsurance) > 0)
+      (profileData.lifeInsurance?.hasPolicy === true && parseFloat(profileData.lifeInsurance?.coverageAmount || '0') > 0) ||
+      (profileData.lifeInsurance && parseFloat(profileData.lifeInsurance as any) > 0)
     ),
-    hasDisabilityInsurance: !!profileData.disabilityInsurance,
+    hasDisabilityInsurance: !!(
+      (profileData.disabilityInsurance?.hasDisability === true) ||
+      (profileData.disabilityInsurance?.hasPolicy === true)
+    ),
     hasWill: estateDocuments.some(doc => doc.type?.toLowerCase().includes('will')),
     hasPowerOfAttorney: estateDocuments.some(doc => doc.type?.toLowerCase().includes('power')),
     
@@ -681,6 +758,40 @@ export async function generateGeminiInsights(
     ))
     .reduce((sum: number, asset: any) => sum + (parseFloat(asset.value) || 0), 0);
 
+  // Compute taxable investment assets (brokerage/taxable accounts only; TLH applies here, not to annuities)
+  const taxableFromManual = assets
+    .filter((asset: any) => {
+      const t = String(asset.type || '').toLowerCase();
+      if (!t) return false;
+      const isRet = t.includes('401') || t.includes('ira') || t.includes('roth') || t.includes('403') || t.includes('retirement');
+      const isBrokerage = t.includes('brokerage') || t.includes('taxable') || (t.includes('investment') && !isRet);
+      return isBrokerage && !isRet;
+    })
+    .reduce((sum: number, a: any) => sum + (parseFloat(a.value) || 0), 0);
+
+  const taxableFromPlaid = (() => {
+    try {
+      const raw = (snapshot as any)?.plaidData?.rawAccounts || [];
+      const lower = (s: any) => String(s || '').toLowerCase();
+      const isRetSubtype = (sub: string) => {
+        const t = lower(sub);
+        return t.includes('ira') || t.includes('roth') || t.includes('401') || t.includes('403') || t.includes('pension');
+      };
+      return raw
+        .filter((a: any) => lower(a.accountType) === 'investment' && !isRetSubtype(a.accountSubtype))
+        .reduce((sum: number, a: any) => sum + (parseFloat(a.balance || '0') || 0), 0);
+    } catch { return 0; }
+  })();
+  snapshot.taxablePortfolio = Math.round((taxableFromPlaid || 0) + taxableFromManual);
+  snapshot.investableAssets = Math.round((snapshot.retirementAssets || 0) + (snapshot.taxablePortfolio || 0));
+  // Derive retirement monthly expenses for drift check
+  (snapshot as any).retirementMonthlyExpenses = (
+    Number((profileData as any).expectedMonthlyExpensesRetirement) ||
+    Number((profileData as any)?.optimizationVariables?.monthlyExpenses) ||
+    Number((profileData as any)?.retirementPlanningData?.monthlyExpenses) ||
+    0
+  );
+
   snapshot.highInterestDebt = liabilities
     .filter((debt: any) => parseFloat(debt.interestRate || '0') > 7)
     .reduce((sum: number, debt: any) => sum + (parseFloat(debt.balance) || 0), 0);
@@ -703,7 +814,9 @@ Today's date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month:
 CRITICAL: DO NOT recommend obtaining insurance that the client already has. Always check the "Life Insurance", "Disability Insurance", and Insurance Adequacy Score before making insurance recommendations. If they have existing coverage, focus on optimization or adequacy review instead.
 
 NON-NEGOTIABLE DASHBOARD INTEGRATION RULES:
-- Emergency Fund insights MUST use the Emergency Readiness Score from the dashboard. It has saved database data (calculations.emergencyReadinessScoreCFP) as the authoritative signal. Do NOT infer targets from income; use monthly essential EXPENSES. Do not recompute months unless explicitly provided by data.
+- Emergency Fund insights MUST use the Emergency Readiness Score from the dashboard widget. Use the simplified widget score (calculations.emergencyScore or persisted profile.emergencyReadinessScore) as canonical. Do NOT infer targets from income; base adequacy on monthly ESSENTIAL expenses. Do not recompute months unless the data provides them.
+- Savings Rate MUST exactly match the dashboard value provided (net take-home basis). Do not recompute from gross income.
+ - Debt Management: Default to the app's Hybrid (Snowball + Avalanche) payoff strategy. Use quick-win momentum on small balances while prioritizing surplus to highest-interest debts. Do not recommend pure Avalanche/Snowball as default. Always include a call to action for the user to visit the Debt Management Center for detailed planning, comparisons, and execution.
 - Retirement readiness MUST reference the Monte Carlo Success Probability from the dashboard widget Retirement Success (it has saved database data)(probabilityOfSuccess in percent, 0–100). Do NOT use or mention any legacy "retirement confidence score" metric.
 - Do NOT recommend Social Security claiming age optimization here. A dedicated optimizer exists in the Retirement Planning optimization tab; avoid SS-claiming-age recommendations in these insights.
 
@@ -838,6 +951,7 @@ FLORIDA SPECIFIC:
 ASSETS & LIABILITIES:
 - Total Assets: ${snapshot.totalAssets.toLocaleString('en-US', {style: 'currency', currency: 'USD'})}
 - Retirement Assets: ${snapshot.retirementAssets.toLocaleString('en-US', {style: 'currency', currency: 'USD'})}
+- Investable Assets (retirement + taxable): ${(snapshot.investableAssets || (snapshot.retirementAssets + (snapshot as any).taxablePortfolio || 0)).toLocaleString('en-US', {style: 'currency', currency: 'USD'})}
 - Total Liabilities: ${snapshot.totalLiabilities.toLocaleString('en-US', {style: 'currency', currency: 'USD'})}
 - High-Interest Debt (>7%): ${snapshot.highInterestDebt.toLocaleString('en-US', {style: 'currency', currency: 'USD'})}
 
@@ -933,16 +1047,16 @@ Tax-Efficient Account Placement Strategy:
 - HSA (if available): Long-term growth investments (triple tax advantage)
 - Current Allocation Review: ${snapshot.stockAllocation}% stocks, ${snapshot.bondAllocation}% bonds, ${alternativesAllocation}% alternatives, ${snapshot.cashAllocation}% cash (Total: ${totalAllocation}%)
 
-**TAX-LOSS HARVESTING STRATEGY:**
-${snapshot.totalAssets > 50000 ? `
-- Portfolio Size: ${snapshot.totalAssets.toLocaleString('en-US', {style: 'currency', currency: 'USD'})} - Tax-loss harvesting beneficial
-- Annual Potential: Up to $3,000 ordinary income offset + unlimited capital gains offset
-- Wash Sale Avoidance: 30-day rule for substantially identical securities
-- Tax-Efficient Funds: Use index funds to minimize taxable distributions
-` : `
-- Portfolio Growing: Implement tax-loss harvesting once taxable assets exceed $50,000
-- Focus on Tax-Deferred Growth: Maximize 401(k) and IRA contributions first
-`}
+  **TAX-LOSS HARVESTING STRATEGY:**
+  ${snapshot.taxablePortfolio > 50000 ? `
+  - Taxable Portfolio: ${snapshot.taxablePortfolio.toLocaleString('en-US', {style: 'currency', currency: 'USD'})} - Tax-loss harvesting beneficial
+  - Annual Potential: Up to $3,000 ordinary income offset + unlimited capital gains offset
+  - Wash Sale Avoidance: 30-day rule for substantially identical securities
+  - Tax-Efficient Funds: Use index funds to minimize taxable distributions
+  ` : `
+  - Portfolio Growing: Implement tax-loss harvesting once taxable brokerage exceeds $50,000
+  - Focus on Tax-Deferred Growth: Maximize 401(k) and IRA contributions first
+  `}
 
 **IRMAA AVOIDANCE PLANNING:**
 Medicare Income-Related Monthly Adjustment Amount:
@@ -1018,15 +1132,8 @@ ACCOUNT BALANCES (Real-time):
 - Mortgage Debt: ${snapshot.plaidData.totalBalances.mortgage.toLocaleString('en-US', {style: 'currency', currency: 'USD'})}
 ` : ''}
 
-${snapshot.dashboardData ? `
-DASHBOARD INSIGHTS (Calculated Results):
-${snapshot.dashboardData.healthScores ? `
-- Overall Financial Health Score: ${snapshot.dashboardData.healthScores.overall}/100
-- Emergency Readiness Score: ${snapshot.dashboardData.healthScores.emergency}/100
-- Insurance Adequacy Score: ${snapshot.dashboardData.healthScores.riskManagement}/100 (comprehensive insurance coverage assessment)
-- Cash Flow Health Score: ${snapshot.dashboardData.healthScores.cashFlow}/100
-` : ''}
-${snapshot.dashboardData.retirementConfidence ? `
+${dashboardBlock}
+${snapshot.dashboardData?.retirementConfidence ? `
 - Retirement Success Probability: ${Math.round(snapshot.dashboardData.retirementConfidence.probabilityOfSuccess)}% (Monte Carlo)
 ${snapshot.dashboardData.retirementConfidence.canRetireEarlier ? `- Early Retirement Possible: Can retire ${snapshot.dashboardData.retirementConfidence.earliestAge ? `at age ${snapshot.dashboardData.retirementConfidence.earliestAge}` : 'earlier than planned'}` : ''}
 - Target Confidence Score: ${snapshot.dashboardData.retirementConfidence.targetScore}%

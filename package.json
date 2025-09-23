@@ -26,6 +26,7 @@
     "db:apply-sql": "tsx server/run-sql-file.ts",
     "health:all": "tsx server/health-check.ts",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:insights": "NODE_OPTIONS=--experimental-vm-modules jest server/__tests__/canonical-metrics.test.ts server/__tests__/plaid-taxable-filter.test.ts server/__tests__/prompt-builder.test.ts",
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
     "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
     "lint:no-math-random": "tsx scripts/check-no-math-random.ts",

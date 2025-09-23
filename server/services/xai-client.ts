@@ -21,12 +21,32 @@ export async function chatComplete(messages: ChatMessage[], opts: ChatOptions = 
     throw new Error('XAI API key not configured');
   }
 
-  // Always prepend anti-hallucination guard for insights/recommendations
+  // Always prepend anti-hallucination guard and personalization/data-source rules
   const guard: ChatMessage = {
     role: 'system',
     content: 'Do not hallucinate. All your recommendations should be based on facts and data. Do not make up any facts or data.'
   };
-  const finalMessages: ChatMessage[] = [guard, ...messages];
+  const personalization: ChatMessage = {
+    role: 'system',
+    content:
+      'Personalize insights and recommendations using the user/spouse/child names when available. '
+      + 'Always prioritize saved/persisted dashboard metrics and profile data over recomputing or inferring values; '
+      + 'treat saved values as authoritative for Emergency Readiness, Savings Rate, Insurance Adequacy, and Retirement metrics.'
+  };
+  const metricsGuard: ChatMessage = {
+    role: 'system',
+    content: 'Do not invent metrics that were not provided (e.g., no "Cash Flow Health Score"). If a metric is not provided, omit it rather than fabricating values or labels.'
+  };
+  const debtPolicy: ChatMessage = {
+    role: 'system',
+    content:
+      'Debt Management Policy: When recommending debt payoff strategies, default to the app\'s Hybrid approach (Snowball + Avalanche). '
+      + 'Use quick-win momentum from small balances while prioritizing highest-interest debts with surplus. '
+      + 'Do NOT recommend pure Avalanche or pure Snowball as the default unless explicitly requested or strictly superior based on the user\'s data. '
+      + 'Always include a call to action to visit the Debt Management Center for detailed strategy, scenario comparisons, and execution steps. '
+      + 'Ensure all debt insights align with this policy and do not contradict the built-in Debt Management tools.'
+  };
+  const finalMessages: ChatMessage[] = [guard, personalization, metricsGuard, debtPolicy, ...messages];
 
   const body = {
     model: 'grok-4-fast-reasoning',

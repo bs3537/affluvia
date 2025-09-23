@@ -579,11 +579,7 @@ export class PlaidDataAggregator {
       monthlyExpenses: cashFlow.monthlyAverage.expenses.toString(),
       monthlyNetCashFlow: cashFlow.monthlyAverage.netCashFlow.toString(),
       
-      // Investment allocation
-      stocksPercentage: financialData.allocation.percentages.stocks.toString(),
-      bondsPercentage: financialData.allocation.percentages.bonds.toString(),
-      cashPercentage: financialData.allocation.percentages.cash.toString(),
-      alternativesPercentage: financialData.allocation.percentages.alternatives.toString(),
+      // Investment allocation (omit per-env columns; store in metadata if needed)
       
       // Ownership split
       userAssets: financialData.ownershipSplit.user.toString(),
@@ -591,9 +587,7 @@ export class PlaidDataAggregator {
       jointAssets: financialData.ownershipSplit.joint.toString(),
       
       // Metadata
-      dataSources: financialData.dataSources,
-      accountCount: financialData.plaidAccounts.length,
-      linkedAccountCount: financialData.plaidAccounts.filter(a => a.account).length
+      dataSources: financialData.dataSources
     };
     
     // Insert snapshot
@@ -609,7 +603,26 @@ export class PlaidDataAggregator {
     const cutoffTime = new Date();
     cutoffTime.setHours(cutoffTime.getHours() - maxAgeHours);
     
-    const [latest] = await db.select()
+    const [latest] = await db.select({
+        id: plaidAggregatedSnapshot.id,
+        userId: plaidAggregatedSnapshot.userId,
+        snapshotDate: plaidAggregatedSnapshot.snapshotDate,
+        totalAssets: plaidAggregatedSnapshot.totalAssets,
+        totalLiabilities: plaidAggregatedSnapshot.totalLiabilities,
+        netWorth: plaidAggregatedSnapshot.netWorth,
+        bankingAssets: plaidAggregatedSnapshot.bankingAssets,
+        investmentAssets: plaidAggregatedSnapshot.investmentAssets,
+        retirementAssets: plaidAggregatedSnapshot.retirementAssets,
+        educationFunds: plaidAggregatedSnapshot.educationFunds,
+        creditCardDebt: plaidAggregatedSnapshot.creditCardDebt,
+        studentLoans: plaidAggregatedSnapshot.studentLoans,
+        personalLoans: plaidAggregatedSnapshot.personalLoans,
+        mortgageDebt: plaidAggregatedSnapshot.mortgageDebt,
+        otherDebt: plaidAggregatedSnapshot.otherDebt,
+        monthlyIncome: plaidAggregatedSnapshot.monthlyIncome,
+        monthlyExpenses: plaidAggregatedSnapshot.monthlyExpenses,
+        monthlyNetCashFlow: plaidAggregatedSnapshot.monthlyNetCashFlow,
+      })
       .from(plaidAggregatedSnapshot)
       .where(and(
         eq(plaidAggregatedSnapshot.userId, userId),
@@ -619,11 +632,24 @@ export class PlaidDataAggregator {
       .limit(1);
     
     if (latest) {
-      return latest;
+      // Normalize environment differences via adapter
+      return this.plaidSnapshotAdapter(latest as any);
     }
     
     // Create new snapshot if none exists or is stale
     return await this.createAggregatedSnapshot(userId);
+  }
+
+  /**
+   * Adapter to normalize plaid_aggregated_snapshot rows across environments.
+   */
+  static plaidSnapshotAdapter(row: any) {
+    if (!row) return row;
+    // Prefer provided fields; map alternates if missing
+    row.accountCount = row.accountCount ?? row.accountsCount ?? undefined;
+    // Normalize monthly net cash flow naming
+    row.monthlyNetCashFlow = row.monthlyNetCashFlow ?? row.monthlyCashFlow ?? row.monthly_net_cash_flow ?? undefined;
+    return row;
   }
 
   /**

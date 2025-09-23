@@ -1387,7 +1387,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log('No existing insights found - generating initial insights...');
           const { generateGeminiInsights, createProfileDataHash } = await import('./gemini-insights');
           
-          const profile = await storage.getFinancialProfile(userId);
+          let profile = await storage.getFinancialProfile(userId);
           console.log('Profile for insights:', {
             hasProfile: !!profile,
             hasCalculations: !!profile?.calculations,
@@ -1397,7 +1397,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           if (profile && profile.calculations) {
             const estateDocuments = await storage.getEstateDocuments(userId);
-            
+            // Pre-generation safeguards: ensure IAS and Savings are present
+            try {
+              const calcAny = profile.calculations as any;
+              const iasMissing = !(typeof calcAny?.insuranceAdequacy?.score === 'number') && !(typeof calcAny?.insuranceScore === 'number') && !(typeof (profile as any)?.riskManagementScore === 'number');
+              const savingsRateMissing = !(typeof calcAny?.savingsRate === 'number');
+              if (iasMissing || savingsRateMissing) {
+                console.log('[Dashboard Insights] Missing IAS/Savings. Recomputing calculations before initial generation...');
+                const { calculateFinancialMetricsWithPlaid } = await import('./financial-calculations-enhanced');
+                const fresh = await calculateFinancialMetricsWithPlaid(profile, [], userId);
+                await storage.updateFinancialProfile(userId, { calculations: fresh, riskManagementScore: Math.round(Number((fresh as any)?.insuranceScore) || 0) });
+                profile = await storage.getFinancialProfile(userId);
+              }
+            } catch (e) {
+              console.warn('[Dashboard Insights] Pre-gen safeguard failed (continuing):', (e as any)?.message || e);
+            }
+           
             const insightsResult = await generateGeminiInsights(
               profile, 
               profile.calculations, 
@@ -1441,13 +1456,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Update view count
+      // Possible drift: if canonical IAS/Savings now differ materially from stored snapshot, regenerate synchronously
+      try {
+        const profile = await storage.getFinancialProfile(userId);
+        const { getDashboardSnapshot } = await import('./services/dashboard-snapshot');
+        const snapshot = await getDashboardSnapshot(userId, { bypassCache: false });
+        const { deriveCanonicalMetrics } = await import('./lib/canonical-metrics');
+        const canonical = deriveCanonicalMetrics(profile, profile?.calculations || {}, snapshot);
+
+        const storedSnap: any = (insights as any).financialSnapshot || {};
+        const storedIAS: number | null = storedSnap?.dashboardData?.healthScores?.riskManagement ?? null;
+        const storedSavings: number | null = storedSnap?.savingsRate ?? null;
+
+        const iasDrift = canonical.insuranceAdequacyScore !== null && (storedIAS === null || storedIAS === 0) && canonical.insuranceAdequacyScore > 0;
+        const savingsDrift = (canonical.savingsRate !== null && storedSavings !== null) ? Math.abs(canonical.savingsRate - storedSavings) > 0.1 : false;
+        const storedERS: number | null = storedSnap?.dashboardData?.healthScores?.emergency ?? null;
+        const ersDrift = (storedERS !== null && canonical.ersScore !== undefined && canonical.ersScore !== null)
+          ? Math.abs(canonical.ersScore - storedERS) >= 1 : false;
+        const storedRetExp: number | null = (storedSnap as any)?.retirementMonthlyExpenses ?? null;
+        const retExpDrift = (storedRetExp !== null)
+          ? Math.abs((canonical.retirementMonthlyExpenses || 0) - storedRetExp) >= 1 : false;
+
+        // Net Worth and Monthly Cash Flow drift
+        const storedNW: number | null = (storedSnap as any)?.netWorth ?? null;
+        const freshNW: number | null = (snapshot as any)?.netWorth ?? (
+          (typeof (profile as any)?.calculations?.totalAssets === 'number' && typeof (profile as any)?.calculations?.totalLiabilities === 'number')
+            ? (profile as any).calculations.totalAssets - (profile as any).calculations.totalLiabilities
+            : null
+        );
+        const nwDrift = (storedNW !== null && freshNW !== null) ? Math.abs(freshNW - storedNW) >= 1 : false;
+
+        const storedMCF: number | null = (storedSnap as any)?.monthlyCashFlow ?? null;
+        const mcfDrift = (storedMCF !== null && canonical.monthlyCashFlow !== null)
+          ? Math.abs((canonical.monthlyCashFlow || 0) - storedMCF) >= 1 : false;
+
+        if (iasDrift || savingsDrift || ersDrift || retExpDrift || nwDrift || mcfDrift) {
+          console.log('[Dashboard Insights] Drift detected (core metrics). Regenerating insights...');
+          const { generateGeminiInsights } = await import('./gemini-insights');
+          const estateDocuments = await storage.getEstateDocuments(userId);
+          const insightsResult = await generateGeminiInsights(profile, profile.calculations || {}, estateDocuments);
+          const refreshed = await storage.createDashboardInsights(userId, {
+            insights: insightsResult.insights,
+            generatedByModel: 'grok-4-fast-reasoning',
+            generationPrompt: insightsResult.generationPrompt,
+            generationVersion: '1.0',
+            financialSnapshot: insightsResult.financialSnapshot,
+            profileDataHash: insightsResult.profileDataHash,
+            validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+          });
+          await storage.updateDashboardInsightsViewCount(userId);
+          return res.json({
+            insights: refreshed.insights,
+            generatedAt: (refreshed as any).updatedAt || refreshed.createdAt,
+            isValid: true,
+            generatedByModel: refreshed.generatedByModel,
+            viewCount: (refreshed.viewCount || 0) + 1
+          });
+        }
+      } catch (driftErr) {
+        console.warn('[Dashboard Insights] Drift check failed (continuing with stored insights):', (driftErr as any)?.message || driftErr);
+      }
+
+      // Update view count and return stored insights
       await storage.updateDashboardInsightsViewCount(userId);
-      
-      // Check if insights are still valid
       const isValid = !insights.validUntil || new Date() < insights.validUntil;
-      
-      res.json({
+      return res.json({
         insights: insights.insights,
         generatedAt: (insights as any).updatedAt || insights.createdAt,
         isValid,
@@ -1657,6 +1730,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { generateGeminiInsights } = await import('./gemini-insights');
       const estateDocuments = await storage.getEstateDocuments(userId);
       
+      // Ensure critical calculations exist before generation (avoid 0/100 due to missing values)
+      try {
+        const calcAny = profile.calculations as any;
+        const iasMissing = !(typeof calcAny?.insuranceAdequacy?.score === 'number') && !(typeof calcAny?.insuranceScore === 'number') && !(typeof (profile as any)?.riskManagementScore === 'number');
+        const savingsRateMissing = !(typeof calcAny?.savingsRate === 'number');
+        if (iasMissing || savingsRateMissing) {
+          console.log('[Insights] Missing critical metrics (IAS or savingsRate). Recomputing calculations...');
+          const { calculateFinancialMetricsWithPlaid } = await import('./financial-calculations-enhanced');
+          const fresh = await calculateFinancialMetricsWithPlaid(profile, [], userId);
+          await storage.updateFinancialProfile(userId, {
+            calculations: fresh,
+            riskManagementScore: Math.round(Number((fresh as any)?.insuranceScore) || 0),
+            financialHealthScore: Math.round(Number((fresh as any)?.healthScore) || 0),
+            emergencyReadinessScore: Math.round(Number((fresh as any)?.emergencyScore) || 0),
+            monthlyCashFlow: (typeof (fresh as any)?.monthlyCashFlow === 'number') ? (fresh as any).monthlyCashFlow : null,
+            monthlyCashFlowAfterContributions: (typeof (fresh as any)?.monthlyCashFlowAfterContributions === 'number') ? (fresh as any).monthlyCashFlowAfterContributions : null,
+          });
+          // Refresh profile with updated calculations
+          profile = await storage.getFinancialProfile(userId);
+        }
+      } catch (preGenErr) {
+        console.warn('[Insights] Pre-generation safeguard failed (continuing with available data):', preGenErr);
+      }
+
       // Generate comprehensive insights using complete database data
       console.log('Generating comprehensive insights using complete financial profile...');
       const insightsResult = await generateGeminiInsights(
@@ -11599,9 +11696,9 @@ async function calculateFinancialMetrics(profileData: any, estateDocuments: any[
     (Number(primaryResidence.monthlyPayment) || 0);
   const dtiRatio = monthlyIncome > 0 ? (debtPaymentsFromExpenses / monthlyIncome) * 100 : 0;
 
-  // Calculate savings rate (debt payments are already in totalExpenses)
-  const annualSavings = Math.max(0, annualIncome - (totalExpenses * 12));
-  const savingsRate = annualIncome > 0 ? (annualSavings / annualIncome) * 100 : 0;
+  // Savings Rate: align with dashboard widget (net/take-home based)
+  const monthlyTakeHomeTotal = userTakeHomeMonthly + spouseTakeHomeMonthly + otherMonthlyIncome;
+  const savingsRate = monthlyTakeHomeTotal > 0 ? (monthlyCashFlow / monthlyTakeHomeTotal) * 100 : 0;
 
   // Calculate emergency fund - use emergency_fund_size field or look for emergency/savings assets
   const emergencyFundFromAssets = assets
@@ -13638,15 +13735,17 @@ async function generateComprehensiveInsights(profileData: any, metrics: any): Pr
 
     // Prefer persisted widget scores where available
     const ersScore =
-      (typeof metrics.emergencyReadinessScoreCFP === 'number' ? metrics.emergencyReadinessScoreCFP : undefined) ??
       (typeof metrics.emergencyScore === 'number' ? metrics.emergencyScore : undefined) ??
+      (typeof profileData.emergencyReadinessScore === 'number' ? profileData.emergencyReadinessScore : undefined) ??
+      (typeof metrics.emergencyReadinessScoreCFP === 'number' ? metrics.emergencyReadinessScoreCFP : undefined) ??
       0;
     const insuranceAdequacyScore =
       (metrics.insuranceAdequacy && typeof metrics.insuranceAdequacy.score === 'number'
         ? metrics.insuranceAdequacy.score
         : undefined) ??
       (typeof metrics.insuranceScore === 'number' ? metrics.insuranceScore : undefined) ??
-      0;
+      (typeof profileData.riskManagementScore === 'number' ? profileData.riskManagementScore : undefined) ??
+      null;
 
     // Get comprehensive dashboard widget data for insights
     let monteCarloData = null;
@@ -13681,16 +13780,34 @@ async function generateComprehensiveInsights(profileData: any, metrics: any): Pr
 
     // Analyze retirement contribution opportunities for prompt
     const contributionOpportunities = analyzeRetirementContributionOpportunities(profileData, metrics);
+    // Derive canonical metrics used by prompts to prevent drift with widgets
+    const { deriveCanonicalMetrics } = await import('./lib/canonical-metrics');
+    let canonicalSnapshot: any = null;
+    try {
+      const { getDashboardSnapshot } = await import('./services/dashboard-snapshot');
+      canonicalSnapshot = await getDashboardSnapshot((req as any).user.id, { bypassCache: false });
+    } catch {}
+    const canonical = deriveCanonicalMetrics(profileData, metrics, canonicalSnapshot);
+    // Debug canonical values used in prompt
+    if (process.env.NODE_ENV !== 'production') console.log('[Insights] Canonical metrics for prompt:', {
+      ersScore: canonical.ersScore,
+      insuranceAdequacyScore: canonical.insuranceAdequacyScore,
+      savingsRate: canonical.savingsRate,
+      monthlyCashFlow: canonical.monthlyCashFlow,
+      retirementMonthlyExpenses: canonical.retirementMonthlyExpenses,
+    });
     const hasLTC = profileData.hasLongTermCareInsurance;
     const spouseHasLTC = profileData.spouseHasLongTermCareInsurance;
     const hasSpouse = profileData.maritalStatus === 'married';
     
+    // Canonical retirement expenses
+    const monthlyRetirementExpenses = canonical.retirementMonthlyExpenses;
+
+    const { buildAuthoritativeMetricsBlock } = await import('./lib/prompt-builder');
+    const authBlock = buildAuthoritativeMetricsBlock(canonical, metrics);
     const prompt = `You are an expert CFP providing personalized financial insights based on comprehensive dashboard analysis.
 
-AUTHORITATIVE METRICS (use as-is; do NOT recompute):
-- Emergency Readiness Score (ERS, CFP-aligned): ${ersScore}/100
-- Insurance Adequacy Score (IAS): ${insuranceAdequacyScore}/100
-- Retirement Readiness Score: ${metrics.retirementScore}/100
+${authBlock}
 
 User Profile:
 - Name: ${profileData.firstName || 'User'}
@@ -13704,13 +13821,13 @@ User Profile:
 Complete Financial Dashboard Data:
 - Financial Health Score: ${metrics.healthScore}/100
 - Net Worth: $${metrics.totalAssets - metrics.totalLiabilities}
-- Monthly Cash Flow: $${metrics.monthlyCashFlow}
+ - Monthly Cash Flow: $${(canonical.monthlyCashFlow ?? metrics.monthlyCashFlow)}
 - Emergency Readiness Score: ${ersScore}/100 (${metrics.emergencyMonths?.toFixed(1)} months covered)
 - Retirement Readiness Score: ${metrics.retirementScore}/100
-- Insurance Adequacy Score: ${insuranceAdequacyScore}/100
- - Retirement Expected Monthly Expenses: $${Number(profileData.expectedMonthlyExpensesRetirement || 0)}
+- Insurance Adequacy Score: ${insuranceAdequacyScore === null ? 'Not available' : insuranceAdequacyScore + '/100'}
+ - Retirement Expected Monthly Expenses: $${monthlyRetirementExpenses}
 - Debt-to-Income Ratio: ${metrics.dtiRatio?.toFixed(1)}%
-- Savings Rate: ${metrics.savingsRate?.toFixed(1)}%
+ - Savings Rate: ${(canonical.savingsRate ?? metrics.savingsRate)?.toFixed(1)}%
 - Risk Profile: ${metrics.riskProfile}
 
 ${monteCarloData && retirementParams ? `

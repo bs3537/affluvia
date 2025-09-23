@@ -205,6 +205,84 @@ async function validateDatabaseSchema() {
     const criticalIssues = issues.filter(i => i.severity === 'critical');
     const warnings = issues.filter(i => i.severity === 'warning');
     
+    // Additional environment compatibility checks for Plaid snapshot/transactions
+    try {
+      // Check plaid_aggregated_snapshot account count column (either account_count or accounts_count)
+      const pasCol = await db.execute(sql`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'plaid_aggregated_snapshot'
+        AND column_name IN ('account_count','accounts_count')
+      `);
+      if ((pasCol.rows || []).length === 0) {
+        issues.push({ type: 'missing_column', table: 'plaid_aggregated_snapshot', column: 'account_count|accounts_count', expected: 'integer', severity: 'warning' });
+        console.log("     ⚠️ plaid_aggregated_snapshot.account_count/accounts_count column missing (non-critical)");
+      }
+
+      // Check optional monthly_net_cash_flow column
+      const mnet = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'plaid_aggregated_snapshot' AND column_name = 'monthly_net_cash_flow'
+        )
+      `);
+      if (!mnet.rows[0]?.exists) {
+        issues.push({ type: 'missing_column', table: 'plaid_aggregated_snapshot', column: 'monthly_net_cash_flow', expected: 'numeric', severity: 'warning' });
+        console.log("     ⚠️ plaid_aggregated_snapshot.monthly_net_cash_flow column missing (non-critical)");
+      }
+
+      // plaid_transactions detailed_category presence (warn only)
+      const det = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'plaid_transactions' AND column_name = 'detailed_category'
+        )
+      `);
+      if (!det.rows[0]?.exists) {
+        issues.push({ type: 'missing_column', table: 'plaid_transactions', column: 'detailed_category', expected: 'text', severity: 'warning' });
+        console.log("     ⚠️ plaid_transactions.detailed_category column missing (non-critical)");
+      }
+
+      // plaid_accounts optional columns check
+      const acctCols = ['account_type','account_subtype','current_balance','available_balance','is_active','last_synced'];
+      for (const c of acctCols) {
+        const r = await db.execute(sql`SELECT EXISTS (
+          SELECT FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='plaid_accounts' AND column_name=${c}
+        )`);
+        if (!r.rows[0]?.exists) {
+          issues.push({ type: 'missing_column', table: 'plaid_accounts', column: c, expected: 'varies', severity: 'warning' });
+          console.log(`     ⚠️ plaid_accounts.${c} missing (non-critical)`);
+        }
+      }
+
+      // plaid_items optional columns check
+      const itemCols = ['status','institution_name','consent_expiration_time'];
+      for (const c of itemCols) {
+        const r = await db.execute(sql`SELECT EXISTS (
+          SELECT FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='plaid_items' AND column_name=${c}
+        )`);
+        if (!r.rows[0]?.exists) {
+          issues.push({ type: 'missing_column', table: 'plaid_items', column: c, expected: 'varies', severity: 'warning' });
+          console.log(`     ⚠️ plaid_items.${c} missing (non-critical)`);
+        }
+      }
+
+      // Optional stock percentage fields in snapshot
+      const stockCols = ['stocks_percentage','bonds_percentage','cash_percentage','alternatives_percentage'];
+      for (const c of stockCols) {
+        const r = await db.execute(sql`SELECT EXISTS (
+          SELECT FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='plaid_aggregated_snapshot' AND column_name=${c}
+        )`);
+        if (!r.rows[0]?.exists) {
+          console.log(`     ℹ️ plaid_aggregated_snapshot.${c} not found (optional; will be omitted)`);
+        }
+      }
+    } catch (compatErr) {
+      console.log('   ⚠️ Skipped Plaid compatibility checks:', (compatErr as any)?.message || compatErr);
+    }
+
     if (criticalIssues.length === 0 && warnings.length === 0) {
       console.log('\n✅ SUCCESS! Your database schema is fully synchronized!');
       console.log('All tables and columns match the Drizzle schema.');
