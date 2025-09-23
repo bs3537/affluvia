@@ -437,6 +437,7 @@ export function LifeGoalDetailView({
 
             {/* AI Insights Tab */}
             <TabsContent value="insights" className="space-y-4">
+              <div className="text-sm text-gray-400">AI-powered insights based on your life goals data</div>
               {/* Shortfall Summary Card */}
               {(() => {
                 // Use the same calculation as the Gap card to ensure consistency
