@@ -8,6 +8,8 @@ export type ChatMessage = {
 export interface ChatOptions {
   temperature?: number;
   stream?: boolean;
+  timeoutMs?: number;
+  model?: string;
 }
 
 /**
@@ -74,21 +76,39 @@ export async function chatComplete(messages: ChatMessage[], opts: ChatOptions = 
   };
   const finalMessages: ChatMessage[] = [guard, personalization, metricsGuard, debtPolicy, emergencyFundPolicy, retirementPolicy, ...messages];
 
+  const model = opts.model || process.env.XAI_MODEL || 'grok-4-fast-reasoning';
+  const rawTimeout = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : Number(process.env.XAI_TIMEOUT_MS || 15000);
+  const timeoutMs = Number.isFinite(rawTimeout) ? rawTimeout : 15000;
+  const useTimeout = timeoutMs > 0;
+  const controller = useTimeout ? new AbortController() : null;
+  const timer = useTimeout ? setTimeout(() => controller!.abort(), timeoutMs) : null;
+
   const body = {
-    model: 'grok-4-fast-reasoning',
+    model,
     messages: finalMessages,
     temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.7,
     stream: !!opts.stream,
   } as any;
 
-  const res = await fetch('https://api.x.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller?.signal,
+    });
+  } catch (err: any) {
+    if (useTimeout && err?.name === 'AbortError') {
+      throw new Error(`XAI timeout after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const text = await safeText(res);
@@ -100,6 +120,8 @@ export async function chatComplete(messages: ChatMessage[], opts: ChatOptions = 
   if (typeof content !== 'string' || !content) {
     throw new Error('XAI response missing content');
   }
+  // Optional lightweight log for debugging latency/model selection
+  try { console.info(`[AI] model=${model} timeoutMs=${useTimeout ? timeoutMs : 0}`); } catch {}
   return content;
 }
 

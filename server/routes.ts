@@ -5484,7 +5484,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user!.id;
       const { incomeChange, incomeChangeDetails, deductionChange, deductionChangeDetails, comprehensiveAnalysis } = req.body;
 
-      let analysisResult;
+      let analysisResult: any;
+      let isRawFallback: boolean = false;
 
       if (req.file) {
         // Scenario 2: Tax return uploaded - analyze with file + financial data
@@ -5498,6 +5499,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           },
           userId
         );
+        isRawFallback = !!(rawAnalysisResult && (rawAnalysisResult.__fallback === true));
         
         // Extract both strategies and accurate tax data from the analysis
         analysisResult = {
@@ -5529,6 +5531,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           (analysisResult as any).extractedTaxData = (analysisResult as any).extractedTaxData || {};
           (analysisResult as any).extractedTaxData.hashedSSN = ssnHash;
         }
+        // Single-pass: no refinementPending flag
       } else if (comprehensiveAnalysis === "true") {
         // Scenario 1: No tax return - analyze only financial data
         analysisResult = await generateComprehensiveFinancialAnalysis(
@@ -5544,16 +5547,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "No file uploaded and comprehensive analysis not requested" });
       }
 
-      // Clear any existing tax analysis before storing new results
-      // This ensures no stale data from previous analyses persists
-      await storage.updateFinancialProfile(userId, {
-        taxReturns: null,
-      });
-      
-      // Store the new analysis result in the financial profile
-      await storage.updateFinancialProfile(userId, {
-        taxReturns: analysisResult,
-      });
+      // Persist only if analysis is not a fallback/error payload
+      if (isRawFallback) {
+        console.warn('[TaxAnalysis] persistence skipped: fallback result (keeping prior taxReturns)');
+      } else {
+        await storage.updateFinancialProfile(userId, { taxReturns: analysisResult });
+      }
 
       res.json({ message: "Analysis completed successfully" });
     } catch (error) {
@@ -13245,22 +13244,19 @@ Please provide a detailed, personalized response that demonstrates deep understa
       const profile = await storage.getFinancialProfile(userId);
       
       const t0 = Date.now();
-      // Extract readable text from PDF (fast path), avoid passing base64 to the model
-      const { extractPdfText } = await import('./services/pdf-text-extractor');
-      let text = await extractPdfText(pdfBuffer);
+      // Tesseract-first OCR on first 20 pages with time budget
+      const { ocrFirstTwentyPages } = await import('./services/ocr-engine');
+      const ocrStart = Date.now();
+      let text = await ocrFirstTwentyPages(pdfBuffer);
+      const ocrMs = Date.now() - ocrStart;
       const tParse = Date.now();
-      if (!text || text.length < 200) {
-        // OCR fallback for scanned PDFs
+      // Optional quick assist: if OCR is very short, try pdf-parse to pad text (non-blocking preference rule is respected)
+      if ((!text || text.length < 200) && (Date.now() - t0) < 20000) {
         try {
-          const { ocrPdfToText } = await import('./services/pdf-ocr-fallback');
-          const ocrStart = Date.now();
-          const ocrText = await ocrPdfToText(pdfBuffer);
-          const ocrMs = Date.now() - ocrStart;
-          if (ocrText && ocrText.length > text.length) text = ocrText;
-          console.info(`[OCR] fallback used, ms=${ocrMs}, length=${ocrText?.length || 0}`);
-        } catch (e) {
-          console.warn('[OCR] Fallback module unavailable:', (e as any)?.message || e);
-        }
+          const { extractPdfText } = await import('./services/pdf-text-extractor');
+          const assist = await extractPdfText(pdfBuffer);
+          if (assist && assist.length > text.length) text = assist;
+        } catch {}
       }
       const tTextReady = Date.now();
       
@@ -13378,20 +13374,71 @@ IMPORTANT: Take extra time to ensure accuracy. Each strategy must include:
 5. Potential risks or considerations
 
 Double-check all calculations before returning results.`;
-      // Build a compact excerpt (collapse whitespace) and cap length
-      const excerpt = (text || '').replace(/\s+/g, ' ').slice(0, 4000);
+      // Build compact context from extracted snippets; avoid large raw excerpts
+      const keyFields = new Set(["adjustedGrossIncome","totalDeductions","taxableIncome","federalTaxesPaid","filingStatus"]);
+      const snippets = Array.isArray(extracted.snippets) ? extracted.snippets.filter(s => keyFields.has(s.field)).slice(0, 6) : [];
+      const snippetBlock = snippets.map(s => `- ${s.field}: ${s.context}`).join("\n");
       const extractedJson = JSON.stringify(extracted);
-      const combined = `EXTRACTED_1040_TEXT (excerpt):\n${excerpt}\n\nEXTRACTED_1040_JSON:\n${extractedJson}\n\n${prompt}`;
+      const combined = `Return ONLY valid JSON with no commentary.\n\nKEY_LINE_SNIPPETS:\n${snippetBlock || '(none)'}\n\nEXTRACTED_1040_JSON:\n${extractedJson}\n\n${prompt}`;
+      // Cache by text hash + inputs to speed repeats
+      const { cacheService } = await import('./services/cache.service');
+      const cryptoMod = await import('crypto');
+      const aiKeyParams = { userId, h: cryptoMod.createHash('sha256').update(text || '').digest('hex'), userInputs };
+      const cachedAI = await cacheService.get<any>('ai_tax_analysis', aiKeyParams);
+      if (cachedAI) {
+        console.info('[AI] cache hit: ai_tax_analysis');
+        return cachedAI;
+      }
       const tLLM0 = Date.now();
+      const disableTaxTimeout = String(process.env.XAI_DISABLE_TIMEOUT_TAX || 'false').toLowerCase() === 'true';
+      const timeoutSingle = disableTaxTimeout
+        ? 0
+        : Number(process.env.XAI_TIMEOUT_MS_SINGLE || 60000);
       const ai = await chatComplete([
         { role: 'user', content: combined }
-      ], { temperature: 0.7, stream: false });
+      ], { temperature: 0.2, stream: false, timeoutMs: timeoutSingle });
       const tLLM1 = Date.now();
       
-      // Extract JSON from the response
+      // Extract JSON from the response, validate, optionally repair
       const jsonMatch = ai.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
+        let parsed: any = JSON.parse(jsonMatch[0]);
+        // Validate with zod; if invalid, attempt quick repair
+        try {
+          const { z } = await import('zod');
+          const Strategy = z.object({ title: z.string(), description: z.string(), estimatedSavings: z.number(), implementation: z.array(z.string()), priority: z.number() });
+          const AnalysisSchema = z.object({
+            strategies: z.array(Strategy),
+            currentTaxLiability: z.number(),
+            projectedTaxLiability: z.number(),
+            totalPotentialSavings: z.number(),
+            effectiveTaxRate: z.number(),
+            marginalTaxRate: z.number(),
+            adjustedGrossIncome: z.number().optional(),
+            totalDeductions: z.number().optional(),
+            taxableIncome: z.number().optional(),
+            filingStatus: z.enum(['Single','MFJ','HOH','MFS']).nullable().optional(),
+            dependentCount: z.number().optional(),
+            federalTaxesPaid: z.number().optional(),
+            stateTaxesPaid: z.number().optional(),
+            w2Income: z.number().optional(),
+            selfEmploymentIncome: z.number().optional(),
+            investmentIncome: z.number().optional(),
+            extractedTaxData: z.any().optional(),
+          });
+          const valid = AnalysisSchema.safeParse(parsed);
+          if (!valid.success) {
+            try {
+              const schemaText = `Schema: { strategies: [{ title: string, description: string, estimatedSavings: number, implementation: string[], priority: number }], currentTaxLiability: number, projectedTaxLiability: number, totalPotentialSavings: number, effectiveTaxRate: number, marginalTaxRate: number, adjustedGrossIncome?: number, totalDeductions?: number, taxableIncome?: number, filingStatus?: "Single"|"MFJ"|"HOH"|"MFS"|null, dependentCount?: number, federalTaxesPaid?: number, stateTaxesPaid?: number, w2Income?: number, selfEmploymentIncome?: number, investmentIncome?: number, extractedTaxData?: any }`;
+              const repairPrompt = `Repair the following JSON so it conforms EXACTLY to the schema. Return ONLY valid JSON.\n\n${schemaText}\n\nJSON to repair:\n${jsonMatch[0]}`;
+              const repaired = await chatComplete([{ role: 'user', content: repairPrompt }], { temperature: 0.0, stream: false, timeoutMs: 3000 });
+              const repJson = repaired.match(/\{[\s\S]*\}/);
+              if (repJson) parsed = JSON.parse(repJson[0]);
+            } catch (repErr) {
+              console.warn('AI repair pass failed:', (repErr as any)?.message || repErr);
+            }
+          }
+        } catch {}
         // Merge deterministic extracted fields for reliability
         parsed.adjustedGrossIncome = parsed.adjustedGrossIncome ?? extracted.adjustedGrossIncome;
         parsed.totalDeductions = parsed.totalDeductions ?? extracted.totalDeductions;
@@ -13406,7 +13453,8 @@ Double-check all calculations before returning results.`;
           filingStatus: extracted.filingStatus || null,
         });
         const totalMs = Date.now() - t0;
-        console.info(`[TaxAnalysis] times(ms): parse=${tParse - t0}, ocr+prep=${tTextReady - tParse}, extract=${tExtract - tTextReady}, xai=${tLLM1 - tLLM0}, total=${totalMs}`);
+        console.info(`[TaxAnalysis] times(ms): parse=${tParse - t0}, ocr+prep=${tTextReady - tParse}, extract=${tExtract - tTextReady}, xai=${tLLM1 - tLLM0}, total=${totalMs}, mode=single`);
+        await cacheService.set('ai_tax_analysis', aiKeyParams, parsed, 24 * 60 * 60);
         return parsed;
       } else {
         throw new Error("Failed to parse AI response");
@@ -13415,6 +13463,7 @@ Double-check all calculations before returning results.`;
       console.error("Error in tax analysis:", error);
     // Return a default structure in case of error
     return {
+      __fallback: true,
       strategies: [
         {
           title: "Maximize Retirement Contributions",
@@ -14430,10 +14479,11 @@ Ensure recommendations are:
 - Actionable with clear next steps
 `;
 
+    const recoTimeout = Number(process.env.XAI_TIMEOUT_MS_RECO || process.env.XAI_TIMEOUT_MS_FAST || process.env.XAI_TIMEOUT_MS || 45000);
     const text = await chatComplete([
       { role: 'system', content: taxSystemPolicy },
       { role: 'user', content: intakeBlock + "\n\n" + taxReturnBlock + "\n\n" + userContext + "\n\n" + prompt }
-    ], { temperature: 0.7, stream: false });
+    ], { temperature: 0.4, stream: false, timeoutMs: recoTimeout });
 
     // Extract JSON from the response
     const jsonMatch = text.match(/\{[\s\S]*\}/);

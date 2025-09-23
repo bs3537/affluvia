@@ -1,7 +1,11 @@
 function toNumber(x: any): number | undefined {
   if (x == null) return undefined;
-  const n = Number(String(x).replace(/[^0-9.-]/g, ""));
-  return Number.isFinite(n) ? n : undefined;
+  const s = String(x);
+  const hasParens = /\(.*\)/.test(s);
+  const cleaned = s.replace(/[^0-9.-]/g, "");
+  const n = Number(cleaned);
+  if (!Number.isFinite(n)) return undefined;
+  return hasParens ? -Math.abs(n) : n;
 }
 
 function grabContext(text: string, idxStart: number, idxEnd: number): string {
@@ -32,6 +36,7 @@ export function extract1040Fields(raw: string): Extracted1040Fields {
       re: [
         /(line\s*11\b[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
         /(adjusted\s*gross\s*income[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
+        /(\bAGI\b[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
       ],
     },
     {
@@ -40,6 +45,7 @@ export function extract1040Fields(raw: string): Extracted1040Fields {
         /(line\s*12\b[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
         /(standard\s*deduction[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
         /(itemized\s*deductions[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
+        /(total\s*deductions?[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
       ],
     },
     {
@@ -54,6 +60,7 @@ export function extract1040Fields(raw: string): Extracted1040Fields {
       re: [
         /(line\s*24\b[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
         /(total\s*tax\b[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
+        /(total\s*tax\s*\(line\s*24\)[^\n]*?)\$?\s*([\d,]+(?:\.\d{2})?)/i,
       ],
     },
   ];
@@ -73,9 +80,11 @@ export function extract1040Fields(raw: string): Extracted1040Fields {
   }
 
   // Filing status (best-effort)
-  const fs = text.match(/(Single|Married filing jointly|Married filing separately|Head of household|Qualifying surviving spouse)/i);
+  const fs = text.match(/(Single|Married filing jointly|Married filing separately|Head of household|Qualifying surviving spouse|\bMFJ\b|\bMFS\b|\bHOH\b)/i);
   if (fs) {
-    out.filingStatus = fs[1];
+    const map: Record<string, string> = { MFJ: 'Married filing jointly', MFS: 'Married filing separately', HOH: 'Head of household' };
+    const raw = fs[1];
+    out.filingStatus = map[raw as keyof typeof map] || raw;
     out.snippets.push({ field: "filingStatus", context: grabContext(text, fs.index || 0, (fs.index || 0) + fs[0].length) });
   }
 
@@ -87,4 +96,3 @@ export function extract1040Fields(raw: string): Extracted1040Fields {
 
   return out;
 }
-
