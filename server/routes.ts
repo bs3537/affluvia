@@ -5437,6 +5437,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Tax return analysis endpoints
+  // Helper: sanitize potential PII from AI responses (e.g., SSN) before persistence
+  function sanitizeTaxAnalysisPII(obj: any): { cleaned: any; ssnHash?: string } {
+    try {
+      if (!obj || typeof obj !== 'object') return { cleaned: obj };
+      const clone = JSON.parse(JSON.stringify(obj));
+      const ssnRegex = /\b\d{3}-\d{2}-\d{4}\b|\b\d{9}\b/; // 123-45-6789 or 123456789
+      let ssnHash: string | undefined;
+      const crawl = (node: any, parent?: any, key?: string) => {
+        if (!node) return;
+        if (typeof node === 'string') {
+          if (ssnRegex.test(node)) {
+            // Hash and redact
+            const match = node.match(ssnRegex)?.[0] || '';
+            ssnHash = crypto.createHash('sha256').update(match).digest('hex');
+            if (parent && key) parent[key] = '[REDACTED]';
+          }
+          return;
+        }
+        if (typeof node === 'object') {
+          for (const k of Object.keys(node)) {
+            const v = node[k];
+            // Remove explicit SSN fields
+            if (/(^ssn$|socialSecurityNumber|social_security)/i.test(k)) {
+              if (typeof v === 'string' && ssnRegex.test(v)) {
+                const match = v.match(ssnRegex)?.[0] || '';
+                ssnHash = crypto.createHash('sha256').update(match).digest('hex');
+              }
+              delete node[k];
+              continue;
+            }
+            crawl(v, node, k);
+          }
+        }
+      };
+      crawl(clone);
+      return { cleaned: clone, ssnHash };
+    } catch {
+      return { cleaned: obj };
+    }
+  }
   app.post("/api/analyze-tax-return", upload.single("taxReturn"), async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
@@ -5482,6 +5522,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             extractionDate: new Date().toISOString()
           }
         };
+        // Sanitize potential PII such as SSN from AI output before persisting
+        const { cleaned, ssnHash } = sanitizeTaxAnalysisPII(analysisResult);
+        analysisResult = cleaned;
+        if (ssnHash) {
+          (analysisResult as any).extractedTaxData = (analysisResult as any).extractedTaxData || {};
+          (analysisResult as any).extractedTaxData.hashedSSN = ssnHash;
+        }
       } else if (comprehensiveAnalysis === "true") {
         // Scenario 1: No tax return - analyze only financial data
         analysisResult = await generateComprehensiveFinancialAnalysis(
@@ -14106,6 +14153,8 @@ async function generateHyperpersonalizedTaxRecommendations(
 
     // Get additional planning data from different centers
     const retirementData = profile.retirementPlanningData || {};
+    const taxReturn = profile.taxReturns || null;
+    const extracted = taxReturn?.extractedTaxData || null;
     
     // Get estate planning data
     const estatePlanning = profile.estatePlanning || {};
@@ -14135,6 +14184,35 @@ async function generateHyperpersonalizedTaxRecommendations(
 
     // Build comprehensive context from all available user data
     const formatCurrency = (amount: any) => amount ? `$${Number(amount).toLocaleString()}` : 'Not provided';
+    const toNumber = (n: any) => (Number.isFinite(Number(n)) ? Number(n) : 0);
+    const householdIncome = toNumber(profile.annualIncome) + toNumber(profile.spouseAnnualIncome) + toNumber(profile.otherIncome);
+    const filingStatusNormalized = (profile.taxFilingStatus || profile.maritalStatus || '').toString().toLowerCase();
+    const stateOfResidence = (profile.state || '').toString().toUpperCase();
+    const hasHDHP = !!(profile.healthInsurance?.planType === 'HDHP' || profile.healthInsurance?.hasHDHP);
+    const hasHSA = !!(profile.healthInsurance?.hasHSA || profile.hsaAccount?.exists);
+    const hasTaxableAccounts = Array.isArray(profile.assets) && profile.assets.some((a: any) => /brokerage|taxable|investment/i.test(a?.type || ''));
+    const hasUnrealizedLosses = false; // not imported by app — must remain false unless explicitly provided
+    const deferredCompPlanAvailable = !!profile.deferredCompPlanAvailable; // only true if explicitly stored
+    const dataAvailability = {
+      householdIncome,
+      filingStatusNormalized,
+      stateOfResidence,
+      hasHDHP,
+      hasHSA,
+      hasTaxableAccounts,
+      hasUnrealizedLosses,
+      deferredCompPlanAvailable,
+      hasTaxReturnPDF: !!taxReturn,
+      extractedTaxFigures: extracted ? {
+        adjustedGrossIncome: toNumber(extracted.adjustedGrossIncome),
+        taxableIncome: toNumber(extracted.taxableIncome),
+        totalDeductions: toNumber(extracted.totalDeductions),
+        effectiveTaxRate: toNumber(profile.taxReturns?.effectiveTaxRate),
+        marginalTaxRate: toNumber(profile.taxReturns?.marginalTaxRate),
+        filingStatus: extracted.filingStatus || null,
+        dependentCount: toNumber(extracted.dependentCount || 0)
+      } : null
+    };
     
     const userContext = `
 COMPREHENSIVE USER FINANCIAL PROFILE FOR TAX OPTIMIZATION:
@@ -14143,12 +14221,13 @@ PERSONAL INFORMATION:
 - Name: ${profile.firstName} ${profile.lastName}
 - Age: ${profile.dateOfBirth ? new Date().getFullYear() - new Date(profile.dateOfBirth).getFullYear() : 'Not provided'}
 - Marital Status: ${profile.maritalStatus || 'Not provided'}
-- State: ${profile.state || 'Not provided'}
+- State: ${stateOfResidence || 'Not provided'}
 - Dependents: ${profile.dependents || 0}
 - Spouse: ${profile.spouseName || 'Not applicable'}
 
 INCOME INFORMATION:
-- Annual Income: ${formatCurrency(profile.annualIncome)}
+- Household Income (authoritative): ${formatCurrency(householdIncome)}
+- User Annual Income: ${formatCurrency(profile.annualIncome)}
 - Spouse Annual Income: ${formatCurrency(profile.spouseAnnualIncome)}
 - Other Income: ${formatCurrency(profile.otherIncome)}
 - Employment Status: ${profile.employmentStatus || 'Not provided'}
@@ -14221,6 +14300,22 @@ TAX RETURN DATA:
 ${profile.taxReturns ? '- Tax return data available for enhanced analysis' : '- No tax return uploaded'}
 `;
 
+    const taxSystemPolicy = `
+STRICT TAX POLICY (Affluvia):
+- Use ONLY the data provided in INTAKE_DATA and TAX_RETURN_DATA below. Do NOT guess, infer, or fabricate missing values.
+- Household income = user + spouse + other income. Use the provided householdIncome; do NOT understate it.
+- State of residence = ${stateOfResidence || 'N/A'}. Do NOT assume California or any other state if not provided.
+- Filing status must be the provided value; if unavailable, avoid naming a status.
+- HSA recommendations only if hasHDHP===true. If false/unknown, use conditional language (“If you have an HDHP…”).
+- Tax‑Loss Harvesting only if hasTaxableAccounts===true AND hasUnrealizedLosses===true with numeric loss figures. Otherwise, omit TLH.
+- Deferred compensation only if deferredCompPlanAvailable===true WITH provided amounts. Otherwise, omit.
+- If a figure is missing, omit the strategy or present a generic, non‑fabricated tip without made‑up numbers.
+- Never state a specific tax bracket or state rate unless provided or computed from explicit taxable income + filing status.
+`;
+
+    const intakeBlock = `INTAKE_DATA (authoritative):\n${JSON.stringify(dataAvailability, null, 2)}`;
+    const taxReturnBlock = `TAX_RETURN_DATA (extracted, if available):\n${JSON.stringify(extracted || {}, null, 2)}`;
+
     const prompt = `
 Think hard. You are a certified tax strategist and financial planner. Based on the comprehensive financial profile above, generate HYPERPERSONALIZED tax reduction recommendations.
 
@@ -14281,7 +14376,8 @@ Ensure recommendations are:
 `;
 
     const text = await chatComplete([
-      { role: 'user', content: prompt }
+      { role: 'system', content: taxSystemPolicy },
+      { role: 'user', content: intakeBlock + "\n\n" + taxReturnBlock + "\n\n" + userContext + "\n\n" + prompt }
     ], { temperature: 0.7, stream: false });
 
     // Extract JSON from the response
