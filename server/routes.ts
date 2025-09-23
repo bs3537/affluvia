@@ -14193,6 +14193,20 @@ async function generateHyperpersonalizedTaxRecommendations(
     const hasTaxableAccounts = Array.isArray(profile.assets) && profile.assets.some((a: any) => /brokerage|taxable|investment/i.test(a?.type || ''));
     const hasUnrealizedLosses = false; // not imported by app — must remain false unless explicitly provided
     const deferredCompPlanAvailable = !!profile.deferredCompPlanAvailable; // only true if explicitly stored
+
+    // Retirement contributions snapshot (annual amounts when provided)
+    const rc = (profile as any)?.retirementContributions || {};
+    const src = (profile as any)?.spouseRetirementContributions || {};
+    const user401kEmployee = toNumber(rc.employee);
+    const user401kEmployer = toNumber(rc.employer);
+    const spouse401kEmployee = toNumber(src.employee);
+    const spouse401kEmployer = toNumber(src.employer);
+    const userTraditionalIRA = toNumber((profile as any)?.traditionalIRAContribution);
+    const userRothIRA = toNumber((profile as any)?.rothIRAContribution);
+    const spouseTraditionalIRA = toNumber((profile as any)?.spouseTraditionalIRAContribution);
+    const spouseRothIRA = toNumber((profile as any)?.spouseRothIRAContribution);
+    const retirementLimits2025 = { k401Limit: 23500, k401CatchUp50Plus: 7500, iraLimit: 7000, iraCatchUp50Plus: 1000, hsaFamily: 8550, hsaSingle: 4300 };
+
     const dataAvailability = {
       householdIncome,
       filingStatusNormalized,
@@ -14203,6 +14217,17 @@ async function generateHyperpersonalizedTaxRecommendations(
       hasUnrealizedLosses,
       deferredCompPlanAvailable,
       hasTaxReturnPDF: !!taxReturn,
+      retirementContributions: {
+        user401kEmployee,
+        user401kEmployer,
+        spouse401kEmployee,
+        spouse401kEmployer,
+        userTraditionalIRA,
+        userRothIRA,
+        spouseTraditionalIRA,
+        spouseRothIRA
+      },
+      retirementLimits2025,
       extractedTaxFigures: extracted ? {
         adjustedGrossIncome: toNumber(extracted.adjustedGrossIncome),
         taxableIncome: toNumber(extracted.taxableIncome),
@@ -14311,6 +14336,8 @@ STRICT TAX POLICY (Affluvia):
 - Deferred compensation only if deferredCompPlanAvailable===true WITH provided amounts. Otherwise, omit.
 - If a figure is missing, omit the strategy or present a generic, non‑fabricated tip without made‑up numbers.
 - Never state a specific tax bracket or state rate unless provided or computed from explicit taxable income + filing status.
+ - If married/partnered, analyze BOTH user and spouse. Evaluate and recommend retirement contribution maximization separately for each (401(k)/403(b)/TSP, Traditional IRA, Roth IRA), using retirementLimits2025 and the current contribution amounts in INTAKE_DATA.
+ - Do NOT presume IRA eligibility; if income or coverage data is insufficient, phrase recommendations conditionally without fabricating eligibility or phase‑outs.
 `;
 
     const intakeBlock = `INTAKE_DATA (authoritative):\n${JSON.stringify(dataAvailability, null, 2)}`;
@@ -14342,6 +14369,12 @@ FOCUS AREAS TO ANALYZE (using ALL available data):
 - Trust and estate tax strategies - use estate plan details if available
 - Charitable giving strategies - use estate and income data
 - Family tax planning - use spouse and dependent data
+
+MARRIAGE & RETIREMENT CONTRIBUTIONS (if married/partnered):
+- For User and Spouse separately:
+  • Check current 401(k)/403(b)/TSP employee contributions vs retirementLimits2025.k401Limit (and catch‑up if 50+). If below limit and cash flow allows, recommend a specific increase amount.
+  • Check Traditional IRA and Roth IRA current annual contributions vs retirementLimits2025.iraLimit (and catch‑up if 50+). If eligibility is uncertain at this income level, use conditional language without fabricating eligibility.
+  • Personalize titles and action steps using their names when available.
 
 Return ONLY a valid JSON object with this exact structure:
 {
