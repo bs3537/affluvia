@@ -42,6 +42,9 @@ sessions/
 *.sqlite3
 *.db
 
+# Tesseract data files
+*.traineddata
+
 # Serena MCP memory files
 .serena/uploads/
 .server_pid

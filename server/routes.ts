@@ -13390,10 +13390,8 @@ Double-check all calculations before returning results.`;
         return cachedAI;
       }
       const tLLM0 = Date.now();
-      const disableTaxTimeout = String(process.env.XAI_DISABLE_TIMEOUT_TAX || 'false').toLowerCase() === 'true';
-      const timeoutSingle = disableTaxTimeout
-        ? 0
-        : Number(process.env.XAI_TIMEOUT_MS_SINGLE || 60000);
+      // No-timeout by default for Tax Insights; set XAI_TIMEOUT_MS_SINGLE to override
+      const timeoutSingle = Number(process.env.XAI_TIMEOUT_MS_SINGLE || 0);
       const ai = await chatComplete([
         { role: 'user', content: combined }
       ], { temperature: 0.2, stream: false, timeoutMs: timeoutSingle });
