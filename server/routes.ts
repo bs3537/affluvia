@@ -13246,7 +13246,17 @@ Please provide a detailed, personalized response that demonstrates deep understa
       
       // Extract readable text from PDF (fast path), avoid passing base64 to the model
       const { extractPdfText } = await import('./services/pdf-text-extractor');
-      const text = await extractPdfText(pdfBuffer);
+      let text = await extractPdfText(pdfBuffer);
+      if (!text || text.length < 200) {
+        // OCR fallback for scanned PDFs
+        try {
+          const { ocrPdfToText } = await import('./services/pdf-ocr-fallback');
+          const ocrText = await ocrPdfToText(pdfBuffer);
+          if (ocrText && ocrText.length > text.length) text = ocrText;
+        } catch (e) {
+          console.warn('[OCR] Fallback module unavailable:', (e as any)?.message || e);
+        }
+      }
       
       // Parse key 1040 fields deterministically
       const { extract1040Fields } = await import('./services/tax-return-extractors');
