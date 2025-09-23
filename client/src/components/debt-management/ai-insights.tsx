@@ -78,7 +78,7 @@ export function AIInsights({ debts, summary, activePlan }: AIInsightsProps) {
     }
     (async () => {
       try {
-        const resp = await fetch('/api/ai-debt-insights');
+        const resp = await fetch('/api/ai-debt-insights', { credentials: 'include' });
         if (resp.ok) {
           const data = await resp.json();
           setInsights(Array.isArray(data.insights) ? data.insights : []);
@@ -96,6 +96,7 @@ export function AIInsights({ debts, summary, activePlan }: AIInsightsProps) {
       const response = await fetch("/api/ai-debt-insights", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: 'include',
         body: JSON.stringify({
           debts,
           summary,
