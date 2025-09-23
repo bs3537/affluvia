@@ -148,7 +148,7 @@ export function RetirementInsights() {
             </Button>
           </CardTitle>
           <CardDescription className="text-purple-200/80">
-            Top prioritized insights based on your saved retirement analysis
+            Top AI-powered insights based on your saved retirement analysis
             {data?.lastUpdated && (
               <span className="ml-2 text-purple-300/70">• Last generated: {new Date(data.lastUpdated).toLocaleString()}</span>
             )}
