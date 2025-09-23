@@ -1887,7 +1887,7 @@ export class DatabaseStorage implements IStorage {
       .values({
         userId,
         insights: data.insights,
-        generatedByModel: data.generatedByModel || "gemini-2.5-flash-lite",
+        generatedByModel: data.generatedByModel || "grok-4-fast-reasoning",
         generationPrompt: data.generationPrompt,
         generationVersion: data.generationVersion || "2.0-comprehensive",
         financialSnapshot: data.financialSnapshot,
@@ -1903,7 +1903,7 @@ export class DatabaseStorage implements IStorage {
         target: dashboardInsights.userId,
         set: {
           insights: data.insights,
-          generatedByModel: data.generatedByModel || "gemini-2.5-flash-lite",
+          generatedByModel: data.generatedByModel || "grok-4-fast-reasoning",
           generationPrompt: data.generationPrompt,
           generationVersion: data.generationVersion || "2.0-comprehensive",
           financialSnapshot: data.financialSnapshot,

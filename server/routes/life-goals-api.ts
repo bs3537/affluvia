@@ -2,20 +2,19 @@ import { Request, Response, NextFunction } from 'express';
 import { Storage } from '../storage';
 import { calculateLifeGoalScenario, generateLifeGoalInsights } from '../services/life-goals-service';
 
-// Generate goal recommendations using Gemini
+// Generate goal recommendations using XAI Grok
 async function generateGoalRecommendations(prompt: string, goalData: any) {
   try {
-    const { GoogleGenerativeAI } = require('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const { chatComplete } = await import('../services/xai-client');
 
     const enhancedPrompt = `${prompt}
     
     Please provide specific, actionable recommendations. Each recommendation should be practical and based on the user's actual financial situation.
     Return ONLY a valid JSON array, no markdown or additional text.`;
 
-    const result = await model.generateContent(enhancedPrompt);
-    const responseText = result.response.text();
+    const responseText = await chatComplete([
+      { role: 'user', content: enhancedPrompt }
+    ], { temperature: 0.7, stream: false });
     
     // Parse the JSON response
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);

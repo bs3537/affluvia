@@ -2,7 +2,7 @@ import { PlaidApi } from 'plaid';
 import { db } from '../db';
 import { plaidItems, plaidAccounts, financialProfiles } from '../../shared/schema';
 import { eq, and, inArray } from 'drizzle-orm';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { chatComplete } from './xai-client';
 import PlaidConfig from '../config/plaid-config';
 import { EncryptionService } from './encryption-service';
 
@@ -10,9 +10,7 @@ import { EncryptionService } from './encryption-service';
 const configuration = PlaidConfig.getConfiguration();
 const plaidClient = new PlaidApi(configuration);
 
-// Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || '');
-const geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
+// XAI client is used on demand in enhanceWithGemini
 
 // Expense categories from intake form Step 5
 export interface ExpenseCategories {
@@ -346,8 +344,9 @@ export class PlaidTransactionCategorizer {
         Where confidence is 0-100.
       `;
       
-      const result = await geminiModel.generateContent(prompt);
-      const text = result.response.text();
+      const text = await chatComplete([
+        { role: 'user', content: prompt }
+      ], { temperature: 0.7, stream: false });
       
       // Parse JSON response
       const jsonMatch = text.match(/\{[\s\S]*\}/);

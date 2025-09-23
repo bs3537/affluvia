@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { chatComplete } from "./services/xai-client";
 import crypto from "node:crypto";
 import { storage } from "./storage";
 import type {
@@ -10,7 +10,7 @@ import type {
   FinancialProfile,
 } from "@shared/schema";
 
-const GEMINI_MODEL = "gemini-2.5-flash-lite";
+const AI_MODEL = "grok-4-fast-reasoning";
 
 const isUndefinedTableError = (error: unknown): boolean => {
   return Boolean(
@@ -238,11 +238,6 @@ export async function assembleEstateInsightsContext(userId: number, estatePlan?:
 }
 
 export async function generateEstateInsightsFromContext(context: EstateInsightsContext): Promise<EstateInsightsPayload> {
-  const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Gemini API key not configured");
-  }
-
   const systemPrompt = [
     "You are Affluvia's in-house estate planning strategist.",
     "Think hard.",
@@ -252,15 +247,6 @@ export async function generateEstateInsightsFromContext(context: EstateInsightsC
     "Reference the provided data precisely; do not fabricate figures.",
     "Recommendations must be personalized, actionable, and compliant with U.S. estate planning norms.",
   ].join(" ");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: GEMINI_MODEL,
-    systemInstruction: {
-      role: "system",
-      parts: [{ text: systemPrompt }],
-    },
-  });
 
   const contextHash = hashContext(context);
 
@@ -294,8 +280,10 @@ Ensure priorities are unique integers starting at 1 and incrementing by 1.`;
 
   const userContent = `ESTATE CONTEXT (JSON):\n${JSON.stringify(context, null, 2)}\n\nINSTRUCTIONS:\n${guidance}`;
 
-  const result = await model.generateContent(userContent);
-  const text = result.response.text();
+  const text = await chatComplete([
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userContent }
+  ], { temperature: 0.7, stream: false });
 
   const jsonMatch = extractFirstJson(text);
   if (!jsonMatch) {
@@ -334,7 +322,7 @@ Ensure priorities are unique integers starting at 1 and incrementing by 1.`;
   return {
     generatedAt: new Date().toISOString(),
     recommendations: normalized.sort((a, b) => a.priority - b.priority),
-    model: GEMINI_MODEL,
+    model: AI_MODEL,
     contextHash,
     raw: text,
   };

@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { chatComplete } from "../services/xai-client";
 import { buildComprehensiveUserContext, formatUserDataForAI } from "../ai-context-builder";
 
 interface FundingSource {
@@ -136,9 +136,7 @@ export async function generateLifeGoalInsights(goal: LifeGoal, profile: any, use
       return [];
     }
 
-    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
+    // Use Grok for AI generation
     // Parse funding sources and metadata
     const fundingSources = typeof goal.fundingSources === 'string' 
       ? JSON.parse(goal.fundingSources) 
@@ -298,9 +296,9 @@ export async function generateLifeGoalInsights(goal: LifeGoal, profile: any, use
     ]
     `;
     
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     
     // Extract JSON from response
     const jsonMatch = text.match(/\[[\s\S]*\]/);

@@ -1,14 +1,11 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import * as dotenv from "dotenv";
+import { chatComplete } from "./services/xai-client";
 import * as crypto from "crypto";
 import { db } from './db';
 import { plaidAccounts, plaidItems, plaidAggregatedSnapshot, plaidTransactions } from '../shared/schema';
 import { eq, and, desc, gte } from 'drizzle-orm';
 
 dotenv.config();
-
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "");
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
 interface InsightItem {
   title: string;
@@ -1383,9 +1380,9 @@ Return ONLY valid JSON with QUANTIFIED IMPACT ANALYSIS:
 Analyze this client's situation and provide actionable, prioritized recommendations.`;
 
   try {
-    const result = await model.generateContent(generationPrompt);
-    const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: generationPrompt }
+    ], { temperature: 0.7, stream: false });
     
     try {
       // Extract JSON from response
@@ -1427,7 +1424,7 @@ Analyze this client's situation and provide actionable, prioritized recommendati
       };
 
     } catch (parseError) {
-      console.error("Failed to parse Gemini insights response:", parseError);
+      console.error("Failed to parse AI insights response:", parseError);
       
       // Fallback insights
       return {
@@ -1452,7 +1449,7 @@ Analyze this client's situation and provide actionable, prioritized recommendati
     }
 
   } catch (error) {
-    console.error("Error generating Gemini insights:", error);
+    console.error("Error generating AI insights:", error);
     
     // Fallback insights
     return {

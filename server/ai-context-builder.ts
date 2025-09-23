@@ -806,17 +806,7 @@ SIMULATION RESULTS:
  */
 export async function generateEnhancedAIResponse(message: string, userId: number): Promise<string> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
-    }
-    
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
+    const { chatComplete } = await import('./services/xai-client');
     
     // Build comprehensive user context
     const userData = await buildComprehensiveUserContext(userId);
@@ -862,8 +852,10 @@ GENERAL GUIDANCE:
 
 Please provide a detailed, personalized response that demonstrates deep understanding of their complete financial situation.`;
 
-    const result = await model.generateContent(fullPrompt);
-    return result.response.text();
+    const text = await chatComplete([
+      { role: 'user', content: fullPrompt }
+    ], { temperature: 0.7, stream: false });
+    return text;
     
   } catch (error) {
     console.error("Enhanced AI response error:", error);

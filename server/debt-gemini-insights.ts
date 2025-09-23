@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { chatComplete } from './services/xai-client';
 import { db } from './db';
 import { debts as debtsTable, debtPayoffPlans, debtScenarios, debtAIInsights } from '../shared/schema';
 import { and, desc, eq } from 'drizzle-orm';
@@ -64,14 +64,8 @@ export async function generateDebtInsightsForUser(userId: number): Promise<{ ins
 
   const summary = computeSummary(userDebts as any[]);
 
-  // 2) Build Gemini model with systemInstruction that includes “Think Hard”
-  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || '');
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction:
-      'Think Hard. You are a CFP crafting debt management insights. Use the provided JSON context only. Provide at least five ranked, highly personalized recommendations with action steps and quantified monetary impact. Return strict JSON only.'
-  } as any);
+  // 2) System instruction for Grok
+  const systemInstruction = 'Think Hard. You are a CFP crafting debt management insights. Use the provided JSON context only. Provide at least five ranked, highly personalized recommendations with action steps and quantified monetary impact. Return strict JSON only.';
 
   // 3) Compose prompt with full debt context
   const context = {
@@ -152,8 +146,10 @@ export async function generateDebtInsightsForUser(userId: number): Promise<{ ins
 
   let insights: UiInsight[] = [];
   try {
-    const result = await model.generateContent(generationInput);
-    const text = (await result.response).text();
+    const text = await chatComplete([
+      { role: 'system', content: systemInstruction },
+      { role: 'user', content: generationInput }
+    ], { temperature: 0.7, stream: false });
     const jsonMatch = text.match(/```json\n?([\s\S]*?)\n?```/) || text.match(/({[\s\S]*})/);
     const raw = JSON.parse(jsonMatch?.[1] || text);
     insights = (raw.insights || []).map((i: any) => {

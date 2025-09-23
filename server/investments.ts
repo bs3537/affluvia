@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { chatComplete } from "./services/xai-client";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -32,9 +32,7 @@ interface MarketOutlookData {
   };
 }
 
-// Initialize Gemini API
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "");
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+// Use XAI Grok model via chatComplete wrapper
 
 async function searchMarketOutlook(): Promise<MarketOutlookData> {
   try {
@@ -90,9 +88,9 @@ async function searchMarketOutlook(): Promise<MarketOutlookData> {
     }
     `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     
     try {
       const jsonMatch = text.match(/```json\n?([\s\S]*?)\n?```/) || text.match(/({[\s\S]*})/);
@@ -185,9 +183,9 @@ async function searchInvestmentStocks(category: string): Promise<Investment[]> {
     List exactly 5 stocks, ordered by FCF growth rate (highest first).
     `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     
     try {
       const jsonMatch = text.match(/```json\n?([\s\S]*?)\n?```/) || text.match(/({[\s\S]*})/);

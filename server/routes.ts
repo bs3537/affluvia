@@ -67,19 +67,9 @@ async function parseEstateDocument(
       documentType
     });
     
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
-    }
+    const { chatComplete } = await import('./services/xai-client');
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
-
-    // Convert PDF buffer to base64 for Gemini
+    // Convert PDF buffer to base64 for inclusion in prompt
     const pdfBase64 = pdfBuffer.toString('base64');
 
     const prompt = `You are an expert estate planning attorney analyzing an estate planning document.
@@ -145,20 +135,11 @@ Return the analysis in JSON format with these fields:
   "recommendations": ["Suggested updates or improvements based on modern estate planning best practices"]
 }`;
 
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          mimeType: 'application/pdf',
-          data: pdfBase64,
-        },
-      },
-      { text: prompt },
-    ]);
-
-    const response = result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: `PDF_BASE64 (application/pdf):\n${pdfBase64}\n\n${prompt}` }
+    ], { temperature: 0.7, stream: false });
     
-    console.log('Gemini response for estate document:', text.substring(0, 500) + '...');
+    console.log('AI response for estate document:', text.substring(0, 500) + '...');
     
     // Parse JSON from response - look for the first complete JSON object
     const jsonStart = text.indexOf('{');
@@ -169,7 +150,7 @@ Return the analysis in JSON format with these fields:
         const jsonString = text.substring(jsonStart, jsonEnd + 1);
         return JSON.parse(jsonString);
       } catch (parseError) {
-        console.error('Failed to parse Gemini JSON response:', parseError);
+        console.error('Failed to parse AI JSON response:', parseError);
         console.log('Attempted to parse:', text.substring(jsonStart, Math.min(jsonStart + 200, jsonEnd + 1)));
       }
     }
@@ -376,23 +357,16 @@ async function generateDocumentAIAnalysis(content: { text: string | null; data: 
       };
     }
 
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      console.log('No Gemini API key found');
+    const { chatComplete } = await import('./services/xai-client');
+    if (!process.env.XAI_API_KEY) {
+      console.log('No XAI API key found');
       return {
         summary: `Document ${fileName} uploaded successfully`,
         insights: { status: 'ai_analysis_unavailable' }
       };
     }
     
-    console.log('Initializing Gemini AI...');
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
+    console.log('Calling XAI Grok...');
 
     const prompt = `You are a financial analyst reviewing a document for a financial planning client.
 
@@ -413,10 +387,9 @@ Provide a concise analysis in JSON format:
   "relevanceToFinancialPlanning": "How this document relates to overall financial planning"
 }`;
 
-    console.log('Calling Gemini API...');
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     console.log(`AI response received: ${text.substring(0, 100)}...`);
     
     try {
@@ -1213,7 +1186,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // ✅ Save completely fresh insights to database
         await storage.createDashboardInsights(targetUserId, {
             insights: insightsResult.insights,
-            generatedByModel: "gemini-2.5-flash-lite",
+            generatedByModel: "grok-4-fast-reasoning",
             generationPrompt: insightsResult.generationPrompt,
             generationVersion: "1.0",
             financialSnapshot: insightsResult.financialSnapshot,
@@ -1433,7 +1406,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             const newInsights = await storage.createDashboardInsights(userId, {
               insights: insightsResult.insights,
-              generatedByModel: "gemini-2.5-flash-lite",
+              generatedByModel: "grok-4-fast-reasoning",
               generationPrompt: insightsResult.generationPrompt,
               generationVersion: "1.0",
               financialSnapshot: insightsResult.financialSnapshot,
@@ -1577,7 +1550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Save insights to database
       const newInsights = await storage.createDashboardInsights(userId, {
         insights: insightsResult.insights,
-        generatedByModel: "gemini-2.5-flash-lite",
+        generatedByModel: "grok-4-fast-reasoning",
         generationPrompt: insightsResult.generationPrompt,
         generationVersion: "1.0",
         financialSnapshot: insightsResult.financialSnapshot,
@@ -1703,7 +1676,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Save comprehensive insights (separate from regular dashboard insights)
       const savedInsights = await storage.createComprehensiveInsights(userId, {
         insights: insightsResult.insights,
-        generatedByModel: "gemini-2.5-flash-lite",
+        generatedByModel: "grok-4-fast-reasoning",
         generationPrompt: insightsResult.generationPrompt,
         generationVersion: "2.0-comprehensive",
         financialSnapshot: insightsResult.financialSnapshot,
@@ -4855,9 +4828,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cachedSuggestions.data);
       }
       
-      // Generate suggestions using Gemini
-      const { GoogleGenerativeAI } = await import("@google/generative-ai");
-      const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+      // Generate suggestions using XAI Grok
+      const { chatComplete } = await import('./services/xai-client');
+      const apiKey = process.env.XAI_API_KEY;
       
       if (!apiKey) {
         // Return default suggestions if no API key
@@ -4885,8 +4858,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
       
       const prompt = `As a financial advisor, provide 3 specific, actionable suggestions to improve cash flow based on:
       
@@ -4910,9 +4881,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       Focus on: expense reduction if high expenses, income increase if low income, specific category cuts if any exceed recommended percentages.`;
       
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+      const text = await chatComplete([
+        { role: 'user', content: prompt }
+      ], { temperature: 0.7, stream: false });
       
       // Parse JSON from response
       let suggestions = [];
@@ -4975,9 +4946,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cachedSuggestions.data);
       }
       
-      // Generate suggestions using Gemini
-      const { GoogleGenerativeAI } = await import("@google/generative-ai");
-      const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+      // Generate suggestions using XAI Grok
+      const { chatComplete } = await import('./services/xai-client');
+      const apiKey = process.env.XAI_API_KEY;
       
       if (!apiKey) {
         // Return default suggestions if no API key
@@ -5005,8 +4976,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
       
       const prompt = `As a financial advisor, provide 3 specific, actionable suggestions to improve net worth based on:
       
@@ -5030,9 +4999,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       Focus on: debt reduction if high debt, investment optimization if low retirement, real estate if applicable.`;
       
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+      const text = await chatComplete([
+        { role: 'user', content: prompt }
+      ], { temperature: 0.7, stream: false });
       
       // Parse JSON from response
       let suggestions = [];
@@ -5095,9 +5064,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cachedSuggestions.data);
       }
       
-      // Generate suggestions using Gemini
-      const { GoogleGenerativeAI } = await import("@google/generative-ai");
-      const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+      // Generate suggestions using XAI Grok
+      const { chatComplete } = await import('./services/xai-client');
+      const apiKey = process.env.XAI_API_KEY;
       
       if (!apiKey) {
         // Return default suggestions if no API key
@@ -5128,8 +5097,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
       
       const prompt = `As a financial advisor, analyze this financial health score breakdown and provide exactly 3 personalized, actionable recommendations to improve the overall financial health score.
       
@@ -5158,9 +5125,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       Make suggestions ultra-specific and actionable, not generic advice.`;
       
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+      const text = await chatComplete([
+        { role: 'user', content: prompt }
+      ], { temperature: 0.7, stream: false });
       
       // Parse JSON from response
       let suggestions = [];
@@ -5610,7 +5577,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           insights: insights,
           profileDataHash,
           generationVersion: '1.0',
-          generatedByModel: 'gemini-2.5-flash-lite',
+          generatedByModel: 'grok-4-fast-reasoning',
           financialSnapshot: (profile as any)?.calculations || null,
         });
       } catch (e) {
@@ -5643,7 +5610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             insights,
             profileDataHash: currentProfileHash,
             generationVersion: '1.0',
-            generatedByModel: 'gemini-2.5-flash-lite',
+            generatedByModel: 'grok-4-fast-reasoning',
             financialSnapshot: (profile as any)?.calculations || null,
           });
           return res.json(insights);
@@ -5667,9 +5634,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   async function generateCentralInsights(userId: number): Promise<any> {
     const { buildComprehensiveUserContext } = await import('./ai-context-builder');
     const { formatUserDataForAI } = await import('./ai-context-builder');
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) throw new Error("Gemini API key not configured");
+    const { chatComplete } = await import('./services/xai-client');
 
     // Build comprehensive context used by AI Assistant
     const userData = await buildComprehensiveUserContext(userId);
@@ -5690,12 +5655,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .filter(a => typeof a.type === 'string' && /brokerage|investment|taxable|etf|stock|fund/i.test(a.type))
       .reduce((s, a) => s + (Number(a.value) || 0), 0);
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
-      systemInstruction:
-        "Think Hard. You are a CFP generating comprehensive, cross-domain financial insights. Use only the provided database-backed context. Return strict JSON as instructed."
-    } as any);
+    const systemInstruction = "Think Hard. You are a CFP generating comprehensive, cross-domain financial insights. Use only the provided database-backed context. Return strict JSON as instructed.";
 
     const prompt = `${contextPrompt}
 
@@ -5731,8 +5691,10 @@ Return ONLY valid JSON:
   "lastUpdated": "${new Date().toISOString()}"
 }`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
+    const text = await chatComplete([
+      { role: 'system', content: systemInstruction },
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) {
       // Fallback minimal structure
@@ -5811,12 +5773,7 @@ Return ONLY valid JSON:
   }
   async function generateRetirementInsights(userId: number, profile: any): Promise<any> {
     try {
-      const { GoogleGenerativeAI } = await import("@google/generative-ai");
-      const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-      if (!apiKey) throw new Error("Gemini API key not configured");
-
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+      const { chatComplete } = await import('./services/xai-client');
 
       // Pull relevant persisted retirement data
       const planning = profile.retirementPlanningData || {};
@@ -5949,8 +5906,9 @@ Return ONLY valid JSON like:
 }
 `;
 
-      const result = await model.generateContent(context + "\n\n" + prompt);
-      const text = result.response.text();
+      const text = await chatComplete([
+        { role: 'user', content: context + "\n\n" + prompt }
+      ], { temperature: 0.7, stream: false });
       const match = text.match(/\{[\s\S]*\}/);
       if (match) {
         const parsed = JSON.parse(match[0]);
@@ -8577,17 +8535,10 @@ Return ONLY valid JSON like:
         where: eq(financialProfiles.userId, req.user!.id)
       });
       
-      const { GoogleGenerativeAI } = await import("@google/generative-ai");
-      
-      const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(500).json({ error: "Gemini API key not configured" });
+      const { chatComplete } = await import('./services/xai-client');
+      if (!process.env.XAI_API_KEY) {
+        return res.status(500).json({ error: "XAI API key not configured" });
       }
-
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({
-        model: "gemini-2.5-flash-lite",
-      });
 
       // Build comprehensive context from complete user data
       const formatCurrency = (amount: any) => amount ? `$${Number(amount).toLocaleString()}` : 'Not provided';
@@ -8732,8 +8683,9 @@ If the user asks about topics outside of education funding, gently redirect them
 
 Keep responses concise but comprehensive, and always base recommendations on their specific financial situation and goals.`;
 
-      const result = await model.generateContent(prompt);
-      const response = result.response.text();
+      const response = await chatComplete([
+        { role: 'user', content: prompt }
+      ], { temperature: 0.7, stream: false });
 
       res.json({ response });
     } catch (error) {
@@ -8753,17 +8705,10 @@ Keep responses concise but comprehensive, and always base recommendations on the
         financialProfile
       } = req.body;
       
-      const { GoogleGenerativeAI } = await import("@google/generative-ai");
-      
-      const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(500).json({ error: "Gemini API key not configured" });
+      const { chatComplete } = await import('./services/xai-client');
+      if (!process.env.XAI_API_KEY) {
+        return res.status(500).json({ error: "XAI API key not configured" });
       }
-
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({
-        model: "gemini-2.5-flash-lite",
-      });
 
       const formatCurrency = (amount: number) => `$${Math.abs(amount).toLocaleString()}`;
       
@@ -8831,8 +8776,9 @@ Response format:
   "alternativeStrategy": "If NO, what alternative strategy might work better"
 }`;
 
-      const result = await model.generateContent(prompt);
-      const response = result.response.text();
+      const response = await chatComplete([
+        { role: 'user', content: prompt }
+      ], { temperature: 0.7, stream: false });
       
       // Parse the AI response
       let validationResult;
@@ -9963,7 +9909,7 @@ import {
 } from './monte-carlo-enhanced';
 import { mcPool } from './services/mc-pool';
 import { analyzeRetirementGaps } from './retirement-gap-analyzer';
-import { GoogleGenerativeAI } from "@google/generative-ai";
+// Using XAI client via dynamic imports in relevant functions
 import { calculateWithdrawalSequence, aggregateAssetsByType } from './retirement-withdrawal';
 import { calculateMonteCarloWithdrawalSequence as generateMonteCarloWithdrawalSequence } from './monte-carlo-withdrawal-sequence';
 
@@ -10104,7 +10050,7 @@ function analyzeRetirementContributionOpportunities(profile: any, metrics: any) 
   return opportunities;
 }
 
-// Generate retirement optimization suggestions using Gemini AI
+// Generate retirement optimization suggestions using XAI Grok
 async function generateRetirementOptimizationSuggestions(
   profile: any,
   currentResult: any,
@@ -10115,8 +10061,7 @@ async function generateRetirementOptimizationSuggestions(
     spouseAge: number;
   }
 ): Promise<string> {
-  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+  const { chatComplete } = await import('./services/xai-client');
 
   const userRiskProfile = profile.riskQuestions?.[0] || 3;
   const spouseRiskProfile = profile.spouseRiskQuestions?.[0] || 3;
@@ -10194,9 +10139,11 @@ Rules:
 - For Social Security, only say "Optimize Social Security claiming strategy"`;
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text();
+    const { chatComplete } = await import('./services/xai-client');
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
+    return text;
   } catch (error) {
     console.error('Error generating optimization suggestions:', error);
     // Return structured fallback suggestions following priority order
@@ -10703,24 +10650,17 @@ async function calculateEducationProjection(goal: EducationGoal, userId: number)
   };
 }
 
-// Generate education funding recommendations using Gemini
+// Generate education funding recommendations using XAI Grok
 async function generateEducationRecommendations(
   goal: EducationGoal, 
   projection: any, 
   profile: FinancialProfile | null
 ): Promise<string> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      return "AI recommendations unavailable. Please configure Gemini API.";
+    const { chatComplete } = await import('./services/xai-client');
+    if (!process.env.XAI_API_KEY) {
+      return "AI recommendations unavailable. Please configure XAI API.";
     }
-    
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
     
     const userState = goal.stateOfResidence || profile?.state || 'CA';
     const retirementOnTrack = true; // Simplified - would calculate from profile
@@ -10766,9 +10706,10 @@ async function generateEducationRecommendations(
     End with a brief disclaimer that this is general educational information, not personalized financial advice.
     `;
     
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text();
+    const response = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
+    return response;
   } catch (error) {
     console.error('Error generating education recommendations:', error);
     return `Based on our analysis:
@@ -10786,13 +10727,10 @@ This is general educational information. Consult a financial advisor for persona
 // Generate structured education recommendations for display
 async function generateStructuredEducationRecommendations(goals: any[], profile: any): Promise<any[]> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
+    const { chatComplete } = await import('./services/xai-client');
+    if (!process.env.XAI_API_KEY) {
+      throw new Error("XAI API key not configured");
     }
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     // For structured recommendations, use the first goal's state or profile state
     const userState = goals[0]?.stateOfResidence || profile?.state || 'CA';
     
@@ -10842,7 +10780,9 @@ async function generateStructuredEducationRecommendations(goals: any[], profile:
     
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     
     // Parse JSON response
     try {
@@ -10935,17 +10875,10 @@ async function generatePersonalizedGoalRecommendations(
   savedScenario?: any
 ): Promise<any[]> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
+    const { chatComplete } = await import('./services/xai-client');
+    if (!process.env.XAI_API_KEY) {
       return generateDefaultPersonalizedRecommendations(goal, profile);
     }
-    
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
     
     const userState = goal.stateOfResidence || profile?.state || 'CA';
     const currentYear = new Date().getFullYear();
@@ -11030,9 +10963,9 @@ Be explicit about:
 
   Return ONLY the JSON array with no extra text.`;
     
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     
     // Parse JSON response
     try {
@@ -11185,17 +11118,10 @@ async function generateAllGoalsRecommendations(
   profile: FinancialProfile | null
 ): Promise<string> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      return "AI recommendations unavailable. Please configure Gemini API.";
+    const { chatComplete } = await import('./services/xai-client');
+    if (!process.env.XAI_API_KEY) {
+      return "AI recommendations unavailable. Please configure XAI API.";
     }
-    
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
     
     const userState = profile?.state || 'CA';
     const retirementOnTrack = true; // Simplified - would calculate from profile
@@ -11238,9 +11164,10 @@ async function generateAllGoalsRecommendations(
     End with a brief disclaimer about this being general educational information.
     `;
     
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text();
+    const response = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
+    return response;
   } catch (error) {
     console.error('Error generating all goals recommendations:', error);
     
@@ -12224,9 +12151,11 @@ async function calculateFinancialMetrics(profileData: any, estateDocuments: any[
       healthScore,
       netWorthScore,
       emergencyScore,
+      emergencyReadinessScoreCFP: emergencyReadinessScore,
       dtiScore,
       savingsRateScore,
       insuranceScore,
+      insuranceAdequacy: insuranceResult,
       retirementScore,
       arrsDetails: null, // Calculated on-demand via separate endpoint
       dtiRatio,
@@ -12956,23 +12885,13 @@ function generatePersonalizedRecommendations(profileData: any, metrics: any) {
     .slice(0, 5); // Return top 5 recommendations
 }
 
-// Gemini AI integration
+// AI integration (XAI Grok)
 async function generateAIResponse(
   message: string,
   userId: number,
 ): Promise<string> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
+    const { chatComplete } = await import('./services/xai-client');
 
     // Get user's financial profile for context
     const profile = await storage.getFinancialProfile(userId);
@@ -13161,11 +13080,12 @@ Instructions:
 
 Please provide a detailed, personalized response that demonstrates deep understanding of their complete financial situation and maintains consistency with all dashboard metrics.`;
 
-    const result = await model.generateContent(contextPrompt);
-    const response = result.response;
-    return response.text();
+    const response = await chatComplete([
+      { role: 'user', content: contextPrompt }
+    ], { temperature: 0.7, stream: false });
+    return response;
   } catch (error) {
-    console.error("Gemini API error:", error);
+    console.error("AI API error:", error);
 
     // Fallback responses
     const fallbackResponses = [
@@ -13193,22 +13113,12 @@ async function analyzeTaxReturnWithGemini(
   userId: number
 ): Promise<any> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
+    const { chatComplete } = await import('./services/xai-client');
 
     // Get user's financial profile for additional context
     const profile = await storage.getFinancialProfile(userId);
     
-    // Convert PDF buffer to base64 for Gemini
+    // Convert PDF buffer to base64 for inclusion in prompt
     const pdfBase64 = pdfBuffer.toString('base64');
 
     const prompt = `Think hard. You are a certified tax professional analyzing a tax return to provide personalized tax reduction strategies.
@@ -13321,18 +13231,10 @@ IMPORTANT: Take extra time to ensure accuracy. Each strategy must include:
 
 Double-check all calculations before returning results.`;
 
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          mimeType: "application/pdf",
-          data: pdfBase64,
-        },
-      },
-      { text: prompt },
-    ]);
-
-    const response = await result.response;
-    const text = response.text();
+    const combined = `PDF_BASE64 (application/pdf):\n${pdfBase64}\n\n${prompt}`;
+    const text = await chatComplete([
+      { role: 'user', content: combined }
+    ], { temperature: 0.7, stream: false });
     
     // Extract JSON from the response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -13381,17 +13283,7 @@ async function generateComprehensiveFinancialAnalysis(
   userId: number
 ): Promise<any> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
+    const { chatComplete } = await import('./services/xai-client');
 
     // Get comprehensive user financial data
     const profile = await storage.getFinancialProfile(userId);
@@ -13500,9 +13392,9 @@ Return JSON with this exact structure:
   "marginalTaxRate": ${taxOverview.marginalTaxRate}
 }`;
 
-    const result = await model.generateContent([{ text: prompt }]);
-    const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     
     // Extract JSON from the response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -13739,20 +13631,22 @@ function calculateMarginalRate(taxableIncome: number): number {
 // Generate comprehensive AI-powered insights for dashboard using all available data
 async function generateComprehensiveInsights(profileData: any, metrics: any): Promise<any[]> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Gemini AI key not configured");
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
+    const { chatComplete } = await import('./services/xai-client');
 
     const age = profileData.dateOfBirth ? 
       new Date().getFullYear() - new Date(profileData.dateOfBirth).getFullYear() : 30;
+
+    // Prefer persisted widget scores where available
+    const ersScore =
+      (typeof metrics.emergencyReadinessScoreCFP === 'number' ? metrics.emergencyReadinessScoreCFP : undefined) ??
+      (typeof metrics.emergencyScore === 'number' ? metrics.emergencyScore : undefined) ??
+      0;
+    const insuranceAdequacyScore =
+      (metrics.insuranceAdequacy && typeof metrics.insuranceAdequacy.score === 'number'
+        ? metrics.insuranceAdequacy.score
+        : undefined) ??
+      (typeof metrics.insuranceScore === 'number' ? metrics.insuranceScore : undefined) ??
+      0;
 
     // Get comprehensive dashboard widget data for insights
     let monteCarloData = null;
@@ -13793,6 +13687,11 @@ async function generateComprehensiveInsights(profileData: any, metrics: any): Pr
     
     const prompt = `You are an expert CFP providing personalized financial insights based on comprehensive dashboard analysis.
 
+AUTHORITATIVE METRICS (use as-is; do NOT recompute):
+- Emergency Readiness Score (ERS, CFP-aligned): ${ersScore}/100
+- Insurance Adequacy Score (IAS): ${insuranceAdequacyScore}/100
+- Retirement Readiness Score: ${metrics.retirementScore}/100
+
 User Profile:
 - Name: ${profileData.firstName || 'User'}
 - Age: ${age}
@@ -13806,9 +13705,10 @@ Complete Financial Dashboard Data:
 - Financial Health Score: ${metrics.healthScore}/100
 - Net Worth: $${metrics.totalAssets - metrics.totalLiabilities}
 - Monthly Cash Flow: $${metrics.monthlyCashFlow}
-- Emergency Readiness Score: ${metrics.emergencyScore}/100 (${metrics.emergencyMonths?.toFixed(1)} months covered)
+- Emergency Readiness Score: ${ersScore}/100 (${metrics.emergencyMonths?.toFixed(1)} months covered)
 - Retirement Readiness Score: ${metrics.retirementScore}/100
-- Insurance Adequacy Score: ${metrics.insuranceScore}/100
+- Insurance Adequacy Score: ${insuranceAdequacyScore}/100
+ - Retirement Expected Monthly Expenses: $${Number(profileData.expectedMonthlyExpensesRetirement || 0)}
 - Debt-to-Income Ratio: ${metrics.dtiRatio?.toFixed(1)}%
 - Savings Rate: ${metrics.savingsRate?.toFixed(1)}%
 - Risk Profile: ${metrics.riskProfile}
@@ -13879,6 +13779,10 @@ Requirements for all insights:
 8. Each insight must be actionable and specific to their situation
 9. NEVER mention specific ages for Social Security claiming (no "age 67", "age 70", etc.)
 10. For Social Security, only say "Optimize Social Security claiming strategy"
+11. USE EXACTLY the scores provided above (Emergency Readiness, Insurance Adequacy, Retirement Readiness, etc.). Do not invent or alter scores. If a score is missing, state "Not available" and do not assume a value.
+12. Do NOT recompute ERS from months or infer any score from inputs; always cite the authoritative scores above.
+13. If a name is available, address the user by first name and refer to spouse by name; never output "N/A"—use "your spouse" if the name is missing.
+14. When citing assets or totals, use only the values provided in the data above; do not invent aggregate totals.
 
 Return ONLY a JSON array with this exact format:
 [
@@ -13908,8 +13812,9 @@ EXAMPLE for retirement insight (adapt to their specific data):
 
 CRITICAL: Use their ACTUAL Monte Carlo numbers in the first insight.`;
 
-    const result = await model.generateContent(prompt);
-    const response = result.response.text();
+    const response = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
     
     // Extract JSON from response
     const jsonMatch = response.match(/\[[\s\S]*\]/);
@@ -14080,17 +13985,7 @@ async function generateHyperpersonalizedTaxRecommendations(
   profile: any
 ): Promise<any> {
   try {
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Gemini API key not configured");
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
-    });
+    const { chatComplete } = await import('./services/xai-client');
 
     // Get additional planning data from different centers
     const retirementData = profile.retirementPlanningData || {};
@@ -14268,9 +14163,9 @@ Ensure recommendations are:
 - Actionable with clear next steps
 `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const text = await chatComplete([
+      { role: 'user', content: prompt }
+    ], { temperature: 0.7, stream: false });
 
     // Extract JSON from the response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -14285,8 +14180,9 @@ Ensure recommendations are:
     if (recs.length < 5) {
       try {
         const expandPrompt = `You previously produced ${recs.length} tax strategies. Add ${Math.max(0, 5 - recs.length)} ADDITIONAL, DISTINCT strategies for this same user.\n- Maintain the same schema fields used before (title, description, priority, urgency, estimatedAnnualSavings, implementationTimeframe, actionItems, requirements, risks).\n- Do NOT include any deadline fields.\n- Do NOT repeat existing titles.\nReturn ONLY a JSON array with the NEW additional recommendations (no wrapping object). Existing recommendations:\n${JSON.stringify(recs).slice(0, 6000)}`;
-        const expandRes = await model.generateContent([{ text: expandPrompt }]);
-        const expandText = (await expandRes.response).text();
+        const expandText = await chatComplete([
+          { role: 'user', content: expandPrompt }
+        ], { temperature: 0.7, stream: false });
         const arrMatch = expandText.match(/\[[\s\S]*\]/);
         if (arrMatch) {
           const additional = JSON.parse(arrMatch[0]);
