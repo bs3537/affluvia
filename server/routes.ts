@@ -6124,7 +6124,7 @@ Return ONLY valid JSON like:
     }
   });
 
-  // Get tax overview calculations
+  // Get tax overview calculations (intake/profile is canonical; ignore uploaded return for these cells)
   app.get("/api/tax-overview", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
@@ -6135,30 +6135,12 @@ Return ONLY valid JSON like:
         return res.status(404).json({ error: "Financial profile not found" });
       }
 
-      // Check if we have extracted tax data from a tax return
-      if (profile.taxReturns?.extractedTaxData?.adjustedGrossIncome > 0) {
-        // Use accurate data from tax return
-        const extractedData = profile.taxReturns.extractedTaxData;
-        res.json({
-          grossHouseholdIncome: extractedData.adjustedGrossIncome,
-          totalDeductions: extractedData.totalDeductions,
-          taxableIncome: extractedData.taxableIncome,
-          effectiveTaxRate: profile.taxReturns.effectiveTaxRate || 0,
-          marginalTaxRate: profile.taxReturns.marginalTaxRate || 0,
-          projectedFederalTax: extractedData.federalTaxesPaid,
-          projectedStateTax: extractedData.stateTaxesPaid || 0,
-          projectedTotalTax: extractedData.federalTaxesPaid + (extractedData.stateTaxesPaid || 0),
-          currentTaxYear: new Date().getFullYear() - 1, // Tax return is for previous year
-          isFromTaxReturn: true
-        });
-      } else {
-        // Calculate tax overview from profile data
-        const taxOverview = calculateTaxOverview(profile);
-        res.json({
-          ...taxOverview,
-          isFromTaxReturn: false
-        });
-      }
+      // Always calculate from profile/intake data for the overview cells
+      const taxOverview = calculateTaxOverview(profile);
+      res.json({
+        ...taxOverview,
+        isFromTaxReturn: false
+      });
     } catch (error) {
       console.error("Error calculating tax overview:", error);
       res.status(500).json({ error: "Failed to calculate tax overview" });
@@ -14030,16 +14012,13 @@ function calculateTaxOverview(profile: FinancialProfile): any {
   const otherIncome = parseFloat(profile.otherIncome?.toString() || '0');
   const grossHouseholdIncome = annualIncome + spouseAnnualIncome + otherIncome;
 
-  // Get state for tax calculations
-  const state = profile.state || 'CA';
+  // Get state for tax calculations (from intake/profile)
+  const state = (profile.state || '').toString().toUpperCase() || 'CA';
   
-  // Calculate deductions - this is simplified and should be based on actual intake form data
-  // For now, we'll use standard deduction
+  // Calculate deductions from intake when available; fallback to standard deduction
   const standardDeduction = profile.maritalStatus === 'married' ? 29200 : 14600; // 2024 values
-  
-  // In a real implementation, we'd get itemized deductions from the intake form
-  // For now, use standard deduction as baseline
-  const totalDeductions = standardDeduction;
+  const intakeDeductions = parseFloat((profile as any).deductionAmount?.toString() || '0');
+  const totalDeductions = intakeDeductions > 0 ? intakeDeductions : standardDeduction;
   
   // Calculate taxable income
   const taxableIncome = Math.max(0, grossHouseholdIncome - totalDeductions);
@@ -14328,6 +14307,7 @@ ${profile.taxReturns ? '- Tax return data available for enhanced analysis' : '- 
     const taxSystemPolicy = `
 STRICT TAX POLICY (Affluvia):
 - Use ONLY the data provided in INTAKE_DATA and TAX_RETURN_DATA below. Do NOT guess, infer, or fabricate missing values.
+- Precedence: INTAKE_DATA is CANONICAL for household income, total deductions, and state of residence. If TAX_RETURN_DATA conflicts on these, IGNORE the tax-return values.
 - Household income = user + spouse + other income. Use the provided householdIncome; do NOT understate it.
 - State of residence = ${stateOfResidence || 'N/A'}. Do NOT assume California or any other state if not provided.
 - Filing status must be the provided value; if unavailable, avoid naming a status.
@@ -14336,8 +14316,8 @@ STRICT TAX POLICY (Affluvia):
 - Deferred compensation only if deferredCompPlanAvailable===true WITH provided amounts. Otherwise, omit.
 - If a figure is missing, omit the strategy or present a generic, non‑fabricated tip without made‑up numbers.
 - Never state a specific tax bracket or state rate unless provided or computed from explicit taxable income + filing status.
- - If married/partnered, analyze BOTH user and spouse. Evaluate and recommend retirement contribution maximization separately for each (401(k)/403(b)/TSP, Traditional IRA, Roth IRA), using retirementLimits2025 and the current contribution amounts in INTAKE_DATA.
- - Do NOT presume IRA eligibility; if income or coverage data is insufficient, phrase recommendations conditionally without fabricating eligibility or phase‑outs.
+- If married/partnered, analyze BOTH user and spouse. Evaluate and recommend retirement contribution maximization separately for each (401(k)/403(b)/TSP, Traditional IRA, Roth IRA), using retirementLimits2025 and the current contribution amounts in INTAKE_DATA.
+- Do NOT presume IRA eligibility; if income or coverage data is insufficient, phrase recommendations conditionally without fabricating eligibility or phase‑outs.
 `;
 
     const intakeBlock = `INTAKE_DATA (authoritative):\n${JSON.stringify(dataAvailability, null, 2)}`;
