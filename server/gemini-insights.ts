@@ -796,6 +796,35 @@ export async function generateGeminiInsights(
     .filter((debt: any) => parseFloat(debt.interestRate || '0') > 7)
     .reduce((sum: number, debt: any) => sum + (parseFloat(debt.balance) || 0), 0);
 
+  // Create a compact dashboard summary block for the prompt (optional)
+  const dashboardBlock: string = (() => {
+    try {
+      const lines: string[] = [];
+      const rc = (dashboardData as any)?.retirementConfidence;
+      if (rc && typeof rc.probabilityOfSuccess === "number") {
+        const prob = Math.round(rc.probabilityOfSuccess);
+        const early = rc.canRetireEarlier ? (rc.earliestAge ? `; early retirement possible at age ${rc.earliestAge}` : "; early retirement possible") : "";
+        lines.push(`RETIREMENT SUCCESS (Dashboard): ${prob}%${early}`);
+      }
+      const hs = (dashboardData as any)?.healthScores;
+      if (hs) {
+        const overall = Math.round(Number(hs.overall || 0));
+        const emergency = Math.round(Number(hs.emergency || 0));
+        const risk = Math.round(Number(hs.riskManagement || 0));
+        lines.push(`HEALTH SCORES — Overall: ${overall}/100, Emergency: ${emergency}/100, Risk: ${risk}/100`);
+      }
+      const bands = (dashboardData as any)?.retirementPortfolioProjections?.finalProjections;
+      if (bands) {
+        const age = bands.age ?? "N/A";
+        const p50 = Number(bands.p50 || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
+        lines.push(`RETIREMENT PORTFOLIO (Age ${age}) — Median: ${p50}`);
+      }
+      return lines.length ? lines.join("\n") : "";
+    } catch {
+      return "";
+    }
+  })();
+
   // Create profile data hash for change detection
   const profileDataHash = crypto
     .createHash('sha256')
@@ -834,7 +863,7 @@ SELF-EMPLOYED PROFESSIONAL ANALYSIS:
 - Business Structure Optimization: Consider LLC/S-Corp election for tax efficiency if income >$50,000
 - Retirement Contributions: Solo 401(k) allows up to $69,000 (2024) vs. SEP-IRA limitations
 - Quarterly Tax Planning: Set aside 25-30% of income for taxes, use tax-advantaged accounts to reduce burden
-- Business Emergency Fund: 6-12 months expenses (vs. 3-6 for employees) due to income volatility
+  - Business Emergency Fund: Target 6 months of essential expenses (Affluvia standard)
 - Health Insurance: HSA eligibility critical for self-employed - triple tax advantage
 - Equipment/Office Deductions: Section 179 depreciation and home office deductions
 - Professional Liability: Industry-specific insurance needs and business protection
@@ -865,7 +894,7 @@ MODERATE INCOME OPTIMIZATION:
 - Earned Income Tax Credit: Verify eligibility for EITC if applicable
 - Saver's Credit: Up to $1,000 credit for retirement contributions (income limits apply)
 - Roth IRA Priority: Lower current tax bracket makes Roth IRA highly advantageous
-- Emergency Fund First: Build 3-6 months expenses before aggressive investing. Use the Emergency Readiness Score from the dashboard. It has saved database data (calculations.emergencyReadinessScoreCFP) as the authoritative signal. Do NOT infer targets from income; use monthly essential EXPENSES. Do not recompute months unless explicitly provided by data.
+  - Emergency Fund First: Build 6 months of essential expenses before aggressive investing. Use the Emergency Readiness Score from the dashboard. It has saved database data (calculations.emergencyReadinessScoreCFP) as the authoritative signal. Do NOT infer targets from income; use monthly essential EXPENSES. Do not recompute months unless explicitly provided by data.
 `}
 
 **PROFESSION-SPECIFIC CONSIDERATIONS:**
@@ -1210,8 +1239,7 @@ Current Risk Assessment (${new Date().getFullYear()}):
 - International Diversification: ${snapshot.stockAllocation > 0 ? 'Review international allocation for geopolitical risk management' : 'Consider adding international exposure for diversification'}
 - Supply Chain Disruption: Affects certain sectors more than others
 - Energy Volatility: ${profileData.state === 'TX' ? 'Texas resident - energy sector exposure may be concentrated' : 'Consider energy sector allocation for inflation protection'}
-- Currency Risk: Dollar strength affects international investments and multinationals
-` : ''}
+  - Currency Risk: Dollar strength affects international investments and multinationals
 
 ${snapshot.behavioralInsights ? `
 **BEHAVIORAL PSYCHOLOGY & SPENDING ANALYSIS:**

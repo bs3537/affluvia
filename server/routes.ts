@@ -1705,7 +1705,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('Comprehensive insights generation requested for user:', userId);
       
       // Get complete financial profile with ALL data
-      const profile = await storage.getFinancialProfile(userId);
+      let profile = await storage.getFinancialProfile(userId);
       if (!profile) {
         return res.status(404).json({ 
           error: "Financial profile not found. Please complete your intake form first." 

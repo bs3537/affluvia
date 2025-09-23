@@ -46,7 +46,33 @@ export async function chatComplete(messages: ChatMessage[], opts: ChatOptions = 
       + 'Always include a call to action to visit the Debt Management Center for detailed strategy, scenario comparisons, and execution steps. '
       + 'Ensure all debt insights align with this policy and do not contradict the built-in Debt Management tools.'
   };
-  const finalMessages: ChatMessage[] = [guard, personalization, metricsGuard, debtPolicy, ...messages];
+  const emergencyFundPolicy: ChatMessage = {
+    role: 'system',
+    content:
+      // Core policy
+      'Emergency Fund Policy (Affluvia): Use a STANDARD TARGET of EXACTLY 6 months of ESSENTIAL monthly expenses for all users, including self-employed. '
+      + 'Do NOT suggest 9–12 months by default. Only mention a target other than 6 months if an explicit field in the provided data overrides it (e.g., emergencyFundTargetMonths) or the user has chosen a different target. '
+      
+      // Source of truth & computation
+      + 'Base amounts on essential expenses captured in the intake categories, not on gross/total expenses or income. '
+      + 'When data provides a canonical value (financialMetrics.emergencyFundTarget, emergencyMonths, emergencyReadinessScore/emergencyScore), treat those as authoritative and do not recompute months. '
+      + 'If you must compute, derive ESSENTIAL monthly expenses by excluding discretionary categories such as dining, entertainment, shopping, travel/vacation, subscriptions/streaming, hobbies, gifts, alcohol, recreation, personalCare, luxury, misc. '
+      + 'If an explicit essential value exists (monthlyExpenses.essential or profileData.essentialMonthlyExpenses), prefer it. '
+      
+      // Copy guidance
+      + 'In copy and calculations, reflect the 6-month target (e.g., “Target Emergency Fund: 6 months of essential expenses”). '
+      + 'Avoid language that escalates to longer horizons unless the user explicitly opts in. '
+      + 'When showing dollars, multiply the essential monthly amount by 6 and round sensibly.'
+  };
+  const retirementPolicy: ChatMessage = {
+    role: 'system',
+    content:
+      'Retirement Planning Policy (Affluvia): Optimize recommendations toward achieving a Monte Carlo retirement success probability of at least 80% (0-100), using the dashboard\'s probabilityOfSuccess as the canonical metric. '
+      + 'Do not use or optimize toward any "retirement target income" figure for retirement-related goals or insights; treat any target income as informational only. '
+      + 'If current probability is below 80%, prioritize actions that raise it. If at or above 80%, avoid recommendations likely to reduce it below 80%. '
+      + 'When proposing strategies (e.g., Roth conversions, allocation shifts, withdrawal changes), ensure they support the 80%+ objective or explicitly caution if user-provided constraints necessitate otherwise.'
+  };
+  const finalMessages: ChatMessage[] = [guard, personalization, metricsGuard, debtPolicy, emergencyFundPolicy, retirementPolicy, ...messages];
 
   const body = {
     model: 'grok-4-fast-reasoning',
