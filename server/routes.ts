@@ -13244,23 +13244,30 @@ Please provide a detailed, personalized response that demonstrates deep understa
       // Get user's financial profile for additional context
       const profile = await storage.getFinancialProfile(userId);
       
+      const t0 = Date.now();
       // Extract readable text from PDF (fast path), avoid passing base64 to the model
       const { extractPdfText } = await import('./services/pdf-text-extractor');
       let text = await extractPdfText(pdfBuffer);
+      const tParse = Date.now();
       if (!text || text.length < 200) {
         // OCR fallback for scanned PDFs
         try {
           const { ocrPdfToText } = await import('./services/pdf-ocr-fallback');
+          const ocrStart = Date.now();
           const ocrText = await ocrPdfToText(pdfBuffer);
+          const ocrMs = Date.now() - ocrStart;
           if (ocrText && ocrText.length > text.length) text = ocrText;
+          console.info(`[OCR] fallback used, ms=${ocrMs}, length=${ocrText?.length || 0}`);
         } catch (e) {
           console.warn('[OCR] Fallback module unavailable:', (e as any)?.message || e);
         }
       }
+      const tTextReady = Date.now();
       
       // Parse key 1040 fields deterministically
       const { extract1040Fields } = await import('./services/tax-return-extractors');
       const extracted = extract1040Fields(text || "");
+      const tExtract = Date.now();
 
       const prompt = `Think hard. You are a certified tax professional analyzing a tax return to provide personalized tax reduction strategies.
 
@@ -13371,12 +13378,15 @@ IMPORTANT: Take extra time to ensure accuracy. Each strategy must include:
 5. Potential risks or considerations
 
 Double-check all calculations before returning results.`;
-      const excerpt = (text || '').slice(0, 8000); // keep prompt small
+      // Build a compact excerpt (collapse whitespace) and cap length
+      const excerpt = (text || '').replace(/\s+/g, ' ').slice(0, 4000);
       const extractedJson = JSON.stringify(extracted);
       const combined = `EXTRACTED_1040_TEXT (excerpt):\n${excerpt}\n\nEXTRACTED_1040_JSON:\n${extractedJson}\n\n${prompt}`;
+      const tLLM0 = Date.now();
       const ai = await chatComplete([
         { role: 'user', content: combined }
       ], { temperature: 0.7, stream: false });
+      const tLLM1 = Date.now();
       
       // Extract JSON from the response
       const jsonMatch = ai.match(/\{[\s\S]*\}/);
@@ -13395,6 +13405,8 @@ Double-check all calculations before returning results.`;
           federalTaxesPaid: extracted.federalTaxesPaid,
           filingStatus: extracted.filingStatus || null,
         });
+        const totalMs = Date.now() - t0;
+        console.info(`[TaxAnalysis] times(ms): parse=${tParse - t0}, ocr+prep=${tTextReady - tParse}, extract=${tExtract - tTextReady}, xai=${tLLM1 - tLLM0}, total=${totalMs}`);
         return parsed;
       } else {
         throw new Error("Failed to parse AI response");
@@ -14432,30 +14444,7 @@ Ensure recommendations are:
     const parsedResult: any = JSON.parse(jsonMatch[0]);
     let recs: any[] = Array.isArray(parsedResult.recommendations) ? parsedResult.recommendations : [];
 
-    // Ensure at least 5 distinct recommendations; expand with a second call if needed
-    if (recs.length < 5) {
-      try {
-        const expandPrompt = `You previously produced ${recs.length} tax strategies. Add ${Math.max(0, 5 - recs.length)} ADDITIONAL, DISTINCT strategies for this same user.\n- Maintain the same schema fields used before (title, description, priority, urgency, estimatedAnnualSavings, implementationTimeframe, actionItems, requirements, risks).\n- Do NOT include any deadline fields.\n- Do NOT repeat existing titles.\nReturn ONLY a JSON array with the NEW additional recommendations (no wrapping object). Existing recommendations:\n${JSON.stringify(recs).slice(0, 6000)}`;
-        const expandText = await chatComplete([
-          { role: 'user', content: expandPrompt }
-        ], { temperature: 0.7, stream: false });
-        const arrMatch = expandText.match(/\[[\s\S]*\]/);
-        if (arrMatch) {
-          const additional = JSON.parse(arrMatch[0]);
-          if (Array.isArray(additional)) {
-            const seen = new Set(recs.map(r => String(r?.title || "").toLowerCase()));
-            for (const r of additional) {
-              const t = String(r?.title || "").toLowerCase();
-              if (t && !seen.has(t)) {
-                const { deadline, ...clean } = r || {};
-                recs.push(clean);
-                seen.add(t);
-              }
-            }
-          }
-        }
-      } catch {}
-    }
+    // Optional second-round expansion disabled for latency. Could be re-enabled behind an env flag.
 
     // Final normalization: unique by title, add priority fallback, remove deadlines, sort
     const uniqueByTitle = new Map<string, any>();
