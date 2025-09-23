@@ -13227,27 +13227,32 @@ Please provide a detailed, personalized response that demonstrates deep understa
   }
 }
 
-// Analyze tax return using Gemini API with multimodal capabilities
-async function analyzeTaxReturnWithGemini(
-  pdfBuffer: Buffer,
-  userInputs: {
-    incomeChange: string;
-    incomeChangeDetails: string;
-    deductionChange: string;
-    deductionChangeDetails: string;
-  },
-  userId: number
-): Promise<any> {
-  try {
-    const { chatComplete } = await import('./services/xai-client');
+  // Analyze tax return using XAI with deterministic PDF->text extraction (no base64)
+  async function analyzeTaxReturnWithGemini(
+    pdfBuffer: Buffer,
+    userInputs: {
+      incomeChange: string;
+      incomeChangeDetails: string;
+      deductionChange: string;
+      deductionChangeDetails: string;
+    },
+    userId: number
+  ): Promise<any> {
+    try {
+      const { chatComplete } = await import('./services/xai-client');
 
-    // Get user's financial profile for additional context
-    const profile = await storage.getFinancialProfile(userId);
-    
-    // Convert PDF buffer to base64 for inclusion in prompt
-    const pdfBase64 = pdfBuffer.toString('base64');
+      // Get user's financial profile for additional context
+      const profile = await storage.getFinancialProfile(userId);
+      
+      // Extract readable text from PDF (fast path), avoid passing base64 to the model
+      const { extractPdfText } = await import('./services/pdf-text-extractor');
+      const text = await extractPdfText(pdfBuffer);
+      
+      // Parse key 1040 fields deterministically
+      const { extract1040Fields } = await import('./services/tax-return-extractors');
+      const extracted = extract1040Fields(text || "");
 
-    const prompt = `Think hard. You are a certified tax professional analyzing a tax return to provide personalized tax reduction strategies.
+      const prompt = `Think hard. You are a certified tax professional analyzing a tax return to provide personalized tax reduction strategies.
 
 CRITICAL INSTRUCTION: DO NOT extract or return any personal identifying information from the PDF (names, SSNs, addresses, etc.). Only extract numerical data and tax categories.
 
@@ -13262,7 +13267,7 @@ IMPORTANT: Use the latest IRS 2025 tax guidelines:
 - SALT deduction cap: $10,000
 - Capital gains rates: 0% (up to $48,350 single/$96,700 MFJ), 15%, 20%
 
-Analyze the provided tax return (PDF) and consider:
+Analyze the provided tax return content (text excerpt) and consider:
 1. User's expected income change: ${userInputs.incomeChange}
    ${userInputs.incomeChangeDetails ? `Details: ${userInputs.incomeChangeDetails}` : ''}
 2. User's expected deduction change: ${userInputs.deductionChange}
@@ -13356,21 +13361,36 @@ IMPORTANT: Take extra time to ensure accuracy. Each strategy must include:
 5. Potential risks or considerations
 
 Double-check all calculations before returning results.`;
-
-    const combined = `PDF_BASE64 (application/pdf):\n${pdfBase64}\n\n${prompt}`;
-    const text = await chatComplete([
-      { role: 'user', content: combined }
-    ], { temperature: 0.7, stream: false });
-    
-    // Extract JSON from the response
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    } else {
-      throw new Error("Failed to parse AI response");
-    }
-  } catch (error) {
-    console.error("Error in tax analysis:", error);
+      const excerpt = (text || '').slice(0, 8000); // keep prompt small
+      const extractedJson = JSON.stringify(extracted);
+      const combined = `EXTRACTED_1040_TEXT (excerpt):\n${excerpt}\n\nEXTRACTED_1040_JSON:\n${extractedJson}\n\n${prompt}`;
+      const ai = await chatComplete([
+        { role: 'user', content: combined }
+      ], { temperature: 0.7, stream: false });
+      
+      // Extract JSON from the response
+      const jsonMatch = ai.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        // Merge deterministic extracted fields for reliability
+        parsed.adjustedGrossIncome = parsed.adjustedGrossIncome ?? extracted.adjustedGrossIncome;
+        parsed.totalDeductions = parsed.totalDeductions ?? extracted.totalDeductions;
+        parsed.taxableIncome = parsed.taxableIncome ?? extracted.taxableIncome;
+        parsed.federalTaxesPaid = parsed.federalTaxesPaid ?? extracted.federalTaxesPaid;
+        if (!parsed.extractedTaxData) parsed.extractedTaxData = {};
+        Object.assign(parsed.extractedTaxData, {
+          adjustedGrossIncome: extracted.adjustedGrossIncome,
+          totalDeductions: extracted.totalDeductions,
+          taxableIncome: extracted.taxableIncome,
+          federalTaxesPaid: extracted.federalTaxesPaid,
+          filingStatus: extracted.filingStatus || null,
+        });
+        return parsed;
+      } else {
+        throw new Error("Failed to parse AI response");
+      }
+    } catch (error) {
+      console.error("Error in tax analysis:", error);
     // Return a default structure in case of error
     return {
       strategies: [
