@@ -30,6 +30,8 @@ export function RetirementInsights() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const [generatingSeconds, setGeneratingSeconds] = useState(0);
 
   const { data, isLoading, isError, refetch, error } = useQuery<RetirementInsightsResponse>({
     queryKey: ['retirementInsights', user?.id],
@@ -48,6 +50,16 @@ export function RetirementInsights() {
     refetchOnWindowFocus: false,
   });
 
+  // Timer for initial load
+  useEffect(() => {
+    let id: any;
+    if (isLoading) {
+      setLoadingSeconds(0);
+      id = setInterval(() => setLoadingSeconds((s) => s + 1), 1000);
+    }
+    return () => id && clearInterval(id);
+  }, [isLoading]);
+
   const generateMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch('/api/generate-retirement-insights', {
@@ -63,6 +75,16 @@ export function RetirementInsights() {
     },
   });
 
+  // Timer for generation (refresh)
+  useEffect(() => {
+    let id: any;
+    if (generateMutation.isPending || isRefreshing) {
+      setGeneratingSeconds(0);
+      id = setInterval(() => setGeneratingSeconds((s) => s + 1), 1000);
+    }
+    return () => id && clearInterval(id);
+  }, [generateMutation.isPending, isRefreshing]);
+
   const onRefresh = () => {
     setIsRefreshing(true);
     generateMutation.mutate(undefined, {
@@ -76,7 +98,7 @@ export function RetirementInsights() {
         <CardContent className="py-16">
           <div className="text-center">
             <Loader2 className="h-10 w-10 animate-spin mx-auto text-purple-300" />
-            <p className="mt-4 text-gray-300">Preparing your retirement insights…</p>
+            <p className="mt-4 text-gray-300">Preparing your retirement insights… <span className="text-purple-300/70">{loadingSeconds}s</span></p>
           </div>
         </CardContent>
       </Card>
@@ -113,15 +135,23 @@ export function RetirementInsights() {
               className="bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border border-purple-700/50"
             >
               {isRefreshing || generateMutation.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="ml-2">Generating… {generatingSeconds}s</span>
+                </>
               ) : (
-                <RefreshCw className="w-4 h-4" />
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  <span className="ml-2">Refresh</span>
+                </>
               )}
-              <span className="ml-2">Refresh</span>
             </Button>
           </CardTitle>
           <CardDescription className="text-purple-200/80">
             Top prioritized insights based on your saved retirement analysis
+            {data?.lastUpdated && (
+              <span className="ml-2 text-purple-300/70">• Last generated: {new Date(data.lastUpdated).toLocaleString()}</span>
+            )}
           </CardDescription>
         </CardHeader>
       </Card>

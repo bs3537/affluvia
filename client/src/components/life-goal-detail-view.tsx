@@ -135,6 +135,17 @@ export function LifeGoalDetailView({
     enabled: isOpen && !!goal.id
   });
 
+  // Loading timer for AI insights generation
+  const [insightsSeconds, setInsightsSeconds] = useState(0);
+  useEffect(() => {
+    let interval: any;
+    if (insightsLoading) {
+      setInsightsSeconds(0);
+      interval = setInterval(() => setInsightsSeconds((s) => s + 1), 1000);
+    }
+    return () => interval && clearInterval(interval);
+  }, [insightsLoading]);
+
   // Calculate what-if scenario
   const calculateScenarioMutation = useMutation({
     mutationFn: async (scenario: WhatIfScenario) => {
@@ -470,7 +481,9 @@ export function LifeGoalDetailView({
                 <div className="flex items-center justify-center py-12">
                   <div className="text-center">
                     <Brain className="h-12 w-12 text-primary mx-auto mb-4 animate-pulse" />
-                    <p className="text-gray-200">Analyzing funding strategies...</p>
+                    <p className="text-gray-200">
+                      Analyzing funding strategies… <span className="text-gray-400">{insightsSeconds}s</span>
+                    </p>
                   </div>
                 </div>
               ) : aiInsights && aiInsights.length > 0 ? (
