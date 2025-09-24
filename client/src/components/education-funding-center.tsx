@@ -1076,9 +1076,9 @@ function GoalAnalysis({
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="py-4 space-y-4">
-                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="flex flex-col items-center xl:flex-1">
+                <div className="py-4 space-y-4 overflow-hidden">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-start xl:justify-between">
+                    <div className="flex flex-col items-center xl:flex-1 min-w-0">
                       <Gauge
                         value={gaugeValue}
                         max={100}
@@ -1103,9 +1103,9 @@ function GoalAnalysis({
                           : `Baseline outlook: ${baselineConfidenceLabel}`}
                       </div>
                     </div>
-                    <div className="w-full text-center xl:text-right xl:flex-1 xl:min-w-[180px]">
+                    <div className="w-full text-center xl:text-right xl:flex-none xl:self-start xl:max-w-[220px] xl:min-w-[160px]">
                       {optimizedSuccessProbability != null && successProbabilityDelta !== null ? (
-                        <div className="space-y-1 text-center xl:text-right">
+                        <div className="space-y-1 text-center xl:text-right break-words">
                           <div className="text-xs uppercase tracking-wide text-gray-400">vs Baseline</div>
                           <div className={`text-xl font-semibold ${
                             successProbabilityDelta > 0
@@ -1121,7 +1121,7 @@ function GoalAnalysis({
                           </div>
                         </div>
                       ) : (
-                        <p className="text-xs text-gray-400 leading-snug max-w-[220px] mx-auto xl:ml-auto">
+                        <p className="text-xs text-gray-400 leading-snug max-w-[220px] mx-auto xl:ml-auto break-words">
                           Save an optimized plan to compare against your baseline probability.
                         </p>
                       )}
