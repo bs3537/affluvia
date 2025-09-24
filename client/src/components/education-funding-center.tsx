@@ -1076,10 +1076,11 @@ function GoalAnalysis({
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="py-4 space-y-4 overflow-hidden">
+                <div className="py-4 space-y-4">
                   <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-start xl:justify-between">
                     <div className="flex flex-col items-center xl:flex-1 min-w-0">
-                      <Gauge
+                      <div className="w-full flex items-center justify-center">
+                        <Gauge
                         value={gaugeValue}
                         max={100}
                         size="md"
@@ -1087,7 +1088,8 @@ function GoalAnalysis({
                         valueLabel=""
                         colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
                         thresholds={{ medium: 65, high: 80 }}
-                      />
+                        />
+                      </div>
                       <p className="text-[11px] text-gray-400 mt-2 text-center">
                         {isOptimizedShown ? 'Optimized success probability' : 'Baseline probability of meeting education funding goals'}
                       </p>
@@ -1097,7 +1099,7 @@ function GoalAnalysis({
                           : `Baseline outlook: ${baselineConfidenceLabel}`}
                       </div>
                     </div>
-                    <div className="w-full text-center xl:text-right xl:flex-1 xl:min-w-[260px] xl:max-w-[360px]">
+                    <div className="w-full text-center xl:text-right xl:flex-1 xl:min-w-[220px] xl:max-w-[300px]">
                       {optimizedSuccessProbability != null && successProbabilityDelta !== null ? (
                         <div className="space-y-2 text-center xl:text-right break-words">
                           <div className="text-[10px] uppercase tracking-wide text-gray-400">vs Baseline</div>
@@ -1112,18 +1114,6 @@ function GoalAnalysis({
                           </div>
                           <div className="text-[11px] text-gray-400">
                             Improvement from optimization
-                          </div>
-                          <div className="hidden xl:block h-px bg-gray-800 my-2" />
-                          <div className="space-y-1 text-[11px] text-gray-400">
-                            <p>
-                              Metric: Affordability‑constrained coverage (529 + in‑year cash + loans; payments ≤8–10% income; DTI ≤43%; fits cash flow; loans ≤ starting salary)
-                            </p>
-                            <p>Target: 80%+ recommended for confidence</p>
-                            {(scenarioResult?.monteCarlo?.probabilityOfComprehensiveCoverage ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfComprehensiveCoverage) != null && (
-                              <p>
-                                Comprehensive coverage (529 + other + loans): {Math.round((scenarioResult?.monteCarlo?.probabilityOfComprehensiveCoverage ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfComprehensiveCoverage) as number)}%
-                              </p>
-                            )}
                           </div>
                         </div>
                       ) : (
