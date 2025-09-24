@@ -17,13 +17,19 @@ import { z } from "zod";
 type LoginFormData = z.infer<typeof insertUserSchema>;
 type RegisterFormData = z.infer<typeof insertUserSchema> & { confirmPassword: string; terms: boolean };
 
-const registerSchema = insertUserSchema.extend({
-  confirmPassword: z.string(),
-  terms: z.boolean().refine(val => val === true, "You must agree to the terms")
-}).refine((data) => data.password === data.confirmPassword, {
-  message: "Passwords don't match",
-  path: ["confirmPassword"],
-});
+const registerSchema = insertUserSchema
+  .extend({
+    confirmPassword: z.string(),
+    terms: z.boolean().refine((val) => val === true, "You must agree to the terms"),
+  })
+  .refine((data) => (data.password?.length ?? 0) >= 8, {
+    message: "Password must be at least 8 characters",
+    path: ["password"],
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords don't match",
+    path: ["confirmPassword"],
+  });
 
 export default function AuthPage() {
   const { user, loginMutation, registerMutation } = useAuth();
@@ -237,6 +243,7 @@ export default function AuthPage() {
                           id="registerPassword"
                           type="password"
                           autoComplete="new-password"
+                          minLength={8}
                           {...registerForm.register("password")}
                           className="bg-gray-800 border-gray-700 text-white focus:border-primary"
                         />

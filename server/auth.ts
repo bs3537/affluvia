@@ -125,6 +125,12 @@ export function setupAuth(app: Express) {
 
   app.post("/api/register", async (req, res, next) => {
     try {
+      // Enforce minimum password length (8+) for all roles (individual/advisor)
+      const pwd = req.body?.password;
+      if (typeof pwd !== 'string' || pwd.length < 8) {
+        return res.status(400).json({ error: 'weak_password', message: 'Password must be at least 8 characters' });
+      }
+
       const existingUser = await storage.getUserByEmail(req.body.email);
       if (existingUser) {
         return res.status(400).send("Email already exists");
