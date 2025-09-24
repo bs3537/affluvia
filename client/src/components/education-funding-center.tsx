@@ -953,6 +953,19 @@ function GoalAnalysis({
   const savedOptimization = (goal as any)?.savedOptimization;
   const savedOptimizationResult = savedOptimization?.result;
 
+  // Local generating state for this goal's AI recommendations
+  const genFetchCount = useIsFetching({ queryKey: [`/api/education/goal-recommendations/${goal.id}`] });
+  const isGenerating = Boolean(genFetchCount);
+  const [genSeconds, setGenSeconds] = React.useState(0);
+  React.useEffect(() => {
+    let t: any;
+    if (isGenerating) {
+      setGenSeconds(0);
+      t = setInterval(() => setGenSeconds((s) => s + 1), 1000);
+    }
+    return () => { if (t) clearInterval(t); };
+  }, [isGenerating, goal?.id]);
+
   const pickProbability = (...values: Array<number | string | null | undefined>) => {
     for (const value of values) {
       if (typeof value === 'number' && Number.isFinite(value)) {
