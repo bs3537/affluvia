@@ -372,7 +372,7 @@ export default function AdvisorPortal() {
       {/* (Accordion removed per request; branding is edited via the drawer button) */}
 
       {/* Bottom Drawer: White-Label Branding (close only via top-right icon) */}
-      <Drawer open={brandingOpen} onOpenChange={onBrandingOpenChange}>
+      <Drawer open={brandingOpen} onOpenChange={onBrandingOpenChange} shouldScaleBackground={false}>
         <DrawerContent className="bg-gray-900 border-gray-800 relative">
           <DrawerHeader className="bg-gray-900 text-white relative">
             <DrawerTitle className="text-white">White-Label Branding</DrawerTitle>

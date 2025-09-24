@@ -22,11 +22,60 @@ function requireAdvisor(req: Request, res: Response, next: NextFunction) {
 
 export function setupAdvisorRoutes(app: Express) {
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+  async function ensureAdvisorTables() {
+    try {
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS advisor_clients (
+        id SERIAL PRIMARY KEY,
+        advisor_id INTEGER NOT NULL REFERENCES users(id),
+        client_id INTEGER NOT NULL REFERENCES users(id),
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT advisor_clients_unique UNIQUE (advisor_id, client_id)
+      );`);
+    } catch {}
+    try {
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS advisor_invites (
+        id SERIAL PRIMARY KEY,
+        advisor_id INTEGER NOT NULL REFERENCES users(id),
+        email TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'sent',
+        expires_at TIMESTAMPTZ NOT NULL,
+        client_id INTEGER REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT NOW()
+      );`);
+    } catch {}
+    try {
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS white_label_profiles (
+        id SERIAL PRIMARY KEY,
+        advisor_id INTEGER NOT NULL REFERENCES users(id),
+        firm_name TEXT,
+        logo_url TEXT,
+        address TEXT,
+        phone TEXT,
+        email TEXT,
+        default_disclaimer TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );`);
+    } catch {}
+  }
   // List clients
   app.get('/api/advisor/clients', requireAuth, requireAdvisor, async (req, res) => {
     const advisorId = (req as any).user.id as number;
-    const clients = await storage.getAdvisorClients(advisorId);
-    res.json(clients);
+    try {
+      const clients = await storage.getAdvisorClients(advisorId);
+      res.json(clients);
+    } catch (e: any) {
+      if (e?.code === '42P01') {
+        await ensureAdvisorTables();
+        return res.json([]);
+      }
+      console.error('Error listing advisor clients:', e);
+      res.status(500).json({ error: 'failed_to_list_clients' });
+    }
   });
 
   // Link existing client by email
@@ -36,8 +85,18 @@ export function setupAdvisorRoutes(app: Express) {
     if (!email) return res.status(400).json({ error: 'email required' });
     const user = await storage.getUserByEmail(email);
     if (!user) return res.status(404).json({ error: 'client_not_found' });
-    const link = await storage.linkAdvisorToClient(advisorId, user.id);
-    res.json({ ok: true, link });
+    try {
+      const link = await storage.linkAdvisorToClient(advisorId, user.id);
+      res.json({ ok: true, link });
+    } catch (e: any) {
+      if (e?.code === '42P01') {
+        await ensureAdvisorTables();
+        const link = await storage.linkAdvisorToClient(advisorId, user.id);
+        return res.json({ ok: true, link });
+      }
+      console.error('Error linking client:', e);
+      res.status(500).json({ error: 'failed_to_link' });
+    }
   });
 
   // Unlink client
@@ -76,15 +135,35 @@ export function setupAdvisorRoutes(app: Express) {
   // List pending invites
   app.get('/api/advisor/invites', requireAuth, requireAdvisor, async (req, res) => {
     const advisorId = (req as any).user.id as number;
-    const invites = await storage.getAdvisorInvites(advisorId);
-    res.json(invites);
+    try {
+      const invites = await storage.getAdvisorInvites(advisorId);
+      res.json(invites);
+    } catch (e: any) {
+      if (e?.code === '42P01') {
+        await ensureAdvisorTables();
+        return res.json([]);
+      }
+      console.error('Error listing invites:', e);
+      res.status(500).json({ error: 'failed_to_list_invites' });
+    }
   });
 
   // Resend invite (regenerate token and expiry)
   app.post('/api/advisor/invites/:inviteId/resend', requireAuth, requireAdvisor, async (req, res) => {
     const advisor = (req as any).user as any;
     const inviteId = parseInt(req.params.inviteId, 10);
-    const invites = await storage.getAdvisorInvites(advisor.id);
+    let invites: any[] = [];
+    try {
+      invites = await storage.getAdvisorInvites(advisor.id);
+    } catch (e: any) {
+      if (e?.code === '42P01') {
+        await ensureAdvisorTables();
+        invites = await storage.getAdvisorInvites(advisor.id);
+      } else {
+        console.error('Error fetching invites for resend:', e);
+        return res.status(500).json({ error: 'failed_to_fetch_invites' });
+      }
+    }
     const invite = invites.find(i => i.id === inviteId);
     if (!invite) return res.status(404).json({ error: 'invite_not_found' });
     const token = crypto.randomBytes(32).toString('hex');
@@ -107,10 +186,22 @@ export function setupAdvisorRoutes(app: Express) {
     const advisorId = (req as any).user.id as number;
     const inviteId = parseInt(req.params.inviteId, 10);
     // Optional: ensure invite belongs to advisor
-    const invites = await storage.getAdvisorInvites(advisorId);
-    if (!invites.find(i => i.id === inviteId)) return res.status(404).json({ error: 'invite_not_found' });
-    await storage.cancelAdvisorInvite(inviteId);
-    res.json({ ok: true });
+    try {
+      const invites = await storage.getAdvisorInvites(advisorId);
+      if (!invites.find(i => i.id === inviteId)) return res.status(404).json({ error: 'invite_not_found' });
+      await storage.cancelAdvisorInvite(inviteId);
+      res.json({ ok: true });
+    } catch (e: any) {
+      if (e?.code === '42P01') {
+        await ensureAdvisorTables();
+        const invites = await storage.getAdvisorInvites(advisorId);
+        if (!invites.find(i => i.id === inviteId)) return res.status(404).json({ error: 'invite_not_found' });
+        await storage.cancelAdvisorInvite(inviteId);
+        return res.json({ ok: true });
+      }
+      console.error('Error canceling invite:', e);
+      res.status(500).json({ error: 'failed_to_cancel_invite' });
+    }
   });
 
   // Acting-as: open client
