@@ -1077,8 +1077,8 @@ function GoalAnalysis({
               </CardHeader>
               <CardContent>
                 <div className="py-4 space-y-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex flex-col items-center flex-1">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="flex flex-col items-center xl:flex-1">
                       <Gauge
                         value={gaugeValue}
                         max={100}
@@ -1103,9 +1103,9 @@ function GoalAnalysis({
                           : `Baseline outlook: ${baselineConfidenceLabel}`}
                       </div>
                     </div>
-                    <div className="text-right flex-1 min-w-[160px]">
+                    <div className="w-full text-center xl:text-right xl:flex-1 xl:min-w-[180px]">
                       {optimizedSuccessProbability != null && successProbabilityDelta !== null ? (
-                        <div className="space-y-1">
+                        <div className="space-y-1 text-center xl:text-right">
                           <div className="text-xs uppercase tracking-wide text-gray-400">vs Baseline</div>
                           <div className={`text-xl font-semibold ${
                             successProbabilityDelta > 0
@@ -1121,7 +1121,7 @@ function GoalAnalysis({
                           </div>
                         </div>
                       ) : (
-                        <p className="text-xs text-gray-400 leading-snug max-w-[220px] ml-auto">
+                        <p className="text-xs text-gray-400 leading-snug max-w-[220px] mx-auto xl:ml-auto">
                           Save an optimized plan to compare against your baseline probability.
                         </p>
                       )}
