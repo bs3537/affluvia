@@ -215,6 +215,66 @@ export function setupAuth(app: Express) {
     res.json(req.user);
   });
 
+  // Change password for authenticated user
+  app.post("/api/change-password", requireAuth, async (req: any, res, next) => {
+    try {
+      const userId = req.user.id as number;
+      const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ error: "missing_fields", message: "currentPassword and newPassword are required" });
+      }
+      if (typeof newPassword !== "string" || newPassword.length < 8) {
+        return res.status(400).json({ error: "weak_password", message: "Password must be at least 8 characters" });
+      }
+
+      const existing = await storage.getUser(userId);
+      if (!existing) return res.status(404).json({ error: "not_found" });
+
+      const ok = await comparePasswords(currentPassword, existing.password);
+      if (!ok) return res.status(401).json({ error: "invalid_current_password" });
+
+      const hashed = await hashPassword(newPassword);
+      const updated = await storage.updateUserPassword(userId, hashed);
+
+      // Refresh session with updated user object (avoid sending password back to client log)
+      req.login(updated, (err: any) => {
+        if (err) return next(err);
+        res.status(200).json({ status: "ok" });
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Change email for authenticated user
+  app.post("/api/change-email", requireAuth, async (req: any, res, next) => {
+    try {
+      const userId = req.user.id as number;
+      const { newEmail } = req.body as { newEmail?: string };
+      if (!newEmail || typeof newEmail !== "string") {
+        return res.status(400).json({ error: "invalid_email" });
+      }
+      const normalized = newEmail.trim().toLowerCase();
+      // Basic email format check
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+        return res.status(400).json({ error: "invalid_email" });
+      }
+      const existing = await storage.getUserByEmail(normalized);
+      if (existing && existing.id !== userId) {
+        return res.status(409).json({ error: "email_taken" });
+      }
+
+      const updated = await storage.updateUserEmail(userId, normalized);
+      // Refresh session to reflect the new email immediately
+      req.login(updated, (err: any) => {
+        if (err) return next(err);
+        res.status(200).json(updated);
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Cache statistics endpoint
   app.get("/api/cache/stats", async (req, res) => {
     try {

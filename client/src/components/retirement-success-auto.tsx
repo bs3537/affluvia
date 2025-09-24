@@ -325,7 +325,7 @@ export function RetirementSuccessAuto() {
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <CardTitle className="text-lg font-semibold text-white">Retirement Success</CardTitle>
+            <CardTitle className="text-lg font-semibold text-white">Retirement Success (Baseline)</CardTitle>
             {monteCarloResult && (
               <div className={`px-2 py-1 rounded-full text-xs font-medium ${
                 getSuccessColor(monteCarloResult.probabilityOfSuccess).bg

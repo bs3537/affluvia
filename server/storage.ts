@@ -255,6 +255,10 @@ export interface IStorage {
   getLatestReportSnapshot(userId: number): Promise<ReportSnapshot | undefined>;
 
   sessionStore: session.Store;
+
+  // Account management
+  updateUserEmail(userId: number, newEmail: string): Promise<User>;
+  updateUserPassword(userId: number, hashedPassword: string): Promise<User>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -295,6 +299,24 @@ export class DatabaseStorage implements IStorage {
       db.select().from(users).where(eq(users.email, email))
     );
     return user || undefined;
+  }
+
+  async updateUserEmail(userId: number, newEmail: string): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ email: newEmail })
+      .where(eq(users.id, userId))
+      .returning();
+    return user as User;
+  }
+
+  async updateUserPassword(userId: number, hashedPassword: string): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ password: hashedPassword })
+      .where(eq(users.id, userId))
+      .returning();
+    return user as User;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
