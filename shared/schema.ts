@@ -593,6 +593,10 @@ export const educationGoals = pgTable("education_goals", {
   fundingPercentage: decimal("funding_percentage", { precision: 5, scale: 2 }),
   probabilityOfSuccess: decimal("probability_of_success", { precision: 5, scale: 2 }),
   lastCalculatedAt: timestamp("last_calculated_at"),
+
+  // AI Insights persistence
+  aiInsights: jsonb("ai_insights"), // { recommendations: Recommendation[] }
+  aiInsightsGeneratedAt: timestamp("ai_insights_generated_at"),
   
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

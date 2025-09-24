@@ -637,6 +637,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const profile = await storage.getFinancialProfile(userId);
 
+      // If DB-persisted AI insights exist and no refresh requested, return them immediately
+      const hasPersisted = (goal as any).aiInsights && Array.isArray((goal as any).aiInsights.recommendations) && (goal as any).aiInsights.recommendations.length > 0;
+      if (hasPersisted && !refresh) {
+        return res.json({
+          recommendations: (goal as any).aiInsights.recommendations,
+          lastGeneratedAt: (goal as any).aiInsightsGeneratedAt || (goal as any).ai_insights_generated_at || new Date().toISOString(),
+          cached: true,
+          source: 'db'
+        });
+      }
+
       if (profile) {
         vlog('Fetched financial profile for user:', req.user!.id);
         vlog('Spouse 401k assets:', profile.assets?.filter((a: any) => 
@@ -8055,7 +8066,7 @@ Return ONLY valid JSON like:
       const inputHash = widgetCacheManager.generateInputHash("education_goal_insights", dependencies);
 
       const cached = await widgetCacheManager.getCachedWidget(userId, "education_goal_insights", inputHash);
-      if (cached?.data) {
+      if (cached?.data && !refresh) {
         const payload = {
           recommendations: cached.data.recommendations || [],
           lastGeneratedAt: cached.calculatedAt,
@@ -8070,6 +8081,15 @@ Return ONLY valid JSON like:
 
       const recommendations = await generatePersonalizedGoalRecommendations(goalWithProjection, profile, savedScenario || undefined);
       await widgetCacheManager.cacheWidget(userId, "education_goal_insights", inputHash, { recommendations }, 24);
+      // Also persist to the goal record for durability across restarts/cache misses
+      try {
+        await storage.updateEducationGoal(userId, goalIdNumber, {
+          aiInsights: { recommendations },
+          aiInsightsGeneratedAt: new Date(),
+        } as any);
+      } catch (persistErr) {
+        console.warn('[Education] failed to persist AI insights on goal:', (persistErr as any)?.message || persistErr);
+      }
       return res.json({
         recommendations,
         lastGeneratedAt: new Date().toISOString(),
