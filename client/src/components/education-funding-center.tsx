@@ -1076,53 +1076,62 @@ function GoalAnalysis({
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="py-4 space-y-4">
-                  <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-start xl:justify-between">
-                    <div className="flex flex-col items-center xl:flex-1 min-w-0">
-                      <div className="w-full flex items-center justify-center">
-                        <Gauge
-                        value={gaugeValue}
-                        max={100}
-                        size="md"
-                        showValue={true}
-                        valueLabel=""
-                        colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
-                        thresholds={{ medium: 65, high: 80 }}
-                        />
-                      </div>
-                      <p className="text-[11px] text-gray-400 mt-2 text-center">
-                        {isOptimizedShown ? 'Optimized success probability' : 'Baseline probability of meeting education funding goals'}
-                      </p>
-                      <div className={`mt-3 px-3 py-1 rounded-full text-xs font-medium ${isOptimizedShown ? optimizedConfidenceClass : baselineConfidenceClass}`}>
-                        {isOptimizedShown
-                          ? `Optimized plan outlook: ${optimizedConfidenceLabel ?? baselineConfidenceLabel}`
-                          : `Baseline outlook: ${baselineConfidenceLabel}`}
-                      </div>
+                <div className="py-6 space-y-6">
+                  {/* Center everything in a single column */}
+                  <div className="flex flex-col items-center space-y-4">
+                    {/* Larger gauge in center */}
+                    <Gauge
+                      value={gaugeValue}
+                      max={100}
+                      size="lg"
+                      showValue={true}
+                      valueLabel=""
+                      colors={{ low: '#EF4444', medium: '#F59E0B', high: '#10B981' }}
+                      thresholds={{ medium: 65, high: 80 }}
+                    />
+                    
+                    {/* Success probability text centered */}
+                    <p className="text-sm text-gray-400 text-center max-w-xs">
+                      {isOptimizedShown ? 'Optimized success probability' : 'Baseline probability of meeting education funding goals'}
+                    </p>
+                    
+                    {/* Confidence badge centered */}
+                    <div className={`px-4 py-2 rounded-full text-sm font-medium ${isOptimizedShown ? optimizedConfidenceClass : baselineConfidenceClass}`}>
+                      {isOptimizedShown
+                        ? `Optimized plan outlook: ${optimizedConfidenceLabel ?? baselineConfidenceLabel}`
+                        : `Baseline outlook: ${baselineConfidenceLabel}`}
                     </div>
-                    <div className="w-full text-center xl:text-right xl:flex-1 xl:min-w-[220px] xl:max-w-[300px]">
-                      {optimizedSuccessProbability != null && successProbabilityDelta !== null ? (
-                        <div className="space-y-2 text-center xl:text-right break-words">
-                          <div className="text-[10px] uppercase tracking-wide text-gray-400">vs Baseline</div>
-                          <div className={`text-lg xl:text-xl font-semibold ${
-                            successProbabilityDelta > 0
-                              ? 'text-emerald-300'
-                              : successProbabilityDelta < 0
-                                ? 'text-red-300'
-                                : 'text-purple-300'
-                          }`}>
-                            {successProbabilityDelta > 0 ? '+' : ''}{Math.round(successProbabilityDelta)}%
-                          </div>
-                          <div className="text-[11px] text-gray-400">
-                            Improvement from optimization
-                          </div>
+                    
+                    {/* Delta comparison below everything */}
+                    {optimizedSuccessProbability != null && successProbabilityDelta !== null ? (
+                      <div className="space-y-2 text-center">
+                        <div className="text-xs uppercase tracking-wide text-gray-400">vs Baseline</div>
+                        <div className={`text-2xl font-bold ${
+                          successProbabilityDelta > 0
+                            ? 'text-emerald-300'
+                            : successProbabilityDelta < 0
+                              ? 'text-red-300'
+                              : 'text-purple-300'
+                        }`}>
+                          {successProbabilityDelta > 0 ? '+' : ''}{Math.round(successProbabilityDelta)}%
                         </div>
-                      ) : (
-                        <p className="text-xs text-gray-400 leading-snug max-w-[260px] mx-auto xl:ml-auto break-words">
-                          Save an optimized plan to compare against your baseline probability.
-                        </p>
-                      )}
-                    </div>
+                        <div className="text-xs text-gray-400">
+                          Improvement from optimization
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-400 text-center max-w-sm">
+                        Save an optimized plan to compare against your baseline probability.
+                      </p>
+                    )}
                   </div>
+                  
+                  {/* Additional info sections */}
+                  {(scenarioResult?.monteCarlo?.probabilityOfComprehensiveCoverage ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfComprehensiveCoverage) != null && (
+                    <p className="text-xs text-gray-400 text-center">
+                      Comprehensive coverage (529 + other + loans): {Math.round((scenarioResult?.monteCarlo?.probabilityOfComprehensiveCoverage ?? (goal.projection as any)?.monteCarloAnalysis?.probabilityOfComprehensiveCoverage) as number)}%
+                    </p>
+                  )}
                   {probabilityForWarnings < 80 && (
                     <div className="text-xs text-gray-300 text-center space-y-1">
                       {maxGap > 0 && <p>Largest annual gap up to ${maxGap.toLocaleString()} even after loans.</p>}
