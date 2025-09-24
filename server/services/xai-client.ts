@@ -77,8 +77,11 @@ export async function chatComplete(messages: ChatMessage[], opts: ChatOptions = 
   const finalMessages: ChatMessage[] = [guard, personalization, metricsGuard, debtPolicy, emergencyFundPolicy, retirementPolicy, ...messages];
 
   const model = opts.model || process.env.XAI_MODEL || 'grok-4-fast-reasoning';
-  const rawTimeout = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : Number(process.env.XAI_TIMEOUT_MS || 15000);
-  const timeoutMs = Number.isFinite(rawTimeout) ? rawTimeout : 15000;
+  // Default to no timeout unless explicitly provided via opts or env
+  const rawTimeout = typeof opts.timeoutMs === 'number'
+    ? opts.timeoutMs
+    : (process.env.XAI_TIMEOUT_MS !== undefined ? Number(process.env.XAI_TIMEOUT_MS) : 0);
+  const timeoutMs = Number.isFinite(rawTimeout) ? rawTimeout : 0;
   const useTimeout = timeoutMs > 0;
   const controller = useTimeout ? new AbortController() : null;
   const timer = useTimeout ? setTimeout(() => controller!.abort(), timeoutMs) : null;
