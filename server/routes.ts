@@ -637,16 +637,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const profile = await storage.getFinancialProfile(userId);
 
-      // If DB-persisted AI insights exist and no refresh requested, return them immediately
-      const hasPersisted = (goal as any).aiInsights && Array.isArray((goal as any).aiInsights.recommendations) && (goal as any).aiInsights.recommendations.length > 0;
-      if (hasPersisted && !refresh) {
-        return res.json({
-          recommendations: (goal as any).aiInsights.recommendations,
-          lastGeneratedAt: (goal as any).aiInsightsGeneratedAt || (goal as any).ai_insights_generated_at || new Date().toISOString(),
-          cached: true,
-          source: 'db'
-        });
-      }
+      // Note: education goal insights persistence is handled in education routes; do not reference 'goal' here
 
       if (profile) {
         vlog('Fetched financial profile for user:', req.user!.id);
