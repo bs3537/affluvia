@@ -3,7 +3,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowUpDown, Search, TrendingUp, Users, Mail, Clock, RefreshCw, Trash, X, Eye, ExternalLink, Paintbrush } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -15,6 +15,32 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription, Dr
 import { useAuth } from "@/hooks/use-auth";
 import { queryClient } from "@/lib/queryClient";
 import { Label } from "@/components/ui/label";
+
+const DEFAULT_ADVISOR_DISCLAIMER = `IMPORTANT DISCLOSURES
+
+For Informational Purposes Only — The information provided through this platform is for educational and informational purposes only and does not constitute personalized investment advice, legal advice, tax advice, or a recommendation to buy or sell any security. Any investment decisions you make are your sole responsibility.
+
+No Guarantee of Outcomes — Financial projections (including Monte Carlo analyses and scenario modeling) are based on assumptions believed to be reasonable as of the date produced but are not guarantees of future performance or outcomes. Investment returns, inflation, tax laws, and market conditions are uncertain and may differ materially from assumptions.
+
+Past Performance — Past performance is not indicative of future results. All investing involves risk, including the possible loss of principal.
+
+Fiduciary Standard & Conflicts — [Your Firm Name] (“Firm”) seeks to act in the best interest of clients at all times. The Firm may receive compensation as disclosed in its Form ADV and other documents. Clients should review the Firm’s disclosures for details on services, fees, and potential conflicts of interest.
+
+Registration & Jurisdiction — Advisory services are offered only to residents of jurisdictions where the Firm is appropriately registered, exempt, or excluded from registration. This material is not an offer to provide advisory services in any jurisdiction where such offer would be unlawful.
+
+Third‑Party Data & Assumptions — Certain data, benchmarks, or estimates may be obtained from third‑party sources believed to be reliable but are not guaranteed for accuracy or completeness. The Firm is not responsible for errors or omissions from such sources.
+
+Tax & Legal — The Firm does not provide tax or legal advice. Clients should consult their tax advisor or attorney regarding their specific situation. Any tax estimates are for planning purposes only and may not reflect current or future law.
+
+Suitability & Client Responsibility — Recommendations depend on the completeness and accuracy of information you provide. Please promptly notify the Firm of any material changes to your financial situation, goals, or constraints.
+
+Rebalancing, Trading, and Fees — Portfolio rebalancing and trading may have tax consequences and incur costs. Advisory fees reduce returns over time. Refer to your advisory agreement and the Firm’s Form ADV 2A for fee schedules and disclosures.
+
+Cybersecurity & Electronic Communications — While the Firm employs commercially reasonable safeguards, electronic communications may be subject to interception or loss. Do not transmit sensitive personal information unless instructed to do so via a secure channel.
+
+Privacy — The Firm’s Privacy Policy describes how client information is collected, used, and safeguarded. A copy is available upon request.
+
+Contact — [Your Firm Name], [Your Address], [Phone], [Email].`; 
 
 function BrandingSettings() {
   const { toast } = useToast();
@@ -31,7 +57,7 @@ function BrandingSettings() {
   const [address, setAddress] = useState<string>(branding?.address || '');
   const [phone, setPhone] = useState<string>(branding?.phone || '');
   const [email, setEmail] = useState<string>(branding?.email || '');
-  const [defaultDisclaimer, setDefaultDisclaimer] = useState<string>(branding?.defaultDisclaimer || '');
+  const [defaultDisclaimer, setDefaultDisclaimer] = useState<string>(branding?.defaultDisclaimer || DEFAULT_ADVISOR_DISCLAIMER);
   const [logoFile, setLogoFile] = useState<File | null>(null);
 
   useEffect(() => {
@@ -39,7 +65,7 @@ function BrandingSettings() {
     setAddress(branding?.address || '');
     setPhone(branding?.phone || '');
     setEmail(branding?.email || '');
-    setDefaultDisclaimer(branding?.defaultDisclaimer || '');
+    setDefaultDisclaimer(branding?.defaultDisclaimer || DEFAULT_ADVISOR_DISCLAIMER);
   }, [branding?.firmName, branding?.address, branding?.phone, branding?.email, branding?.defaultDisclaimer]);
 
   const onSave = async () => {
@@ -107,6 +133,16 @@ export default function AdvisorPortal() {
   const { toast } = useToast();
   const { user } = useAuth();
   const [brandingOpen, setBrandingOpen] = useState(false);
+  const brandingAllowCloseRef = useRef(false);
+  const onBrandingOpenChange = (next: boolean) => {
+    if (next) return setBrandingOpen(true);
+    if (brandingAllowCloseRef.current) {
+      brandingAllowCloseRef.current = false;
+      return setBrandingOpen(false);
+    }
+    // Block outside/Escape closes
+    setBrandingOpen(true);
+  };
   const { data: clients, isLoading, refetch: refetchClients, error: clientsError } = useQuery({
     queryKey: ["/api/advisor/clients"],
     queryFn: async () => {
@@ -335,21 +371,24 @@ export default function AdvisorPortal() {
 
       {/* (Accordion removed per request; branding is edited via the drawer button) */}
 
-      {/* Bottom Drawer: White-Label Branding */}
-      <Drawer open={brandingOpen} onOpenChange={setBrandingOpen}>
-        <DrawerContent className="bg-gray-900 border-gray-800">
-          <DrawerHeader className="bg-gray-900 text-white">
+      {/* Bottom Drawer: White-Label Branding (close only via top-right icon) */}
+      <Drawer open={brandingOpen} onOpenChange={onBrandingOpenChange}>
+        <DrawerContent className="bg-gray-900 border-gray-800 relative">
+          <DrawerHeader className="bg-gray-900 text-white relative">
             <DrawerTitle className="text-white">White-Label Branding</DrawerTitle>
             <DrawerDescription className="text-gray-400">Upload your logo and firm details to customize report headers.</DrawerDescription>
+            <button
+              type="button"
+              aria-label="Close branding"
+              className="absolute right-4 top-4 text-white/80 hover:text-white"
+              onClick={() => { brandingAllowCloseRef.current = true; setBrandingOpen(false); }}
+            >
+              <X className="h-5 w-5" />
+            </button>
           </DrawerHeader>
           <div className="px-4 pb-4 text-white bg-gray-900">
             <BrandingSettings />
           </div>
-          <DrawerFooter className="bg-gray-900 border-t border-gray-800">
-            <DrawerClose asChild>
-              <Button variant="outline" className="bg-gray-800 text-gray-100 border-gray-700 hover:bg-gray-700">Close</Button>
-            </DrawerClose>
-          </DrawerFooter>
         </DrawerContent>
       </Drawer>
 
