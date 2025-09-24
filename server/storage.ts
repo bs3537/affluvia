@@ -1605,7 +1605,7 @@ export class DatabaseStorage implements IStorage {
         u.id, 
         u.email,
         CASE 
-          WHEN COALESCE(u."fullName",'') <> '' THEN u."fullName"
+          WHEN COALESCE(u.full_name,'') <> '' THEN u.full_name
           WHEN COALESCE(fp.first_name,'') <> '' OR COALESCE(fp.last_name,'') <> '' 
             THEN TRIM(COALESCE(fp.first_name,'') || ' ' || COALESCE(fp.last_name,''))
           ELSE NULL
