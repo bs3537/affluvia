@@ -1338,6 +1338,7 @@ function GoalAnalysis({
 function PersonalizedRecommendations({ goalId }: { goalId?: string }) {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = React.useState(false);
+  const [elapsed, setElapsed] = React.useState(0);
 
   const { data: recommendations, isLoading } = useQuery({
     queryKey: [`/api/education/goal-recommendations/${goalId}`],
