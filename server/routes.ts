@@ -5705,6 +5705,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Generate centralized insights using comprehensive AI context and persist
+  // Persist ONLY to financial_profiles.central_insights to avoid clobbering other insight variants
   app.post("/api/generate-central-insights", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
@@ -5712,22 +5713,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user!.id;
       const insights = await generateCentralInsights(userId);
       await storage.updateFinancialProfile(userId, { centralInsights: insights });
-      // Also store a dashboardInsights row with hash if we can compute it
-      try {
-        const estateDocuments = await storage.getEstateDocuments(userId);
-        const profile = await storage.getFinancialProfile(userId);
-        const { createProfileDataHash } = await import('./gemini-insights');
-        const profileDataHash = createProfileDataHash(profile || {}, estateDocuments);
-        await storage.createDashboardInsights(userId, {
-          insights: insights,
-          profileDataHash,
-          generationVersion: '1.0',
-          generatedByModel: 'grok-4-fast-reasoning',
-          financialSnapshot: (profile as any)?.calculations || null,
-        });
-      } catch (e) {
-        console.warn('Unable to store dashboardInsights for central insights:', e);
-      }
+
+      // Intentionally NOT writing to dashboard_insights to prevent overwriting
+      // rows used by dashboard snapshot or comprehensive insights. The centralized
+      // insights page reads from financial_profiles.central_insights for speed and stability.
+
       res.json(insights);
     } catch (error) {
       console.error("Error generating central insights:", error);
@@ -5735,50 +5725,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get centralized insights (auto-generate or refresh if profile changed)
+  // Get centralized insights (persisted); use refresh=true to force regeneration
   app.get("/api/central-insights", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
       const userId = req.user!.id;
-      const profile = await storage.getFinancialProfile(userId);
+      const forceRefresh = req.query.refresh === 'true';
 
-      // Decide if we should regenerate using dashboardInsights profile hash
-      try {
-        const estateDocuments = await storage.getEstateDocuments(userId);
-        const { createProfileDataHash } = await import('./gemini-insights');
-        const currentProfileHash = createProfileDataHash(profile || {}, estateDocuments);
-        const should = await storage.shouldRegenerateInsights(userId, currentProfileHash);
-        if (should) {
-          const insights = await generateCentralInsights(userId);
-          await storage.updateFinancialProfile(userId, { centralInsights: insights });
-          await storage.createDashboardInsights(userId, {
-            insights,
-            profileDataHash: currentProfileHash,
-            generationVersion: '1.0',
-            generatedByModel: 'grok-4-fast-reasoning',
-            financialSnapshot: (profile as any)?.calculations || null,
-          });
-          return res.json(insights);
-        } else {
-          // Not regenerating: return the persisted dashboard_insights immediately
-          try {
-            const di = await storage.getDashboardInsights(userId);
-            if (di && di.insights) {
-              return res.json(di.insights);
-            }
-          } catch (e) {
-            console.warn('[central-insights] dashboard_insights read failed; will check profile cache next:', (e as any)?.message || e);
-          }
-        }
-      } catch (hashErr) {
-        console.warn('central-insights: hash check failed; falling back to cached or fresh gen:', hashErr);
+      // Read from financial profile cache first
+      let profile = await storage.getFinancialProfile(userId);
+
+      // Back-compat: if centralInsights is stored as a raw array, wrap it
+      const normalizeCentral = (ci: any): any => {
+        if (!ci) return null;
+        if (Array.isArray(ci)) return { insights: ci, lastUpdated: new Date().toISOString() };
+        if (typeof ci === 'object' && Array.isArray(ci.insights)) return ci;
+        return null;
+      };
+
+      const existing = normalizeCentral(profile?.centralInsights);
+      if (existing && !forceRefresh) {
+        return res.json(existing);
       }
 
-      if (profile?.centralInsights?.insights && profile.centralInsights.insights.length >= 1) {
-        return res.json(profile.centralInsights);
-      }
+      // Generate fresh on demand (or first run), then persist and return
       const insights = await generateCentralInsights(userId);
       await storage.updateFinancialProfile(userId, { centralInsights: insights });
+
+      // Re-read profile for consistency if needed
+      try { profile = await storage.getFinancialProfile(userId); } catch {}
       return res.json(insights);
     } catch (error) {
       console.error("Error fetching central insights:", error);
