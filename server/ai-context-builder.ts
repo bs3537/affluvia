@@ -237,7 +237,7 @@ export async function buildComprehensiveUserContext(userId: number): Promise<Com
       console.log('Error fetching action plan tasks:', error);
     }
     
-    // Get comprehensive debt management data
+    // Get comprehensive debt management data (self-heal missing columns)
     try {
       // Get active debts
       context.debts = await db
@@ -246,10 +246,23 @@ export async function buildComprehensiveUserContext(userId: number): Promise<Com
         .where(eq(debts.userId, userId));
       
       // Get debt payoff plans
-      context.debtPayoffPlans = await db
-        .select()
-        .from(debtPayoffPlans)
-        .where(eq(debtPayoffPlans.userId, userId));
+      try {
+        context.debtPayoffPlans = await db
+          .select()
+          .from(debtPayoffPlans)
+          .where(eq(debtPayoffPlans.userId, userId));
+      } catch (e: any) {
+        const msg = (e?.message || '').toString();
+        if (e?.code === '42703' || /payoff_schedule/i.test(msg)) {
+          try { await db.execute(sql`ALTER TABLE IF NOT EXISTS debt_payoff_plans ADD COLUMN IF NOT EXISTS payoff_schedule JSONB;`); } catch {}
+          context.debtPayoffPlans = await db
+            .select()
+            .from(debtPayoffPlans)
+            .where(eq(debtPayoffPlans.userId, userId));
+        } else {
+          throw e;
+        }
+      }
       
       // Get debt scenarios
       context.debtScenarios = await db
@@ -276,8 +289,8 @@ export async function buildComprehensiveUserContext(userId: number): Promise<Com
         .where(eq(debtAIInsights.userId, userId));
       
       console.log(`Retrieved debt management data: ${context.debts?.length || 0} debts, ${context.debtPayoffPlans?.length || 0} plans, ${context.debtScenarios?.length || 0} scenarios`);
-    } catch (error) {
-      console.log('Error fetching debt management data:', error);
+    } catch (error: any) {
+      console.log('Error fetching debt management data:', error?.message || error);
       context.debts = [];
       context.debtPayoffPlans = [];
       context.debtScenarios = [];
@@ -855,6 +868,27 @@ export async function generateEnhancedAIResponse(message: string, userId: number
     // Build comprehensive user context
     const userData = await buildComprehensiveUserContext(userId);
     
+    // Inject CANONICAL DASHBOARD METRICS block (parity with Centralized Insights)
+    // Uses dashboard snapshot + canonical derivation to avoid metric drift
+    let canonicalBlock = '';
+    try {
+      const { getDashboardSnapshot } = await import('./services/dashboard-snapshot');
+      const { deriveCanonicalMetrics } = await import('./lib/canonical-metrics');
+      const profile = userData.profile || {};
+      const calculations = userData.calculations || {};
+      const snapshot = await getDashboardSnapshot(userId, { bypassCache: false });
+      const canonical = deriveCanonicalMetrics(profile, calculations, snapshot);
+      canonicalBlock = `\n\n=== CANONICAL DASHBOARD METRICS — SOURCE OF TRUTH ===\n`
+        + `Emergency Readiness Score: ${canonical.ersScore}\n`
+        + `Insurance Adequacy Score: ${canonical.insuranceAdequacyScore ?? 'Not available'}\n`
+        + `Savings Rate (%): ${canonical.savingsRate ?? 'Not available'}\n`
+        + `Monthly Cash Flow ($): ${canonical.monthlyCashFlow ?? 'Not available'}\n`
+        + `Retirement Monthly Expenses ($): ${canonical.retirementMonthlyExpenses}\n`
+        + `RULES: Use these values exactly; do NOT recompute or infer alternatives.`;
+    } catch (e) {
+      try { console.warn('[Chatbot] canonical metrics injection skipped:', (e as any)?.message || e); } catch {}
+    }
+
     let contextPrompt;
     try {
       contextPrompt = formatUserDataForAI(userData);
@@ -869,7 +903,7 @@ export async function generateEnhancedAIResponse(message: string, userId: number
     const baseProbRaw = (userData.monteCarloData as any)?.probabilityOfSuccess ?? (userData.monteCarloData as any)?.successProbability;
     const baseProbText = (typeof baseProbRaw === 'number') ? Math.round((baseProbRaw > 1 ? baseProbRaw : baseProbRaw * 100)) : 'X';
 
-    const fullPrompt = `${contextPrompt}
+    const fullPrompt = `${contextPrompt}${canonicalBlock}
 
 === USER QUESTION ===
 "${message}"

@@ -20,6 +20,7 @@ export function EnhancedAIChat({ onClose, onMinimize, isMinimized = false, class
   const [isLoading, setIsLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { user } = useAuth();
@@ -33,6 +34,16 @@ export function EnhancedAIChat({ onClose, onMinimize, isMinimized = false, class
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading, isTyping]);
+
+  // Seconds timer while analyzing
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    if (isLoading) {
+      setElapsedSec(0);
+      timer = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [isLoading]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -122,7 +133,6 @@ export function EnhancedAIChat({ onClose, onMinimize, isMinimized = false, class
 
     setIsLoading(true);
     setIsTyping(true);
-    setShowFileUpload(false);
 
     // Create FormData for file upload
     const formData = new FormData();
@@ -412,7 +422,7 @@ export function EnhancedAIChat({ onClose, onMinimize, isMinimized = false, class
                               <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
                               <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></div>
                             </div>
-                            <p className="text-white text-sm">Analyzing your financial data...</p>
+                            <p className="text-white text-sm">Analyzing your financial data… {elapsedSec}s</p>
                           </div>
                         </div>
                       </div>
@@ -446,6 +456,7 @@ export function EnhancedAIChat({ onClose, onMinimize, isMinimized = false, class
                 </div>
                 <FileUploadChat
                   onFilesUploaded={handleFilesUpload}
+                  onClose={() => setShowFileUpload(false)}
                   disabled={isLoading}
                   maxFiles={5}
                   maxFileSize={25}
@@ -474,7 +485,7 @@ export function EnhancedAIChat({ onClose, onMinimize, isMinimized = false, class
               
               <div className="flex-1">
                 <Input
-                  placeholder="Ask about your finances, goals, or get personalized advice..."
+                  placeholder="Ask about your finances, goals, or get personalized insights..."
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   onKeyPress={handleKeyPress}

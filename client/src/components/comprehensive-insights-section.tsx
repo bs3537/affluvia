@@ -53,6 +53,48 @@ const ComprehensiveInsightsSection: React.FC<ComprehensiveInsightsSectionProps> 
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const { data: snapshot } = useDashboardSnapshot();
 
+  // Normalize various insight shapes into the component's ComprehensiveInsight interface
+  const normalizeInsights = (arr: any[]): ComprehensiveInsight[] => {
+    if (!Array.isArray(arr)) return [];
+    return arr.map((i: any) => {
+      const priority = ((): number => {
+        if (typeof i?.priority === 'number') return i.priority;
+        const r = Number(i?.priorityRank || i?.rank);
+        if (Number.isFinite(r) && r > 0) return r;
+        const s = (i?.priority || '').toString().toLowerCase();
+        if (s === 'high') return 1; if (s === 'medium') return 2; if (s === 'low') return 3;
+        return 2;
+      })();
+
+      const qi = i?.quantifiedImpact || i?.monetaryImpact || {};
+      const actionSteps: string[] = Array.isArray(i?.actionSteps) ? i.actionSteps
+        : Array.isArray(i?.actionItems) ? i.actionItems
+        : Array.isArray(i?.steps) ? i.steps
+        : [];
+
+      return {
+        title: i?.title || i?.name || 'Recommendation',
+        description: i?.description || i?.explanation || i?.content || '',
+        priority,
+        category: i?.category || 'Other',
+        actionSteps,
+        potentialImprovement: Number(i?.potentialImprovement || i?.estimatedImpact || qi?.interestSaved1Year || 0) || 0,
+        timeframe: i?.timeframe || '',
+        quantifiedImpact: {
+          dollarBenefit1Year: Number(qi?.dollarBenefit1Year || qi?.interestSaved1Year || 0) || 0,
+          dollarBenefit5Years: Number(qi?.dollarBenefit5Years || 0) || 0,
+          dollarBenefitRetirement: Number(qi?.dollarBenefitRetirement || 0) || 0,
+          healthScoreImprovement: Number(qi?.healthScoreImprovement || 0) || 0,
+          riskReduction: Number(qi?.riskReduction || 0) || 0,
+          compoundingValue: Number(qi?.compoundingValue || 0) || 0,
+        },
+        benchmarkContext: i?.benchmarkContext || '',
+        accountSpecific: i?.accountSpecific || '',
+        urgencyReason: i?.urgencyReason || ''
+      } as ComprehensiveInsight;
+    });
+  };
+
   // Load existing comprehensive insights on mount (hydrate from snapshot first)
   useEffect(() => {
     const abortController = new AbortController();
@@ -60,9 +102,21 @@ const ComprehensiveInsightsSection: React.FC<ComprehensiveInsightsSectionProps> 
     try {
       const snap = pickWidget<any>(snapshot, 'dashboard_insights');
       if (snap && Array.isArray(snap.insights) && snap.insights.length > 0) {
-        setInsights(snap.insights);
+        const normalized = normalizeInsights(snap.insights);
+        setInsights(normalized);
         setHasGenerated(true);
         if (snap.generatedAt) setGeneratedAt(snap.generatedAt);
+        // Auto-repair if most items are missing details
+        const thinCount = normalized.filter(i => (!i.description || i.description.trim() === '') && (!i.actionSteps || i.actionSteps.length === 0)).length;
+        if (normalized.length > 0 && thinCount >= Math.ceil(normalized.length * 0.6)) {
+          (async () => {
+            try {
+              await fetch('/api/generate-central-insights', { method: 'POST', credentials: 'include' });
+              // Try to refresh snapshot so newly persisted insights appear
+              await fetch('/api/dashboard-snapshot?refresh=true', { credentials: 'include' });
+            } catch {}
+          })();
+        }
         return () => abortController.abort();
       }
     } catch {}
@@ -88,7 +142,8 @@ const ComprehensiveInsightsSection: React.FC<ComprehensiveInsightsSectionProps> 
       if (response.ok) {
         const data = await response.json();
         if (data.insights && Array.isArray(data.insights) && data.insights.length > 0) {
-          setInsights(data.insights);
+          const normalized = normalizeInsights(data.insights);
+          setInsights(normalized);
           setHasGenerated(true);
           const ts = data?.meta?.generatedAt || null;
           if (ts) setGeneratedAt(ts);
@@ -204,11 +259,11 @@ const ComprehensiveInsightsSection: React.FC<ComprehensiveInsightsSectionProps> 
     return (
       <Card className="card-gradient border-gray-700 mb-8">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold text-white flex items-center gap-2">
-            <Lightbulb className="w-5 h-5 text-yellow-400" />
-            Comprehensive Financial Analysis
-          </CardTitle>
-          <p className="text-gray-400 text-sm">Loading existing insights...</p>
+            <CardTitle className="text-lg font-semibold text-white flex items-center gap-2">
+              <Lightbulb className="w-5 h-5 text-yellow-400" />
+              Insights
+            </CardTitle>
+            <p className="text-gray-400 text-sm">AI-powered insights from your intake form data</p>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-center py-8">
@@ -227,14 +282,9 @@ const ComprehensiveInsightsSection: React.FC<ComprehensiveInsightsSectionProps> 
           <div>
             <CardTitle className="text-lg font-semibold text-white flex items-center gap-2">
               <Lightbulb className="w-5 h-5 text-yellow-400" />
-              Comprehensive Financial Analysis
+              Insights
             </CardTitle>
-            <p className="text-gray-400 text-sm">
-              {hasGenerated 
-                ? "AI analysis of your complete financial profile" 
-                : "Generate insights from your complete financial data"
-              }
-            </p>
+            <p className="text-gray-400 text-sm">AI-powered insights from your intake form data</p>
           </div>
           <Button
             onClick={generateComprehensiveInsights}

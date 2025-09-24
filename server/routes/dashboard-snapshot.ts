@@ -16,7 +16,10 @@ export function setupDashboardSnapshotRoutes(app: Express) {
       const currentHash = computeScenarioHash(profile);
       // Include insights updated-at in ETag so client refreshes when insights regenerate
       const di = await storage.getDashboardInsights(userId);
-      const insightsUpdatedAt = ((di as any)?.updatedAt || (di as any)?.createdAt || '').toString();
+      // Include fallback timestamp from financial_profiles.central_insights to keep ETag sensitive to persisted insights
+      const ci: any = (profile as any)?.centralInsights || null;
+      const ciTs = (ci && (ci.updatedAt || ci.lastUpdated)) ? (ci.updatedAt || ci.lastUpdated).toString() : '';
+      const insightsUpdatedAt = (((di as any)?.updatedAt || (di as any)?.createdAt || '') as any)?.toString() || ciTs;
       const etagRaw = `${currentHash}|${insightsUpdatedAt}|${getModelVersion()}`;
       const etagHash = crypto.createHash('sha256').update(etagRaw).digest('hex').slice(0, 16);
       const etag = `W/"${etagHash}"`;

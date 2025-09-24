@@ -129,6 +129,16 @@ export default function HomePage() {
     switch (activeView) {
       case "dashboard":
         return <Dashboard />;
+      case "chatbot":
+        return (
+          <AIChatLayout
+            onClose={() => setActiveView("dashboard")}
+            activeView={activeView}
+            setActiveView={setActiveView}
+            sidebarOpen={sidebarOpen}
+            setSidebarOpen={setSidebarOpen}
+          />
+        );
       case "connections2":
         return <Connections2 />;
       case "intake":

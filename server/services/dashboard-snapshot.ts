@@ -291,6 +291,63 @@ async function buildSnapshot(userId: number): Promise<DashboardSnapshot> {
         },
         updatedAt: ((di as any).updatedAt || (di as any).createdAt || new Date()).toString(),
       });
+    } else {
+      // Fallback: hydrate from financial_profiles.central_insights if present
+      const ci: any = (profile as any)?.centralInsights || null;
+      const asArray = Array.isArray(ci) ? ci : (Array.isArray(ci?.insights) ? ci.insights : null);
+      if (asArray && asArray.length > 0) {
+        widgets.push({
+          id: 'dashboard_insights',
+          version: 'v1',
+          data: {
+            insights: asArray,
+            generatedAt: (ci && (ci.updatedAt || ci.lastUpdated)) || new Date().toISOString(),
+            isValid: true,
+            generatedByModel: (ci && ci.generatedByModel) || undefined,
+          },
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        // Last-resort fallback: generate fresh insights automatically
+        try {
+          const { generateGeminiInsights, createProfileDataHash } = await import('../gemini-insights');
+          // Ensure we have calculations (fast path) if missing
+          let workingProfile: any = profile;
+          if (!workingProfile?.calculations) {
+            try {
+              const estateDocs = await storage.getEstateDocuments(userId);
+              const freshCalcs = await calculateFastFinancialMetrics(workingProfile || {}, userId);
+              await storage.updateFinancialProfile(userId, { calculations: freshCalcs });
+              workingProfile = await storage.getFinancialProfile(userId);
+            } catch {}
+          }
+          const estateDocuments = await storage.getEstateDocuments(userId);
+          const gen = await generateGeminiInsights(workingProfile, workingProfile?.calculations || {}, estateDocuments);
+          const profileDataHash = createProfileDataHash(workingProfile || {}, estateDocuments);
+          const saved = await storage.createDashboardInsights(userId, {
+            insights: gen.insights,
+            generatedByModel: 'grok-4-fast-reasoning',
+            generationPrompt: gen.generationPrompt,
+            generationVersion: '1.0',
+            financialSnapshot: gen.financialSnapshot,
+            profileDataHash,
+            validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          });
+          widgets.push({
+            id: 'dashboard_insights',
+            version: 'v1',
+            data: {
+              insights: saved.insights as any,
+              generatedAt: (saved as any).updatedAt || saved.createdAt,
+              isValid: true,
+              generatedByModel: saved.generatedByModel,
+            },
+            updatedAt: ((saved as any).updatedAt || saved.createdAt || new Date()).toString(),
+          });
+        } catch (autoErr) {
+          try { console.warn('[dashboard-snapshot] auto-generate insights failed:', (autoErr as any)?.message || autoErr); } catch {}
+        }
+      }
     }
   } catch {}
 
@@ -317,7 +374,22 @@ export async function getDashboardSnapshot(userId: number, { bypassCache = false
   if (!bypassCache) {
     const cached = await cacheService.get<DashboardSnapshot>('dashboard_snapshot', cacheKeyParams);
     if (cached) {
-      return { ...cached, meta: { ...cached.meta, source: 'cache' } };
+      // If cached snapshot lacks insights but persisted insights exist, rebuild fresh
+      const hasWidget = Array.isArray(cached.widgets) && cached.widgets.some(w => w.id === 'dashboard_insights');
+      let persistedInsights = false;
+      try {
+        const di = await storage.getDashboardInsights(userId);
+        persistedInsights = !!(di && (di as any).insights && (di as any).insights.length > 0);
+      } catch {}
+      if (!persistedInsights) {
+        const ci: any = (profile as any)?.centralInsights || null;
+        const arr = Array.isArray(ci) ? ci : (Array.isArray(ci?.insights) ? ci.insights : null);
+        if (arr && arr.length > 0) persistedInsights = true;
+      }
+      if (hasWidget || !persistedInsights) {
+        return { ...cached, meta: { ...cached.meta, source: 'cache' } };
+      }
+      // persisted insights exist but cache lacks them; fall through to build fresh
     }
   }
 

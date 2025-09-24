@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Bot, User, Send, Upload, ArrowLeft, X } from "lucide-react";
+import { Bot, User, Send, Upload, ArrowLeft, X, PlusCircle } from "lucide-react";
 
 interface AIChatbotProps {
   onClose?: () => void;
@@ -13,8 +13,11 @@ export function AIChatbot({ onClose }: AIChatbotProps) {
   const [newMessage, setNewMessage] = useState("");
   const [messages, setMessages] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Load chat messages on component mount
   useEffect(() => {
@@ -26,13 +29,23 @@ export function AIChatbot({ onClose }: AIChatbotProps) {
     scrollToBottom();
   }, [messages, isLoading]);
 
+  // Seconds timer while analyzing
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    if (isLoading) {
+      setElapsedSec(0);
+      timer = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [isLoading]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
   
   const loadChatMessages = async () => {
     try {
-      const response = await fetch('/api/chat-messages');
+      const response = await fetch('/api/chat-messages', { credentials: 'include' });
       if (response.ok) {
         const data = await response.json();
         setMessages(data);
@@ -54,6 +67,7 @@ export function AIChatbot({ onClose }: AIChatbotProps) {
           headers: {
             'Content-Type': 'application/json',
           },
+          credentials: 'include',
           body: JSON.stringify({ message: messageText }),
         });
         
@@ -96,6 +110,44 @@ export function AIChatbot({ onClose }: AIChatbotProps) {
     setNewMessage(prompt);
   };
 
+  const onNewChat = () => {
+    // Clear UI-only; persisted chat remains in DB
+    setMessages([]);
+    setNewMessage("");
+    setElapsedSec(0);
+  };
+
+  const onClickUpload = () => fileInputRef.current?.click();
+
+  const onFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setIsUploading(true);
+    try {
+      const form = new FormData();
+      Array.from(files).forEach((f) => form.append('documents', f));
+      if (newMessage.trim()) form.append('message', newMessage.trim());
+
+      const res = await fetch('/api/chat-messages/upload', {
+        method: 'POST',
+        body: form,
+        credentials: 'include'
+      });
+      if (!res.ok) throw new Error('Upload failed');
+      const payload = await res.json();
+      if (payload?.message) {
+        setMessages((prev) => [...prev, payload.message]);
+        setNewMessage("");
+      }
+    } catch (err) {
+      console.error('Upload error:', err);
+      setMessages((prev) => [...prev, { id: Date.now(), message: 'Uploaded document(s)', response: 'Sorry, I could not analyze the document(s) right now.' }]);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
       <div className="flex-1 flex flex-col h-full w-full">
@@ -119,14 +171,25 @@ export function AIChatbot({ onClose }: AIChatbotProps) {
               </p>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            className="text-gray-400 hover:text-white hover:bg-gray-700"
-          >
-            <X className="w-4 h-4" />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onNewChat}
+              className="bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 hover:border-gray-500"
+              title="Start a new chat (clears current view)"
+            >
+              <PlusCircle className="w-4 h-4 mr-2" /> New Chat
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+              className="text-gray-400 hover:text-white hover:bg-gray-700"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
         
         {/* Chat content area */}
@@ -234,7 +297,7 @@ export function AIChatbot({ onClose }: AIChatbotProps) {
                           <div className="bg-gray-800 rounded-lg p-3 inline-block">
                             <div className="flex items-center">
                               <div className="spinner mr-2" />
-                              <p className="text-white">Thinking...</p>
+                              <p className="text-white">Analyzing your financial data… {elapsedSec}s</p>
                             </div>
                           </div>
                         </div>
@@ -269,9 +332,22 @@ export function AIChatbot({ onClose }: AIChatbotProps) {
           </div>
           
           <div className="mt-4 text-center">
-            <Button variant="link" className="text-primary hover:underline text-sm">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              accept="application/pdf,image/*,text/plain,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={onFilesSelected}
+            />
+            <Button
+              variant="link"
+              className="text-primary hover:underline text-sm"
+              onClick={onClickUpload}
+              disabled={isUploading}
+            >
               <Upload className="w-4 h-4 mr-2" />
-              Upload document for analysis
+              {isUploading ? 'Uploading…' : 'Upload document for analysis'}
             </Button>
           </div>
         </div>

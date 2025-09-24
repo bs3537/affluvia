@@ -46,11 +46,8 @@ export function FloatingAIAssistant({ onOpenChat }: FloatingAIAssistantProps) {
         <div className="relative">
           <Button
             type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              handleToggle();
-            }}
+            onMouseDown={(e) => { try { e.preventDefault(); e.stopPropagation(); } catch {} handleToggle(); }}
+            onClick={(e) => { try { e.preventDefault(); e.stopPropagation(); } catch {} handleToggle(); }}
             className="w-16 h-16 rounded-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 border-2 border-purple-400/30 group"
             size="icon"
             aria-label="Open Financial Assistant"

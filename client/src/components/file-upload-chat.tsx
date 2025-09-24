@@ -21,6 +21,7 @@ interface FileUploadChatProps {
   disabled?: boolean;
   maxFiles?: number;
   maxFileSize?: number; // in MB
+  onClose?: () => void; // optional: close the upload UI after success
 }
 
 interface SelectedFile {
@@ -33,7 +34,8 @@ export function FileUploadChat({
   onFilesUploaded, 
   disabled = false, 
   maxFiles = 5, 
-  maxFileSize = 25 
+  maxFileSize = 25,
+  onClose
 }: FileUploadChatProps) {
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [message, setMessage] = useState('');
@@ -186,6 +188,8 @@ export function FileUploadChat({
       });
       setSelectedFiles([]);
       setMessage('');
+      // Close parent upload UI if provided
+      if (onClose) onClose();
     } catch (error) {
       console.error('Upload error:', error);
       setUploadError(error instanceof Error ? error.message : 'Upload failed');

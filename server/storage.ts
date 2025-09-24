@@ -766,57 +766,104 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getInvestmentCache(userId: number, category: string): Promise<InvestmentCache | undefined> {
-    const now = new Date();
-    const [cache] = await db
-      .select()
-      .from(investmentCache)
-      .where(
-        and(
-          eq(investmentCache.userId, userId),
-          eq(investmentCache.category, category),
-          gt(investmentCache.expiresAt, now)
-        )
-      );
-    return cache || undefined;
+    try {
+      const now = new Date();
+      const [cache] = await db
+        .select()
+        .from(investmentCache)
+        .where(
+          and(
+            eq(investmentCache.userId, userId),
+            eq(investmentCache.category, category),
+            gt(investmentCache.expiresAt, now)
+          )
+        );
+      return cache || undefined;
+    } catch (e: any) {
+      const msg = (e?.message || '').toString();
+      if (e?.code === '42703' || /column\s+data\s+does\s+not\s+exist/i.test(msg)) {
+        try { await db.execute(sql`ALTER TABLE IF NOT EXISTS investment_cache ADD COLUMN IF NOT EXISTS data JSONB;`); } catch {}
+        try { await db.execute(sql`ALTER TABLE IF NOT EXISTS investment_cache ADD COLUMN IF NOT EXISTS category TEXT;`); } catch {}
+        // Retry once
+        try {
+          const now = new Date();
+          const [cache] = await db
+            .select()
+            .from(investmentCache)
+            .where(
+              and(
+                eq(investmentCache.userId, userId),
+                eq(investmentCache.category, category),
+                gt(investmentCache.expiresAt, now)
+              )
+            );
+          return cache || undefined;
+        } catch {}
+      }
+      console.warn('getInvestmentCache failed:', msg);
+      return undefined;
+    }
   }
 
   async setInvestmentCache(userId: number, category: string, data: any, ttlHours: number = 6): Promise<InvestmentCache> {
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + ttlHours * 60 * 60 * 1000);
-
-    // Delete existing cache for this user/category
-    await db
-      .delete(investmentCache)
-      .where(
-        and(
-          eq(investmentCache.userId, userId),
-          eq(investmentCache.category, category)
-        )
-      );
-
-    // Insert new cache
-    const [cache] = await db
-      .insert(investmentCache)
-      .values({
-        userId,
-        category,
-        data,
-        expiresAt,
-      })
-      .returning();
-    
-    return cache;
+    try {
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + ttlHours * 60 * 60 * 1000);
+      await db
+        .delete(investmentCache)
+        .where(and(eq(investmentCache.userId, userId), eq(investmentCache.category, category)));
+      const [cache] = await db
+        .insert(investmentCache)
+        .values({ userId, category, data, expiresAt })
+        .returning();
+      return cache;
+    } catch (e: any) {
+      const msg = (e?.message || '').toString();
+      if (e?.code === '42703' || /column\s+data\s+does\s+not\s+exist/i.test(msg)) {
+        try { await db.execute(sql`ALTER TABLE IF NOT EXISTS investment_cache ADD COLUMN IF NOT EXISTS data JSONB;`); } catch {}
+        try { await db.execute(sql`ALTER TABLE IF NOT EXISTS investment_cache ADD COLUMN IF NOT EXISTS category TEXT;`); } catch {}
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + ttlHours * 60 * 60 * 1000);
+        await db
+          .delete(investmentCache)
+          .where(and(eq(investmentCache.userId, userId), eq(investmentCache.category, category)));
+        const [cache] = await db
+          .insert(investmentCache)
+          .values({ userId, category, data, expiresAt })
+          .returning();
+        return cache;
+      }
+      console.warn('setInvestmentCache failed:', msg);
+      return { id: -1, userId, category, data, lastUpdated: new Date(), expiresAt: new Date(Date.now() + ttlHours * 3600 * 1000) } as any;
+    }
   }
 
   // Goals methods
   async getGoals(userId: number): Promise<Goal[]> {
-    const userGoals = await db
-      .select()
-      .from(goals)
-      .where(eq(goals.userId, userId))
-      .orderBy(asc(goals.priority));
-    
-    return userGoals;
+    try {
+      const userGoals = await db
+        .select()
+        .from(goals)
+        .where(eq(goals.userId, userId))
+        .orderBy(asc(goals.priority));
+      return userGoals;
+    } catch (e: any) {
+      const msg = (e?.message || '').toString();
+      if (e?.code === '42703' || /inflation_assumption_pct|funding_source_account_ids/i.test(msg)) {
+        try { await db.execute(sql`ALTER TABLE IF EXISTS goals ADD COLUMN IF NOT EXISTS inflation_assumption_pct DECIMAL(5,2) DEFAULT 2.5;`); } catch {}
+        try { await db.execute(sql`ALTER TABLE IF NOT EXISTS goals ADD COLUMN IF NOT EXISTS funding_source_account_ids JSONB;`); } catch {}
+        try {
+          const userGoals = await db
+            .select()
+            .from(goals)
+            .where(eq(goals.userId, userId))
+            .orderBy(asc(goals.priority));
+          return userGoals;
+        } catch {}
+      }
+      console.warn('getGoals failed:', msg);
+      return [] as any[];
+    }
   }
 
   async getGoal(userId: number, goalId: number): Promise<Goal | undefined> {
@@ -1915,18 +1962,47 @@ export class DatabaseStorage implements IStorage {
 
   // Comprehensive Insights - access ALL database data for enhanced analysis
   async getComprehensiveInsights(userId: number): Promise<DashboardInsight | undefined> {
-    const [insights] = await db
-      .select()
-      .from(dashboardInsights)
-      .where(and(
-        eq(dashboardInsights.userId, userId),
-        eq(dashboardInsights.isActive, true),
-        eq(dashboardInsights.generationVersion, "2.0-comprehensive") // Filter for comprehensive insights
-      ))
-      .orderBy(desc(dashboardInsights.createdAt))
-      .limit(1);
-    
-    return insights || undefined;
+    try {
+      const [insights] = await db
+        .select()
+        .from(dashboardInsights)
+        .where(and(
+          eq(dashboardInsights.userId, userId),
+          eq(dashboardInsights.isActive, true),
+          eq(dashboardInsights.generationVersion, "2.0-comprehensive")
+        ))
+        .orderBy(desc(dashboardInsights.createdAt))
+        .limit(1);
+      if (insights) return insights;
+    } catch (e) {
+      try { console.warn('[getComprehensiveInsights] dashboard_insights query failed; falling back to financial_profiles.central_insights:', (e as any)?.message || e); } catch {}
+    }
+
+    // Fallback: use financial_profiles.central_insights if present
+    try {
+      const profile = await this.getFinancialProfile(userId);
+      const ci: any = (profile as any)?.centralInsights || null;
+      const arr = Array.isArray(ci) ? ci : (Array.isArray(ci?.insights) ? ci.insights : null);
+      if (arr && arr.length > 0) {
+        const fake: any = {
+          id: -1,
+          userId,
+          insights: arr,
+          generatedByModel: (ci && ci.generatedByModel) || 'grok-4-fast-reasoning',
+          generationVersion: '2.0-comprehensive',
+          financialSnapshot: (ci && ci.financialSnapshot) || null,
+          profileDataHash: (ci && ci.profileDataHash) || null,
+          isActive: true,
+          validUntil: null,
+          viewCount: 0,
+          lastViewed: null,
+          createdAt: (ci && (ci.createdAt || ci.lastUpdated)) || new Date(),
+          updatedAt: (ci && (ci.updatedAt || ci.lastUpdated)) || new Date(),
+        };
+        return fake as DashboardInsight;
+      }
+    } catch {}
+    return undefined;
   }
 
   async createComprehensiveInsights(userId: number, data: {

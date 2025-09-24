@@ -123,25 +123,41 @@ export function setupLifeGoalsRoutes(app: any, storage: Storage) {
     }
   });
 
-  // Get AI insights for life goal
+  // Get AI insights for life goal (persisted-first, auto-generate fallback)
   app.get('/api/life-goal-insights/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
-      
+      const userId = req.user!.id;
       const goalId = parseInt(req.params.id);
-      const goal = await storage.getLifeGoal(req.user!.id, goalId);
-      
-      if (!goal) {
-        return res.status(404).json({ error: 'Goal not found' });
+      const refresh = req.query.refresh === 'true';
+
+      const goal = await storage.getLifeGoal(userId, goalId);
+      if (!goal) return res.status(404).json({ error: 'Goal not found' });
+
+      // 1) Return saved insights when available and not refreshing
+      try {
+        const saved: any = (goal as any).aiInsights;
+        if (!refresh && saved && Array.isArray(saved.recommendations) && saved.recommendations.length > 0) {
+          return res.json({
+            insights: saved.recommendations,
+            generatedAt: (goal as any).aiInsightsGeneratedAt || (goal as any).updatedAt || null,
+            cached: true,
+          });
+        }
+      } catch {}
+
+      // 2) Generate fresh insights, persist to life_goals.ai_insights, and return
+      const profile = await storage.getFinancialProfile(userId);
+      const fresh = await generateLifeGoalInsights(goal as any, profile as any, userId);
+      try {
+        await storage.updateLifeGoal(userId, goalId, {
+          aiInsights: { recommendations: Array.isArray(fresh) ? fresh : [] },
+          aiInsightsGeneratedAt: new Date(),
+        } as any);
+      } catch (e) {
+        try { console.warn('[LifeGoals] failed to persist insights:', (e as any)?.message || e); } catch {}
       }
-      
-      // Get user's financial profile for context
-      const profile = await storage.getFinancialProfile(req.user!.id);
-      
-      // Generate insights using Gemini API with comprehensive context
-      const insights = await generateLifeGoalInsights(goal, profile, req.user!.id);
-      
-      res.json(insights);
+      return res.json({ insights: fresh, generatedAt: new Date().toISOString(), cached: false });
     } catch (error) {
       next(error);
     }

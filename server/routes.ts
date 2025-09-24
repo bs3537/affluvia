@@ -5677,15 +5677,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get saved retirement insights
+  // Get saved retirement insights (persisted-first, supports ?refresh=true)
   app.get("/api/retirement-insights", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
 
       const userId = req.user!.id;
       const profile = await storage.getFinancialProfile(userId);
-      // If not present, opportunistically generate once and return
-      if (!profile || !profile.retirementInsights) {
+      const refresh = req.query.refresh === 'true';
+      // Return saved unless refresh or missing
+      if (!refresh && profile && (profile as any).retirementInsights) {
+        return res.json((profile as any).retirementInsights);
+      }
+      // If not present or refresh=true, opportunistically generate and return
+      if (!profile || !profile.retirementInsights || refresh) {
         try {
           if (!profile) return res.json({ insights: [], lastUpdated: null });
           const insights = await generateRetirementInsights(userId, profile);
@@ -5696,8 +5701,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.json({ insights: [], lastUpdated: null });
         }
       }
-
-      res.json(profile.retirementInsights);
+      res.json((profile as any).retirementInsights);
     } catch (error) {
       console.error("Error fetching retirement insights:", error);
       res.status(500).json({ error: "Failed to fetch retirement insights" });
@@ -5705,7 +5709,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Generate centralized insights using comprehensive AI context and persist
-  // Persist ONLY to financial_profiles.central_insights to avoid clobbering other insight variants
+  // Persist to financial_profiles.central_insights AND dashboard_insights (comprehensive version)
   app.post("/api/generate-central-insights", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
@@ -5713,11 +5717,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user!.id;
       const insights = await generateCentralInsights(userId);
       await storage.updateFinancialProfile(userId, { centralInsights: insights });
-
-      // Intentionally NOT writing to dashboard_insights to prevent overwriting
-      // rows used by dashboard snapshot or comprehensive insights. The centralized
-      // insights page reads from financial_profiles.central_insights for speed and stability.
-
+      // Also write a comprehensive dashboard_insights row for snapshot hydration and persistence
+      try {
+        const estateDocuments = await storage.getEstateDocuments(userId);
+        const profile = await storage.getFinancialProfile(userId);
+        const { createProfileDataHash } = await import('./gemini-insights');
+        const profileDataHash = createProfileDataHash(profile || {}, estateDocuments);
+        const payload = {
+          insights: Array.isArray((insights as any)?.insights) ? (insights as any).insights : (insights as any),
+          generatedByModel: 'grok-4-fast-reasoning',
+          generationPrompt: undefined,
+          generationVersion: '2.0-comprehensive',
+          financialSnapshot: (profile as any)?.calculations || null,
+          profileDataHash,
+          validUntil: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        };
+        await storage.createComprehensiveInsights(userId, payload);
+        // Invalidate snapshot cache so dashboard picks up persisted insights immediately
+        try {
+          const { cacheService } = await import('./services/cache.service');
+          await cacheService.invalidate('dashboard_snapshot');
+        } catch {}
+      } catch (e) {
+        console.warn('Unable to persist comprehensive insights to dashboard_insights:', e);
+      }
       res.json(insights);
     } catch (error) {
       console.error("Error generating central insights:", error);
@@ -6848,6 +6871,32 @@ Return ONLY valid JSON like:
       await storage.updateEstatePlan(userId, estatePlan.id, { analysisResults: updatedAnalysis });
 
       res.json({ insights });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // GET persisted estate insights with auto-generate fallback
+  app.get('/api/estate-plan/insights', async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) return res.sendStatus(401);
+      const userId = req.user!.id;
+      const refresh = req.query.refresh === 'true';
+      const estatePlan = await storage.getEstatePlan(userId);
+      if (!estatePlan) return res.status(404).json({ error: 'Estate plan not found' });
+
+      const analysis: any = (estatePlan as any).analysisResults || {};
+      const existing = analysis?.estateNew?.insights || null;
+      if (!refresh && existing) {
+        return res.json({ insights: existing, cached: true });
+      }
+
+      const context = await assembleEstateInsightsContext(userId, estatePlan);
+      const insights: EstateInsightsPayload = await generateEstateInsightsFromContext(context);
+      const estateNew = { ...(analysis.estateNew || {}), insights };
+      const updatedAnalysis = { ...analysis, estateNew };
+      await storage.updateEstatePlan(userId, estatePlan.id, { analysisResults: updatedAnalysis });
+      return res.json({ insights, cached: false });
     } catch (error) {
       next(error);
     }

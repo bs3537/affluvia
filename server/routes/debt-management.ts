@@ -738,14 +738,46 @@ export function setupDebtManagementRoutes(app: Express) {
       if (!req.user) {
         return res.status(401).json({ error: "Not authenticated" });
       }
+      const refresh = req.query.refresh === 'true';
       // Load most-recent active insights from DB
       const rows = await db
         .select()
         .from(debtAIInsights)
         .where(eq(debtAIInsights.userId, req.user.id));
 
-      if (!rows || rows.length === 0) {
-        return res.json({ insights: [], generatedAt: null });
+      if ((!rows || rows.length === 0) || refresh) {
+        try {
+          const { generateDebtInsightsForUser } = await import('../debt-gemini-insights');
+          await generateDebtInsightsForUser(req.user.id);
+          // Reload rows after generation
+          const newRows = await db
+            .select()
+            .from(debtAIInsights)
+            .where(eq(debtAIInsights.userId, req.user.id));
+          if (!newRows || newRows.length === 0) {
+            return res.json({ insights: [], generatedAt: null });
+          }
+          // Map and return
+          const latestNew = newRows.reduce((max: any, r: any) => {
+            const t = (r as any).createdAt ? new Date((r as any).createdAt as any).getTime() : 0;
+            return t > max ? t : max;
+          }, 0);
+          const insightsNew = newRows
+            .sort((a: any, b: any) => (b.priority || 0) - (a.priority || 0))
+            .map((r: any) => ({
+              id: String(r.id),
+              type: r.insightType === 'warning' ? 'warning' : (r.insightType?.includes('optimization') ? 'opportunity' : 'recommendation'),
+              title: r.insightTitle,
+              content: r.insightContent,
+              priority: (r.priority || 0) >= 3 ? 'high' : (r.priority || 0) === 2 ? 'medium' : 'low',
+              actionable: !!r.isActionable,
+              potentialSavings: undefined,
+              relatedDebtId: r.relatedDebtId || undefined,
+            }));
+          return res.json({ insights: insightsNew, generatedAt: latestNew ? new Date(latestNew).toISOString() : null });
+        } catch (genErr) {
+          console.warn('[Debt AI Insights] auto-generate failed:', (genErr as any)?.message || genErr);
+        }
       }
 
       const latest = rows.reduce((max: any, r: any) => {

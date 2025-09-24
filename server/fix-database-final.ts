@@ -263,9 +263,65 @@ async function fixDatabaseFinal() {
     console.log('   ✅ Supporting tables/columns ensured');
 
     // ============================================
-    // STEP 4: COMPREHENSIVE FINANCIAL_PROFILES FIX
+    // STEP 4c: Normalize chat_messages schema for chatbot persistence
+    // - Ensure modern columns exist (message, response, timestamp)
+    // - Relax legacy 'sender' NOT NULL if present
+    // - Backfill message from legacy 'content' when applicable
+    console.log('\n📋 Step 4c: Normalizing chat_messages table...');
+    try {
+      await db.execute(sql`
+        ALTER TABLE IF EXISTS chat_messages
+        ADD COLUMN IF NOT EXISTS message TEXT,
+        ADD COLUMN IF NOT EXISTS response TEXT,
+        ADD COLUMN IF NOT EXISTS timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      `);
+
+      // If legacy 'content' exists and 'message' is null, copy content into message
+      await db.execute(sql`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'chat_messages' AND column_name = 'content'
+          ) THEN
+            EXECUTE 'UPDATE chat_messages SET message = content WHERE message IS NULL';
+          END IF;
+        END $$;
+      `);
+
+      // Relax 'sender' NOT NULL if that legacy column exists
+      await db.execute(sql`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'chat_messages' AND column_name = 'sender'
+          ) THEN
+            EXECUTE 'ALTER TABLE chat_messages ALTER COLUMN sender DROP NOT NULL';
+            -- Optional: set a default for future legacy writes
+            EXECUTE 'ALTER TABLE chat_messages ALTER COLUMN sender SET DEFAULT ''user''';
+          END IF;
+        END $$;
+      `);
+    console.log('   ✅ chat_messages normalized');
+    } catch (e) {
+      console.log('   ⚠️ chat_messages normalization skipped:', (e as any)?.message || e);
+    }
+
     // ============================================
-    console.log('\n📋 Step 4: Comprehensive financial_profiles fix...');
+    // STEP 4d: Ensure common columns on goals, investment_cache, debt_payoff_plans
+    console.log('\n📋 Step 4d: Ensuring goals/investment_cache/debt_payoff_plans columns...');
+    try { await db.execute(sql`ALTER TABLE IF NOT EXISTS goals ADD COLUMN IF NOT EXISTS funding_source_account_ids JSONB;`); } catch {}
+    try { await db.execute(sql`ALTER TABLE IF NOT EXISTS goals ADD COLUMN IF NOT EXISTS inflation_assumption_pct DECIMAL(5,2) DEFAULT 2.5;`); } catch {}
+    try { await db.execute(sql`ALTER TABLE IF NOT EXISTS investment_cache ADD COLUMN IF NOT EXISTS data JSONB;`); } catch {}
+    try { await db.execute(sql`ALTER TABLE IF NOT EXISTS investment_cache ADD COLUMN IF NOT EXISTS category TEXT;`); } catch {}
+    try { await db.execute(sql`ALTER TABLE IF NOT EXISTS debt_payoff_plans ADD COLUMN IF NOT EXISTS payoff_schedule JSONB;`); } catch {}
+    console.log('   ✅ Columns ensured for goals/investment_cache/debt_payoff_plans');
+
+    // ============================================
+    // STEP 5: COMPREHENSIVE FINANCIAL_PROFILES FIX
+    // ============================================
+    console.log('\n📋 Step 5: Comprehensive financial_profiles fix...');
     
     // Ensure monthly_expenses is JSONB
     await db.execute(sql`
@@ -306,9 +362,9 @@ async function fixDatabaseFinal() {
     console.log('   ✅ financial_profiles table fixed');
     
     // ============================================
-    // STEP 5: CREATE UPDATE TRIGGERS
+    // STEP 6: CREATE UPDATE TRIGGERS
     // ============================================
-    console.log('\n📋 Step 5: Creating automatic update triggers...');
+    console.log('\n📋 Step 6: Creating automatic update triggers...');
     
     // Create function for updating timestamps
     await db.execute(sql`
@@ -344,9 +400,9 @@ async function fixDatabaseFinal() {
     }
     
     // ============================================
-    // STEP 6: CLEANUP DUPLICATE/UNUSED COLUMNS
+    // STEP 7: CLEANUP DUPLICATE/UNUSED COLUMNS
     // ============================================
-    console.log('\n📋 Step 6: Cleaning up duplicate columns...');
+    console.log('\n📋 Step 7: Cleaning up duplicate columns...');
     
     // Check for and remove duplicate columns
     const duplicateChecks = [
@@ -372,9 +428,9 @@ async function fixDatabaseFinal() {
     }
     
     // ============================================
-    // STEP 7: VERIFY ALL FIXES
+    // STEP 8: VERIFY ALL FIXES
     // ============================================
-    console.log('\n📋 Step 7: Verifying all fixes...');
+    console.log('\n📋 Step 8: Verifying all fixes...');
     
     // Check widget_cache
     const widgetCacheCheck = await db.execute(sql`

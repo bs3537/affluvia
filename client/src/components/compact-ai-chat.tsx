@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Bot, User, Send, X, Sparkles, ArrowUp, Paperclip, FileText } from "lucide-react";
+import { Bot, User, Send, X, Sparkles, ArrowUp, Paperclip, FileText, PlusCircle } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { FileUploadChat } from "./file-upload-chat";
 
@@ -17,6 +17,7 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { user } = useAuth();
@@ -31,13 +32,23 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
     scrollToBottom();
   }, [messages, isLoading, isTyping]);
 
+  // Seconds timer while analyzing
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    if (isLoading) {
+      setElapsedSec(0);
+      timer = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [isLoading]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
   
   const loadChatMessages = async () => {
     try {
-      const response = await fetch('/api/chat-messages');
+      const response = await fetch('/api/chat-messages', { credentials: 'include' });
       if (response.ok) {
         const data = await response.json();
         setMessages(data);
@@ -69,6 +80,7 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
           headers: {
             'Content-Type': 'application/json',
           },
+          credentials: 'include',
           body: JSON.stringify({ message: messageText }),
         });
         
@@ -102,6 +114,22 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
     }
   };
 
+  const handleNewChat = () => {
+    // UI-only reset: keep DB history intact
+    setMessages([]);
+    setNewMessage("");
+    setShowFileUpload(false);
+    setIsLoading(false);
+    setIsTyping(false);
+    // Focus input after clearing
+    setTimeout(() => {
+      try {
+        const input = document.querySelector<HTMLInputElement>('input[placeholder^="Ask about your finances"]');
+        input?.focus();
+      } catch {}
+    }, 0);
+  };
+
   const quickPrompts = [
     "Analyze my financial health",
     "What's my retirement readiness?",
@@ -119,7 +147,6 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
 
     setIsLoading(true);
     setIsTyping(true);
-    setShowFileUpload(false);
 
     // Create FormData for file upload
     const formData = new FormData();
@@ -145,6 +172,7 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
       const response = await fetch('/api/chat-messages/upload', {
         method: 'POST',
         body: formData,
+        credentials: 'include',
       });
 
       if (response.ok) {
@@ -188,14 +216,25 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
             </p>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          className="text-gray-400 hover:text-white hover:bg-gray-700"
-        >
-          <X className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleNewChat}
+            className="bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 hover:border-gray-500"
+            title="Start a new chat (clears current view only)"
+          >
+            <PlusCircle className="w-4 h-4 mr-2" /> New Chat
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="text-gray-400 hover:text-white hover:bg-gray-700"
+          >
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
       
       {/* Chat Messages Area */}
@@ -356,7 +395,7 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
                         <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
                         <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></div>
                       </div>
-                      <p className="text-white text-sm">Analyzing your financial data...</p>
+                      <p className="text-white text-sm">Analyzing your financial data… {elapsedSec}s</p>
                     </div>
                   </div>
                 </div>
@@ -388,6 +427,7 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
           </div>
           <FileUploadChat
             onFilesUploaded={handleFilesUpload}
+            onClose={() => setShowFileUpload(false)}
             disabled={isLoading}
             maxFiles={5}
             maxFileSize={25}
@@ -415,7 +455,7 @@ export function CompactAIChat({ onClose, className = "" }: CompactAIChatProps) {
           
           <div className="flex-1 relative">
             <Input
-              placeholder="Ask about your finances, goals, or get personalized advice..."
+              placeholder="Ask about your finances, goals, or get personalized insights..."
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyPress={handleKeyPress}
