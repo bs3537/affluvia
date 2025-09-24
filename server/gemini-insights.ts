@@ -836,11 +836,48 @@ export async function generateGeminiInsights(
     .digest('hex');
 
   // Generate comprehensive prompt
+  // Spousal coverage and income specifics for precise protection guidance
+  const userIncome = parseFloat((profileData as any).annualIncome || '0');
+  const spouseIncome = parseFloat((profileData as any).spouseAnnualIncome || '0');
+  const majorityEarner = spouseIncome > userIncome ? 'Spouse' : 'User';
+  const userHasDisability = !!((profileData as any).disabilityInsurance?.hasDisability);
+  const spouseHasDisability = !!((profileData as any).spouseDisabilityInsurance?.hasDisability);
+
+  // Summarize retirement assets by owner to align with risk profiles per spouse
+  const retirementByOwnerSummary = (() => {
+    try {
+      const assets = Array.isArray((profileData as any).assets) ? (profileData as any).assets : [];
+      const lower = (s: any) => (typeof s === 'string' ? s.toLowerCase() : '');
+      const isRetirement = (t: string) => /401k|403b|ira|roth|pension|457|tsp/.test(lower(t));
+      const map = new Map<string, number>();
+      for (const a of assets) {
+        if (!a) continue;
+        if (isRetirement(a.type || '')) {
+          const owner = (a.owner || 'unknown').toString();
+          const prev = map.get(owner) || 0;
+          map.set(owner, prev + (Number(a.value) || 0));
+        }
+      }
+      const lines: string[] = [];
+      for (const [owner, total] of map.entries()) {
+        lines.push(`- ${owner}: $${Math.round(total).toLocaleString()}`);
+      }
+      return lines.length ? lines.join('\n') : '- (no ownership data)';
+    } catch { return '- (unavailable)'; }
+  })();
+
   const generationPrompt = `
 You are a CERTIFIED FINANCIAL PLANNER (CFP) analyzing a client's complete financial situation. Evaluate all the data available to you and think hard before making any recommendations.
 Today's date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}.
 
 CRITICAL: DO NOT recommend obtaining insurance that the client already has. Always check the "Life Insurance", "Disability Insurance", and Insurance Adequacy Score before making insurance recommendations. If they have existing coverage, focus on optimization or adequacy review instead.
+
+INSURANCE PRIORITY LOGIC (SPOUSAL & INCOME-AWARE):
+- Household incomes — User: $${(userIncome).toLocaleString()}, Spouse: $${(spouseIncome).toLocaleString()} (Majority earner: ${majorityEarner}).
+- Disability coverage — User: ${userHasDisability ? 'Yes' : 'No'}, Spouse: ${spouseHasDisability ? 'Yes' : 'No'}.
+- If one spouse ALREADY HAS disability insurance, DO NOT claim "neither has disability insurance"; instead, evaluate adequacy for the covered spouse and focus new-coverage recommendation on the UNCOVERED spouse.
+- When recommending life/disability coverage amounts, PRIORITIZE the uncovered HIGHER earner first; scale urgency, priority, and estimated dollar impact proportional to that uncovered spouse’s income.
+- If the higher earner is already covered, do not recommend duplicate coverage; instead suggest coverage review/optimization and focus primary recommendation on the uncovered spouse.
 
 NON-NEGOTIABLE DASHBOARD INTEGRATION RULES:
 - Emergency Fund insights MUST use the Emergency Readiness Score from the dashboard widget. Use the simplified widget score (calculations.emergencyScore or persisted profile.emergencyReadinessScore) as canonical. Do NOT infer targets from income; base adequacy on monthly ESSENTIAL expenses. Do not recompute months unless the data provides them.
@@ -848,6 +885,16 @@ NON-NEGOTIABLE DASHBOARD INTEGRATION RULES:
  - Debt Management: Default to the app's Hybrid (Snowball + Avalanche) payoff strategy. Use quick-win momentum on small balances while prioritizing surplus to highest-interest debts. Do not recommend pure Avalanche/Snowball as default. Always include a call to action for the user to visit the Debt Management Center for detailed planning, comparisons, and execution.
 - Retirement readiness MUST reference the Monte Carlo Success Probability from the dashboard widget Retirement Success (it has saved database data)(probabilityOfSuccess in percent, 0–100). Do NOT use or mention any legacy "retirement confidence score" metric.
 - Do NOT recommend Social Security claiming age optimization here. A dedicated optimizer exists in the Retirement Planning optimization tab; avoid SS-claiming-age recommendations in these insights.
+
+PORTFOLIO ALIGNMENT RULES (PER-SPOUSE RISK & OWNERSHIP):
+- Evaluate User and Spouse risk profiles independently (userRiskProfile, spouseRiskProfile).
+- For retirement accounts, align recommendations BY OWNER. Do NOT co‑mingle assets across spouses when proposing rebalancing; keep each spouse’s retirement accounts aligned to THEIR risk profile.
+- When suggesting allocation changes, explicitly reference which spouse’s accounts are affected.
+
+EDUCATION GOALS — BASELINE VS OPTIMIZED:
+- When education goals have an Optimization Engine record, treat the baseline and optimized Monte Carlo success probabilities separately.
+- If the optimized success ≥ 80% and higher than baseline, avoid recommending contribution increases that would exceed cash‑flow guardrails; focus on maintenance, monitoring, or cost‑reduction options.
+- If recommending additional savings, quantify the improvement relative to the baseline success (not the already optimized figure).
 
 CLIENT PROFILE:
 - Age: ${snapshot.age}, Marital Status: ${snapshot.maritalStatus}, Dependents: ${snapshot.dependents}
@@ -990,7 +1037,7 @@ PROTECTION & PLANNING:
     profileData.spouseLifeInsurance?.coverageAmount ? `, Spouse: $${parseFloat(profileData.spouseLifeInsurance.coverageAmount).toLocaleString()}` : ''
   })` : ''
 }
-- Disability Insurance: ${snapshot.hasDisabilityInsurance ? 'Yes' : 'No'}
+- Disability Insurance: User ${userHasDisability ? 'Yes' : 'No'}; Spouse ${spouseHasDisability ? 'Yes' : 'No'}
 - Long-Term Care Insurance: ${profileData.hasLongTermCareInsurance ? 'Yes' : 'No'}
 - Will: ${snapshot.hasWill ? 'Yes' : 'No'}
 - Power of Attorney: ${snapshot.hasPowerOfAttorney ? 'Yes' : 'No'}
@@ -1003,6 +1050,23 @@ INVESTMENT ALLOCATION:
 - Total Allocation: ${totalAllocation}% ${totalAllocation === 100 ? '(✅ Properly balanced)' : totalAllocation > 0 ? '(⚠️ May need rebalancing)' : '(❌ No allocation data)'}
 - User Risk Profile: ${profileData.userRiskProfile || 'Not assessed'}
 ${profileData.spouseRiskProfile && profileData.maritalStatus === 'married' ? `- Spouse Risk Profile: ${profileData.spouseRiskProfile}` : ''}
+
+ASSUMPTION FOR ANALYSIS:
+- Treat each owner's retirement assets as invested according to THEIR current investor risk profile unless explicit owner-level current allocation contradicts it. Do NOT assume the user's risk profile applies to the spouse, or vice versa.
+
+CURRENT ALLOCATION BY OWNER (if provided):
+${(() => {
+  const ua = (profileData as any)?.currentAllocation || null;
+  const sa = (profileData as any)?.spouseAllocation || null;
+  const pct = (n: any) => (Number.isFinite(Number(n)) ? `${Number(n).toFixed(0)}%` : '—');
+  const lines: string[] = [];
+  if (ua) lines.push(`- User: Stocks ${pct(ua.stocks || ua.usStocks || ua.stock || 0)}, Bonds ${pct(ua.bonds || 0)}, Cash ${pct(ua.cash || 0)}${ua.alternatives ? `, Alternatives ${pct(ua.alternatives)}` : ''}`);
+  if (sa) lines.push(`- Spouse: Stocks ${pct(sa.stocks || sa.usStocks || sa.stock || 0)}, Bonds ${pct(sa.bonds || 0)}, Cash ${pct(sa.cash || 0)}${sa.alternatives ? `, Alternatives ${pct(sa.alternatives)}` : ''}`);
+  return lines.length ? lines.join('\n') : '- (not provided)';
+})()}
+
+RETIREMENT ACCOUNTS BY OWNER:
+${retirementByOwnerSummary}
 
 RETIREMENT PLANNING:
 - Target Retirement Age: ${snapshot.retirementAge}
@@ -1525,7 +1589,7 @@ Analyze this client's situation and provide actionable, prioritized recommendati
       const insightsData = JSON.parse(jsonMatch?.[1] || text);
       
       // Validate and clean insights with Phase 4 quantified impact
-      const insights: InsightItem[] = (insightsData.insights || [])
+      let insights: InsightItem[] = (insightsData.insights || [])
         .slice(0, 12) // Limit to 12 insights max for CFP-level sophistication
         .map((insight: any) => ({
           title: insight.title || "Financial Recommendation",
@@ -1550,6 +1614,61 @@ Analyze this client's situation and provide actionable, prioritized recommendati
           accountSpecific: insight.accountSpecific || undefined
         }))
         .filter((insight: InsightItem) => insight.title && insight.description);
+
+      // Post-processing: fix protection recommendations using spousal coverage & income context
+      try {
+        const userName = (profileData as any).firstName || 'you';
+        const spouseName = (profileData as any).spouseName || 'your spouse';
+        const uncoveredPrimary = (!userHasDisability && spouseHasDisability) ? userName
+          : (userHasDisability && !spouseHasDisability) ? spouseName
+          : (!userHasDisability && !spouseHasDisability ? (spouseIncome > userIncome ? spouseName : userName) : null);
+
+        insights = insights.map((i) => {
+          const txt = `${i.title} ${i.description}`.toLowerCase();
+          const isDisability = /disability\s+insurance|own-occupation|income protection/.test(txt) || /Insurance/i.test(i.category || '') && /disability/i.test(txt);
+          if (isDisability) {
+            // Correct false "neither has coverage" claims if spouse is covered
+            if (spouseHasDisability || userHasDisability) {
+              i.description = i.description
+                .replace(/neither\s+you\s+nor\s+[^\s]+\s+has\s+disability\s+insurance/gi, `${userHasDisability ? userName : spouseName} is covered; ${!userHasDisability ? userName : spouseName} lacks coverage`)
+                .replace(/no\s+disability\s+coverage/gi, `${!userHasDisability ? userName : spouseName} lacks disability coverage`);
+            }
+            // Focus recommendation on the uncovered higher earner
+            if (uncoveredPrimary) {
+              if (!i.title.toLowerCase().includes('disability')) i.title = `Secure Disability Insurance for ${uncoveredPrimary}`;
+              // Ensure an action step targets the uncovered person
+              const step = `Get an own-occupation disability quote for ${uncoveredPrimary} (target ~60% income replacement).`;
+              if (!Array.isArray(i.actionSteps)) i.actionSteps = [];
+              if (!i.actionSteps.some(s => s.toLowerCase().includes('own-occupation'))) {
+                i.actionSteps.unshift(step);
+                i.actionSteps = i.actionSteps.slice(0, 5);
+              }
+            }
+          }
+
+          // Investment alignment: ensure per-spouse application note
+          const isInvest = /investment|portfolio|allocation|rebalance/i.test(i.category || '') || /rebalance|allocation|portfolio/i.test(txt);
+          if (isInvest) {
+            const note = 'Apply allocation within each spouse\'s retirement accounts separately, aligned to each spouse\'s stated risk profile (do not apply user\'s profile to spouse or vice versa).';
+            if (!Array.isArray(i.actionSteps)) i.actionSteps = [];
+            if (!i.actionSteps.some(s => s.toLowerCase().includes('each spouse'))) {
+              i.actionSteps.push(note);
+              i.actionSteps = i.actionSteps.slice(0, 5);
+            }
+            // If the text mentions spouse explicitly and we know spouse risk, add an alignment step
+            const mentionsSpouse = /\bspouse\b/i.test(txt) || /\b(manisha|wife|husband|partner)\b/i.test(txt);
+            if (mentionsSpouse && (profileData as any).spouseRiskProfile) {
+              const align = `Ensure spouse accounts align to ${String((profileData as any).spouseRiskProfile)} risk profile.`;
+              if (!i.actionSteps.some(s => s.toLowerCase().includes('align to') && s.toLowerCase().includes('risk profile'))) {
+                i.actionSteps.push(align);
+                i.actionSteps = i.actionSteps.slice(0, 5);
+              }
+            }
+          }
+
+          return i;
+        });
+      } catch {}
 
       return {
         insights,

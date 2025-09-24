@@ -196,6 +196,12 @@ export const financialProfiles = pgTable("financial_profiles", {
   
   // Comprehensive retirement planning data
   retirementPlanningData: jsonb("retirement_planning_data"),
+
+  // Cached Central Insights (for fast loads in Insights view)
+  centralInsights: jsonb("central_insights"),
+
+  // Cached Retirement Insights (for Retirement Planning → Insights tab)
+  retirementInsights: jsonb("retirement_insights"),
   
   // Monte Carlo simulation results and state
   monteCarloSimulation: jsonb("monte_carlo_simulation"),

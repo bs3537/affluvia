@@ -108,28 +108,23 @@ import { pool as sharedPool } from "./db";
 const PgStore = pgSession(session);
 const MemoryStore = memorystore(session);
 
-// Create a separate pool for session store with IPv4-only configuration
-// This prevents IPv6 connection errors that block page loading
+// Create a dedicated pool for session store using env, with IPv4 preference via NODE_OPTIONS
 const usePgSession = process.env.NODE_ENV === 'production' || process.env.USE_PG_SESSION === 'true';
-const sessionPool = usePgSession ? new pg.Pool({
-  // Force IPv4 by using explicit host and removing connectionString
-  host: 'db.hknfecbyfwqegsnpmbqb.supabase.co',
-  port: 6543, // Use transaction pooler port
-  database: 'postgres',
-  user: 'postgres',
-  password: 'Lexydog2023',
-  max: 5, // Small pool for sessions only
-  min: 1,
-  idleTimeoutMillis: 10000,
-  connectionTimeoutMillis: 30000,
-  ssl: { 
-    rejectUnauthorized: false,
-    require: true
-  },
-  // Force IPv4 DNS resolution
-  lookup: (hostname: string, options: any, cb: any) =>
-    dnsLookup(hostname, { ...options, family: 4, all: false, verbatim: true }, cb)
-}) : null as any;
+const sessionPool = usePgSession ? (() => {
+  const conString = process.env.SESSION_DATABASE_URL || process.env.DATABASE_URL || '';
+  const ssl = (process.env.SESSION_DB_SSL === 'true' || process.env.NODE_ENV === 'production') ? { rejectUnauthorized: false, require: true } : undefined as any;
+  const max = Number(process.env.SESSION_DB_MAX || 5);
+  if (conString) {
+    return new pg.Pool({ connectionString: conString, ssl, max });
+  }
+  // Fallback to discrete host/port envs if provided
+  const host = process.env.SESSION_DB_HOST;
+  const port = Number(process.env.SESSION_DB_PORT || 6543);
+  const database = process.env.SESSION_DB_NAME || 'postgres';
+  const user = process.env.SESSION_DB_USER;
+  const password = process.env.SESSION_DB_PASSWORD;
+  return new pg.Pool({ host, port, database, user, password, ssl, max, min: 1, idleTimeoutMillis: 10000, connectionTimeoutMillis: 30000 });
+})() : null as any;
 
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
@@ -348,7 +343,7 @@ export class DatabaseStorage implements IStorage {
       'taxFilingStatus', 'taxReturns', 'taxRecommendations', 'financialHealthScore',
       'emergencyReadinessScore', 'retirementReadinessScore', 'riskManagementScore', 'cashFlowScore',
       'netWorth', 'monthlyCashFlow', 'monthlyCashFlowAfterContributions',
-      'calculations', 'retirementPlanningData', 'monteCarloSimulation', 'isComplete', 'optimizationVariables',
+      'calculations', 'retirementPlanningData', 'centralInsights', 'retirementInsights', 'monteCarloSimulation', 'isComplete', 'optimizationVariables',
       'retirementPlanningUIPreferences', 'lastStressTestResults', 'lastStressTestDate',
       // Self-employed data fields
       'isSelfEmployed', 'selfEmploymentIncome', 'businessType', 'hasRetirementPlan', 'quarterlyTaxPayments', 'selfEmployedData'
@@ -376,7 +371,7 @@ export class DatabaseStorage implements IStorage {
                        'additionalProperties', 'lifeInsurance', 'spouseLifeInsurance', 'healthInsurance', 
                        'disabilityInsurance', 'spouseDisabilityInsurance', 'insurance', 'currentAllocation', 
                        'spouseAllocation', 'riskQuestions', 'riskQuestionnaire', 'spouseRiskQuestions', 
-                       'goals', 'lifeGoals', 'estatePlanning', 'taxReturns', 'taxRecommendations', 'retirementPlanningData', 
+                       'goals', 'lifeGoals', 'estatePlanning', 'taxReturns', 'taxRecommendations', 'retirementPlanningData', 'centralInsights', 'retirementInsights',
                        'monteCarloSimulation', 'optimizationVariables', 'retirementPlanningUIPreferences',
                        'lastStressTestResults', 'lastStressTestDate',
                        // Self-employed JSON fields
@@ -1753,17 +1748,35 @@ export class DatabaseStorage implements IStorage {
 
   // Dashboard Insights
   async getDashboardInsights(userId: number): Promise<DashboardInsight | undefined> {
-    const [insights] = await db
-      .select()
-      .from(dashboardInsights)
-      .where(and(
-        eq(dashboardInsights.userId, userId),
-        eq(dashboardInsights.isActive, true)
-      ))
-      .orderBy(desc(dashboardInsights.createdAt))
-      .limit(1);
-    
-    return insights || undefined;
+    // Primary path: prefer active row
+    try {
+      const [active] = await db
+        .select()
+        .from(dashboardInsights)
+        .where(and(
+          eq(dashboardInsights.userId, userId),
+          eq(dashboardInsights.isActive, true)
+        ))
+        .orderBy(desc(dashboardInsights.createdAt))
+        .limit(1);
+      if (active) return active;
+    } catch (e) {
+      try { console.warn('[getDashboardInsights] active-row query failed; falling back to latest-any:', (e as any)?.message || e); } catch {}
+    }
+
+    // Fallback: any latest row (covers legacy rows without is_active column or with null)
+    try {
+      const [latestAny] = await db
+        .select()
+        .from(dashboardInsights)
+        .where(eq(dashboardInsights.userId, userId))
+        .orderBy(desc(dashboardInsights.createdAt))
+        .limit(1);
+      return latestAny || undefined;
+    } catch (e2) {
+      try { console.error('[getDashboardInsights] fallback query failed:', (e2 as any)?.message || e2); } catch {}
+      return undefined;
+    }
   }
 
   async createDashboardInsights(userId: number, data: {
@@ -1777,23 +1790,79 @@ export class DatabaseStorage implements IStorage {
   }): Promise<DashboardInsight> {
     // Upsert to avoid duplicate key on unique user_id constraint
     const now = new Date();
-    const [upserted] = await db
-      .insert(dashboardInsights)
-      .values({
-        userId,
-        insights: data.insights,
-        generatedByModel: data.generatedByModel,
-        generationPrompt: data.generationPrompt,
-        generationVersion: data.generationVersion,
-        financialSnapshot: data.financialSnapshot,
-        profileDataHash: data.profileDataHash,
-        validUntil: data.validUntil,
-        isActive: true,
-        updatedAt: now
-      })
-      .onConflictDoUpdate({
-        target: dashboardInsights.userId,
-        set: {
+    try {
+      const [upserted] = await db
+        .insert(dashboardInsights)
+        .values({
+          userId,
+          insights: data.insights,
+          generatedByModel: data.generatedByModel,
+          generationPrompt: data.generationPrompt,
+          generationVersion: data.generationVersion,
+          financialSnapshot: data.financialSnapshot,
+          profileDataHash: data.profileDataHash,
+          validUntil: data.validUntil,
+          isActive: true,
+          updatedAt: now
+        })
+        .onConflictDoUpdate({
+          target: dashboardInsights.userId,
+          set: {
+            insights: data.insights,
+            generatedByModel: data.generatedByModel,
+            generationPrompt: data.generationPrompt,
+            generationVersion: data.generationVersion,
+            financialSnapshot: data.financialSnapshot,
+            profileDataHash: data.profileDataHash,
+            validUntil: data.validUntil,
+            isActive: true,
+            updatedAt: now,
+            // reset view stats on regeneration
+            viewCount: 0,
+            lastViewed: null,
+            regenerationTriggered: false
+          }
+        })
+        .returning();
+      return upserted;
+    } catch (e) {
+      // Fallback path for environments without UNIQUE(user_id) supporting ON CONFLICT
+      try { console.warn('[createDashboardInsights] onConflict upsert failed; applying manual upsert:', (e as any)?.message || e); } catch {}
+
+      // Try update latest row for this user; if none, insert fresh
+      const [existing] = await db
+        .select()
+        .from(dashboardInsights)
+        .where(eq(dashboardInsights.userId, userId))
+        .orderBy(desc(dashboardInsights.createdAt))
+        .limit(1);
+
+      if (existing) {
+        const [updated] = await db
+          .update(dashboardInsights)
+          .set({
+            insights: data.insights,
+            generatedByModel: data.generatedByModel,
+            generationPrompt: data.generationPrompt,
+            generationVersion: data.generationVersion,
+            financialSnapshot: data.financialSnapshot,
+            profileDataHash: data.profileDataHash,
+            validUntil: data.validUntil,
+            isActive: true,
+            updatedAt: now,
+            viewCount: 0,
+            lastViewed: null,
+            regenerationTriggered: false,
+          })
+          .where(eq(dashboardInsights.id, existing.id))
+          .returning();
+        return updated;
+      }
+
+      const [inserted] = await db
+        .insert(dashboardInsights)
+        .values({
+          userId,
           insights: data.insights,
           generatedByModel: data.generatedByModel,
           generationPrompt: data.generationPrompt,
@@ -1803,15 +1872,13 @@ export class DatabaseStorage implements IStorage {
           validUntil: data.validUntil,
           isActive: true,
           updatedAt: now,
-          // reset view stats on regeneration
+          createdAt: now,
           viewCount: 0,
-          lastViewed: null,
-          regenerationTriggered: false
-        }
-      })
-      .returning();
-
-    return upserted;
+          regenerationTriggered: false,
+        })
+        .returning();
+      return inserted;
+    }
   }
 
   async updateDashboardInsightsViewCount(userId: number): Promise<void> {

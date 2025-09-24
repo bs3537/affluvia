@@ -92,7 +92,53 @@ async function fixDatabaseFinal() {
     `);
     
     console.log('   ✅ dashboard_insights table fixed');
+
+    // ============================================
+    // STEP 2a: Ensure indexes for insights and cache
+    // ============================================
+    console.log('\n📋 Step 2a: Creating performance indexes and uniqueness constraints...');
+    try {
+      // Deduplicate dashboard_insights by user (keep highest id)
+      await db.execute(sql`
+        DELETE FROM dashboard_insights di
+        USING dashboard_insights d2
+        WHERE di.user_id = d2.user_id AND di.id < d2.id;
+      `);
+      console.log('   ✅ Deduplicated dashboard_insights per user');
+    } catch (e) {
+      console.log('   ⚠️ Deduplication skipped or no duplicates:', (e as any)?.message || e);
+    }
+    try {
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS ux_dashboard_insights_user ON dashboard_insights(user_id);`);
+      console.log('   ✅ Unique index ux_dashboard_insights_user ensured');
+    } catch (e) {
+      console.log('   ⚠️ Unique index creation issue (may already exist or duplicates remain):', (e as any)?.message || e);
+    }
+    try {
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_dashboard_insights_user_created ON dashboard_insights(user_id, created_at DESC);`);
+      console.log('   ✅ Index idx_dashboard_insights_user_created ensured');
+    } catch (e) {
+      console.log('   ⚠️ Index creation issue (dashboard_insights):', (e as any)?.message || e);
+    }
+    try {
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_widget_cache_user_type_hash ON widget_cache(user_id, widget_type, input_hash);`);
+      console.log('   ✅ Index idx_widget_cache_user_type_hash ensured');
+    } catch (e) {
+      console.log('   ⚠️ Index creation issue (widget_cache):', (e as any)?.message || e);
+    }
     
+    // ============================================
+    // STEP 2b: FIX FINANCIAL_PROFILES (central_insights + common columns)
+    // ============================================
+    console.log('\n📋 Step 2b: Fixing financial_profiles table...');
+    await db.execute(sql`
+      ALTER TABLE financial_profiles 
+      ADD COLUMN IF NOT EXISTS central_insights JSONB,
+      ADD COLUMN IF NOT EXISTS retirement_insights JSONB,
+      ADD COLUMN IF NOT EXISTS last_updated TIMESTAMP;
+    `).catch(() => console.log('   ⚠️ financial_profiles central_insights/last_updated may already exist'));
+    console.log('   ✅ financial_profiles table fixed');
+
     // ============================================
     // STEP 3: FIX SECTION_PROGRESS TABLE
     // ============================================
@@ -116,7 +162,106 @@ async function fixDatabaseFinal() {
     `);
     
     console.log('   ✅ section_progress table fixed');
-    
+
+    // ============================================
+    // STEP 4: CREATE/ALTER SUPPORTING TABLES & COLUMNS USED BY AI CONTEXT
+    // ============================================
+    console.log('\n📋 Step 4: Ensuring supporting tables/columns (chat, goals, education, estate, cache, debts)...');
+    // 4.1 chat_messages.response
+    await db.execute(sql`
+      ALTER TABLE IF EXISTS chat_messages
+      ADD COLUMN IF NOT EXISTS response TEXT;
+    `);
+    // 4.2 chat_documents table
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS chat_documents (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+        message_id INTEGER REFERENCES chat_messages(id) ON DELETE CASCADE,
+        file_name TEXT NOT NULL,
+        original_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        file_path TEXT NOT NULL,
+        processing_status TEXT DEFAULT 'pending' NOT NULL,
+        extracted_text TEXT,
+        extracted_data JSONB,
+        ai_summary TEXT,
+        ai_insights JSONB,
+        document_type TEXT,
+        document_category TEXT,
+        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        processed_at TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    // 4.3 investment_cache.category
+    await db.execute(sql`
+      ALTER TABLE IF EXISTS investment_cache
+      ADD COLUMN IF NOT EXISTS category TEXT;
+    `);
+    // 4.4 estate_trusts table
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS estate_trusts (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+        estate_plan_id INTEGER REFERENCES estate_plans(id) ON DELETE CASCADE,
+        trust_type TEXT NOT NULL,
+        trust_name TEXT NOT NULL,
+        established_date TIMESTAMP,
+        grantor TEXT NOT NULL,
+        trustee TEXT NOT NULL,
+        successor_trustee TEXT,
+        beneficiaries JSONB,
+        initial_funding NUMERIC(15,2),
+        current_value NUMERIC(15,2),
+        assets JSONB,
+        distribution_terms TEXT,
+        termination_conditions TEXT,
+        tax_id_number TEXT,
+        tax_strategy JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    // 4.5 education_scenarios table
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS education_scenarios (
+        id SERIAL PRIMARY KEY,
+        education_goal_id INTEGER REFERENCES education_goals(id) ON DELETE CASCADE NOT NULL,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+        scenario_name TEXT NOT NULL,
+        scenario_type TEXT,
+        parameters JSONB,
+        results JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    // 4.6 action_plan_tasks table
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS action_plan_tasks (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+        task_id TEXT NOT NULL,
+        recommendation_title TEXT NOT NULL,
+        is_completed BOOLEAN DEFAULT false,
+        completed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    // 4.7 goals.target_amount_today
+    await db.execute(sql`
+      ALTER TABLE IF EXISTS goals
+      ADD COLUMN IF NOT EXISTS target_amount_today NUMERIC(12,2);
+    `);
+    // 4.8 debt_payoff_plans.debt_order
+    await db.execute(sql`
+      ALTER TABLE IF EXISTS debt_payoff_plans
+      ADD COLUMN IF NOT EXISTS debt_order JSONB;
+    `);
+    console.log('   ✅ Supporting tables/columns ensured');
+
     // ============================================
     // STEP 4: COMPREHENSIVE FINANCIAL_PROFILES FIX
     // ============================================

@@ -5759,6 +5759,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             financialSnapshot: (profile as any)?.calculations || null,
           });
           return res.json(insights);
+        } else {
+          // Not regenerating: return the persisted dashboard_insights immediately
+          try {
+            const di = await storage.getDashboardInsights(userId);
+            if (di && di.insights) {
+              return res.json(di.insights);
+            }
+          } catch (e) {
+            console.warn('[central-insights] dashboard_insights read failed; will check profile cache next:', (e as any)?.message || e);
+          }
         }
       } catch (hashErr) {
         console.warn('central-insights: hash check failed; falling back to cached or fresh gen:', hashErr);
@@ -5785,6 +5795,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const userData = await buildComprehensiveUserContext(userId);
     const contextPrompt = formatUserDataForAI(userData);
 
+    // Inject canonical dashboard metrics (same source used by Dashboard Insights)
+    // so Emergency Readiness, Savings Rate, Cash Flow, etc. are consistent.
+    let canonicalBlock = '';
+    try {
+      const { getDashboardSnapshot } = await import('./services/dashboard-snapshot');
+      const { deriveCanonicalMetrics } = await import('./lib/canonical-metrics');
+
+      const profile = userData.profile || {};
+      const calculations = userData.calculations || {};
+      const snapshot = await getDashboardSnapshot(userId, { bypassCache: false });
+      const canonical = deriveCanonicalMetrics(profile, calculations, snapshot);
+
+      canonicalBlock = `\n\n=== CANONICAL DASHBOARD METRICS — SOURCE OF TRUTH ===\n`
+        + `Emergency Readiness Score: ${canonical.ersScore}\n`
+        + `Insurance Adequacy Score: ${canonical.insuranceAdequacyScore ?? 'Not available'}\n`
+        + `Savings Rate (%): ${canonical.savingsRate ?? 'Not available'}\n`
+        + `Monthly Cash Flow ($): ${canonical.monthlyCashFlow ?? 'Not available'}\n`
+        + `Retirement Monthly Expenses ($): ${canonical.retirementMonthlyExpenses}\n`
+        + `RULES: Use these values exactly; do NOT recompute or infer alternatives.`;
+    } catch (e) {
+      // Non-fatal: fall back to existing context if snapshot not available
+      try { console.warn('[CentralInsights] canonical metrics injection skipped:', e); } catch {}
+    }
+
     // Extract magnitudes for fallback estimates
     const profile = userData.profile || {};
     const calculations = userData.calculations || {};
@@ -5802,7 +5836,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const systemInstruction = "Think Hard. You are a CFP generating comprehensive, cross-domain financial insights. Use only the provided database-backed context. Return strict JSON as instructed.";
 
-    const prompt = `${contextPrompt}
+    const prompt = `${contextPrompt}${canonicalBlock}
 
 === GLOBAL INSIGHTS REQUEST ===
 You are a CFP professional generating a unified list of personalized recommendations across retirement, tax, debt, estate, education, insurance, and cash-flow.
@@ -5814,6 +5848,20 @@ Requirements:
  - If the context includes a user's Retirement Optimization plan (optimizationVariables/optimizationResults), include at least one high-priority insight that recommends adhering to that plan and summarize the key variables adjusted and the optimized confidence score (use dashboard Monte Carlo success probability).
 - Show conservative dollar impact (never 0) using the client's own data; if exact math is unavailable, estimate conservatively.
 - Avoid generic advice; make it specific to the user's numbers and state.
+
+Insurance priority logic (spousal & income-aware):
+- Use annualIncome and spouseAnnualIncome to determine the majority earner. If one spouse already has disability or life insurance, DO NOT claim they lack it; focus adequacy review for the covered spouse and primary NEW coverage for the UNCOVERED spouse.
+- Scale the urgency, priority, and estimatedImpact proportional to the UNCOVERED spouse's income contribution; if the higher earner is covered and the lower earner is uncovered, tailor the recommendation to the lower earner’s smaller income and avoid inflated $ impacts.
+
+Portfolio alignment rules (per-spouse risk & ownership):
+- Evaluate userRiskProfile and spouseRiskProfile independently.
+- Assume each owner's retirement assets are invested according to THEIR current investor risk profile unless explicit owner-level current allocation contradicts it.
+- Recommend rebalancing and allocation changes BY OWNER — do not co‑mingle spouses’ retirement accounts. If risk profiles differ, propose separate allocations per spouse referencing their owned retirement accounts.
+
+Education optimization rules:
+- When education goals include an optimization record, reference baseline vs optimized Monte Carlo success probabilities.
+- If optimized success ≥ 80% and higher than baseline, avoid recommending unnecessary contribution increases; focus on maintaining the plan and monitoring.
+- If recommending additional savings, quantify improvement relative to baseline (not the already-optimized figure) and respect cash‑flow constraints.
 
  Non‑negotiable data rules (align with dashboard):
  - Emergency fund recommendations MUST use the Emergency Readiness Score from the dashboard as the source of truth (calculations.emergencyReadinessScoreCFP). Do not infer from income; base on monthly expenses only.
@@ -5850,6 +5898,10 @@ Return ONLY valid JSON:
     // Normalize and enforce non-zero impacts; ensure 10 items and include actionItems
     if (Array.isArray(parsed.insights)) {
       const hasHIData = !!(profile?.healthInsurance && (profile.healthInsurance.monthlyPremium || profile.healthInsurance.deductible || profile.healthInsurance.outOfPocketMax));
+      const userIncome = Number(profile?.annualIncome || 0);
+      const spouseIncome = Number(profile?.spouseAnnualIncome || 0);
+      const userHasDisability = !!profile?.disabilityInsurance?.hasDisability;
+      const spouseHasDisability = !!profile?.spouseDisabilityInsurance?.hasDisability;
       parsed.insights = parsed.insights.map((i: any, idx: number) => {
         const impact = Number(i?.estimatedImpact);
         let safeImpact = impact;
@@ -5879,7 +5931,7 @@ Return ONLY valid JSON:
         if (insuranceLike && !hasHIData && claimsNumbers) {
           explanation = 'Verify your health insurance details (premium, deductible, out-of-pocket max) since they were not provided in your profile; then compare options to optimize cost and coverage.';
         }
-        return {
+        let normalized = {
           id: i.id || `ci-${idx + 1}`,
           priority: (i.priority === 1 || i.priority === 2) ? i.priority : 3,
           title: i.title || 'Personalized Recommendation',
@@ -5887,7 +5939,48 @@ Return ONLY valid JSON:
           actionItems: steps,
           estimatedImpact: Math.round(safeImpact),
           category: i.category || 'Other'
-        };
+        } as any;
+
+        // Post-process protection & portfolio insights
+        try {
+          const txt = `${normalized.title} ${normalized.explanation}`.toLowerCase();
+          const isDisability = /disability\s+insurance|own-occupation|income protection/.test(txt) || (/insurance/i.test(normalized.category) && /disability/i.test(txt));
+          if (isDisability && (userHasDisability || spouseHasDisability)) {
+            // Fix false "neither has coverage" claims
+            normalized.explanation = normalized.explanation
+              .replace(/neither\s+you\s+nor\s+[^\s]+\s+has\s+disability\s+insurance/gi, `${userHasDisability ? 'You' : (profile?.spouseName || 'Your spouse')} are covered; ${!userHasDisability ? 'you' : (profile?.spouseName || 'your spouse')} lack coverage`)
+              .replace(/no\s+disability\s+coverage/gi, `${!userHasDisability ? 'You' : (profile?.spouseName || 'Your spouse')} lack disability coverage`);
+            // Focus uncovered higher earner
+            const uncoveredPrimary = (!userHasDisability && spouseHasDisability) ? (profile?.firstName || 'You')
+              : (userHasDisability && !spouseHasDisability) ? (profile?.spouseName || 'Your spouse')
+              : (!userHasDisability && !spouseHasDisability ? (spouseIncome > userIncome ? (profile?.spouseName || 'Your spouse') : (profile?.firstName || 'You')) : null);
+            if (uncoveredPrimary && !/disability/.test(normalized.title.toLowerCase())) {
+              normalized.title = `Secure Disability Insurance for ${uncoveredPrimary}`;
+            }
+            if (Array.isArray(normalized.actionItems) && !normalized.actionItems.some((s: string) => /own-occupation/i.test(s))) {
+              normalized.actionItems.unshift(`Get an own-occupation disability quote for ${uncoveredPrimary || 'the uncovered spouse'} (target ~60% income replacement).`);
+              normalized.actionItems = normalized.actionItems.slice(0, 5);
+            }
+          }
+          const isInvest = /investment|portfolio|allocation|rebalance/i.test(normalized.category) || /rebalance|allocation|portfolio/i.test(txt);
+          if (isInvest) {
+            const note = "Apply allocation within each spouse's retirement accounts separately, aligned to each spouse's stated risk profile (do not apply user's profile to spouse or vice versa).";
+            if (Array.isArray(normalized.actionItems) && !normalized.actionItems.some((s: string) => /each spouse/i.test(s))) {
+              normalized.actionItems.push(note);
+              normalized.actionItems = normalized.actionItems.slice(0, 5);
+            }
+            const mentionsSpouse = /\bspouse\b/i.test(txt) || /\b(manisha|wife|husband|partner)\b/i.test(txt);
+            if (mentionsSpouse && profile?.spouseRiskProfile) {
+              const align = `Ensure spouse accounts align to ${String(profile.spouseRiskProfile)} risk profile.`;
+              if (!normalized.actionItems.some((s: string) => /align to/i.test(s) && /risk profile/i.test(s))) {
+                normalized.actionItems.push(align);
+                normalized.actionItems = normalized.actionItems.slice(0, 5);
+              }
+            }
+          }
+        } catch {}
+
+        return normalized;
       });
       // Ensure a retirement optimization adherence insight if optimization exists but model missed it
       const hasRetOpt = !!(userData?.retirementOptimization && (userData.retirementOptimization.optimizationVariables || userData.retirementOptimization.optimizationResults));
@@ -8034,10 +8127,22 @@ Return ONLY valid JSON like:
       const projection = await calculateEducationProjection(goal, userId);
       const goalWithProjection = { ...goal, projection };
 
-      // Cache by goal + key dependencies so we persist and can show timestamp
-      const { widgetCacheManager } = await import("./widget-cache-manager");
+      // Fast path: serve persisted goal.aiInsights if present and refresh is not requested
       const refresh = req.query.refresh === "true";
       const cachedOnly = req.query.cachedOnly === "true";
+      try {
+        if (!refresh && (goal as any).aiInsights && Array.isArray((goal as any).aiInsights.recommendations)) {
+          const payload = {
+            recommendations: (goal as any).aiInsights.recommendations,
+            lastGeneratedAt: (goal as any).aiInsightsGeneratedAt || (goal as any).updatedAt || new Date().toISOString(),
+            cached: true,
+          };
+          return res.json(payload);
+        }
+      } catch {}
+
+      // Cache by goal + key dependencies so we persist and can show timestamp
+      const { widgetCacheManager } = await import("./widget-cache-manager");
       const dependencies = {
         goalId: goalIdNumber,
         goalUpdatedAt: goal.updatedAt,
@@ -8063,9 +8168,7 @@ Return ONLY valid JSON like:
           lastGeneratedAt: cached.calculatedAt,
           cached: true,
         };
-        if (cachedOnly || !refresh) {
-          return res.json(payload);
-        }
+        return res.json(payload);
       } else if (cachedOnly) {
         return res.sendStatus(204);
       }

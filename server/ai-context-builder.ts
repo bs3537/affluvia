@@ -450,6 +450,22 @@ SIMULATION RESULTS:
     });
   }
 
+  // Investment allocation by owner (if provided)
+  try {
+    const fmtPct = (n: any) => (Number.isFinite(Number(n)) ? `${Number(n).toFixed(0)}%` : 'N/A');
+    const ua = (profile as any).currentAllocation || null;
+    const sa = (profile as any).spouseAllocation || null;
+    if (ua || sa) {
+      contextPrompt += `\n\n=== INVESTMENT ALLOCATION BY OWNER (CURRENT) ===`;
+      if (ua) {
+        contextPrompt += `\n- User: Stocks ${fmtPct(ua.stocks || ua.usStocks || ua.stock || 0)}, Bonds ${fmtPct(ua.bonds || 0)}, Cash ${fmtPct(ua.cash || 0)}${ua.alternatives ? `, Alternatives ${fmtPct(ua.alternatives)}` : ''}`;
+      }
+      if (sa) {
+        contextPrompt += `\n- Spouse: Stocks ${fmtPct(sa.stocks || sa.usStocks || sa.stock || 0)}, Bonds ${fmtPct(sa.bonds || 0)}, Cash ${fmtPct(sa.cash || 0)}${sa.alternatives ? `, Alternatives ${fmtPct(sa.alternatives)}` : ''}`;
+      }
+    }
+  } catch {}
+
   // Debt portfolio
   if (profile.liabilities && profile.liabilities.length > 0) {
     contextPrompt += `\n\n=== DEBT PORTFOLIO ===`;
@@ -463,7 +479,8 @@ SIMULATION RESULTS:
 - Life Insurance: ${profile.lifeInsurance?.hasPolicy ? `$${Number(profile.lifeInsurance.coverageAmount || 0).toLocaleString()}` : 'None'}
 - Spouse Life Insurance: ${profile.spouseLifeInsurance?.hasPolicy ? `$${Number(profile.spouseLifeInsurance.coverageAmount || 0).toLocaleString()}` : 'None'}
 - Health Insurance: ${profile.healthInsurance?.hasHealthInsurance ? `$${Number(profile.healthInsurance.monthlyPremium || 0).toLocaleString()}/month, $${Number(profile.healthInsurance.annualDeductible || 0).toLocaleString()} deductible` : 'None'}
-- Disability Insurance: ${profile.disabilityInsurance?.hasDisability ? `$${Number(profile.disabilityInsurance.benefitAmount || 0).toLocaleString()}/month benefit` : 'None'}`;
+- Disability Insurance: ${profile.disabilityInsurance?.hasDisability ? `$${Number(profile.disabilityInsurance.benefitAmount || 0).toLocaleString()}/month benefit` : 'None'}
+- Spouse Disability Insurance: ${profile.spouseDisabilityInsurance?.hasDisability ? `$${Number(profile.spouseDisabilityInsurance.benefitAmount || 0).toLocaleString()}/month benefit` : 'None'}`;
 
 
   // Cash flow projections
@@ -515,6 +532,33 @@ SIMULATION RESULTS:
         }
       } catch {}
     });
+
+    // Optimization summary (baseline vs optimized success probabilities)
+    try {
+      const scenarios: any[] = Array.isArray(educationScenarios) ? educationScenarios : [];
+      const byGoal: Record<string, any> = {};
+      for (const s of scenarios) {
+        if (!s || !s.educationGoalId) continue;
+        if (s.scenarioType === 'optimization_engine_saved') {
+          byGoal[s.educationGoalId] = {
+            baseline: (s as any)?.results?.baselineProbabilityOfSuccess ?? null,
+            optimized: (s as any)?.results?.optimizedProbabilityOfSuccess ?? null,
+            variables: (s as any)?.parameters ?? null,
+          };
+        }
+      }
+      const lines: string[] = [];
+      for (const g of educationGoals) {
+        const key = g.id;
+        const rec = byGoal[key];
+        if (rec && (rec.baseline != null || rec.optimized != null)) {
+          lines.push(`- ${g.studentName || 'Student'} (${g.startYear}-${g.endYear}): baseline ${rec.baseline ?? 'N/A'}% → optimized ${rec.optimized ?? 'N/A'}%`);
+        }
+      }
+      if (lines.length) {
+        contextPrompt += `\n\n=== EDUCATION OPTIMIZATION SUMMARY ===\n${lines.join('\n')}`;
+      }
+    } catch {}
   }
 
   // Education scenarios
