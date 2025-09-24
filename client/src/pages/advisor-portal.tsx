@@ -135,13 +135,18 @@ export default function AdvisorPortal() {
   const [brandingOpen, setBrandingOpen] = useState(false);
   const brandingAllowCloseRef = useRef(false);
   const onBrandingOpenChange = (next: boolean) => {
-    if (next) return setBrandingOpen(true);
-    if (brandingAllowCloseRef.current) {
-      brandingAllowCloseRef.current = false;
-      return setBrandingOpen(false);
+    // Allow all openings without interference
+    if (next) {
+      setBrandingOpen(true);
+      return;
     }
-    // Block outside/Escape closes
-    setBrandingOpen(true);
+    // Block closes unless explicitly allowed via the X button
+    if (!brandingAllowCloseRef.current) {
+      return; // ignore attempted close (overlay/Escape)
+    }
+    // Allow close once, then reset the flag
+    brandingAllowCloseRef.current = false;
+    setBrandingOpen(false);
   };
   const { data: clients, isLoading, refetch: refetchClients, error: clientsError } = useQuery({
     queryKey: ["/api/advisor/clients"],
