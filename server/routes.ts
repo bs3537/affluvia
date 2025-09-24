@@ -14477,7 +14477,8 @@ Ensure recommendations are:
 - Actionable with clear next steps
 `;
 
-    const recoTimeout = Number(process.env.XAI_TIMEOUT_MS_RECO || process.env.XAI_TIMEOUT_MS_FAST || process.env.XAI_TIMEOUT_MS || 45000);
+    // No-timeout by default for recommendations; override with XAI_TIMEOUT_MS_RECO if desired
+    const recoTimeout = Number(process.env.XAI_TIMEOUT_MS_RECO || 0);
     const text = await chatComplete([
       { role: 'system', content: taxSystemPolicy },
       { role: 'user', content: intakeBlock + "\n\n" + taxReturnBlock + "\n\n" + userContext + "\n\n" + prompt }
