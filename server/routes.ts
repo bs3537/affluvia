@@ -11131,7 +11131,16 @@ Be explicit about:
     try {
       const jsonMatch = text.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
-        const recommendations = JSON.parse(jsonMatch[0]);
+        let recommendations = JSON.parse(jsonMatch[0]);
+        if (!Array.isArray(recommendations)) recommendations = [];
+        // Ensure at least 3 recommendations; backfill with defaults if fewer
+        if (recommendations.length < 3) {
+          const fallback = generateDefaultPersonalizedRecommendations(goal, profile);
+          for (const rec of fallback) {
+            if (recommendations.length >= 3) break;
+            recommendations.push(rec);
+          }
+        }
         return recommendations.slice(0, 7); // Ensure max 7 recommendations
       }
     } catch (parseError) {

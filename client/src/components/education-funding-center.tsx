@@ -18,7 +18,7 @@ import {
   CreditCard,
   RefreshCcw
 } from "lucide-react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, useIsFetching } from "@tanstack/react-query";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -124,9 +124,20 @@ export function EducationFundingCenter() {
   const [scenarioResult, setScenarioResult] = useState<any>(null);
   const [optimizerDefaults, setOptimizerDefaults] = useState<OptimizerControls>({});
   const [isSavingOptimization, setIsSavingOptimization] = useState(false);
-  const [canGenerateInsights, setCanGenerateInsights] = useState(false);
+  const [canGenerateInsights, setCanGenerateInsights] = useState(true);
   const [showInsights, setShowInsights] = useState(false);
   const queryClient = useQueryClient();
+  const isGeneratingCount = useIsFetching({ queryKey: selectedGoal?.id ? [`/api/education/goal-recommendations/${selectedGoal.id}`] : undefined });
+  const isGenerating = Boolean(isGeneratingCount);
+  const [genSeconds, setGenSeconds] = useState(0);
+  React.useEffect(() => {
+    let timer: any;
+    if (isGenerating) {
+      setGenSeconds(0);
+      timer = setInterval(() => setGenSeconds((s) => s + 1), 1000);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [isGenerating, selectedGoal?.id]);
 
   const loadSavedScenario = React.useCallback(async (goalId: number | string, baseDefaults: OptimizerControls) => {
     try {
@@ -229,26 +240,9 @@ export function EducationFundingCenter() {
   }, [selectedGoal?.id, loadSavedScenario]);
 
   React.useEffect(() => {
-    let aborted = false;
-    async function loadOptimizationStatus() {
-      setCanGenerateInsights(false);
-      setShowInsights(false);
-      if (!selectedGoal?.id) return;
-      try {
-        const response = await fetch(`/api/education/optimization-status/${selectedGoal.id}`);
-        if (!response.ok) return;
-        const data = await response.json();
-        if (!aborted) {
-          setCanGenerateInsights(Boolean(data?.hasSavedOptimization));
-        }
-      } catch (error) {
-        console.warn('Unable to load optimization status', error);
-      }
-    }
-    loadOptimizationStatus();
-    return () => {
-      aborted = true;
-    };
+    // Always allow generating insights without requiring saved optimization
+    setCanGenerateInsights(!!selectedGoal?.id);
+    setShowInsights(false);
   }, [selectedGoal?.id]);
 
   React.useEffect(() => {
@@ -1312,10 +1306,10 @@ function GoalAnalysis({
               </div>
               <Button
                 onClick={onGenerateInsights}
-                disabled={!canGenerateInsights || isSavingOptimization || showInsights}
+                disabled={isSavingOptimization || isGenerating}
                 className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 mr-16"
               >
-                {showInsights ? "Insights Ready" : canGenerateInsights ? "Generate AI Insights" : "Run & Save Optimization to Enable"}
+                {isGenerating ? `Generating… ${genSeconds}s` : (showInsights ? "Insights Ready" : "Generate AI Insights")}
               </Button>
             </div>
             <p className="mt-2 text-sm text-gray-300">
@@ -1355,16 +1349,35 @@ function PersonalizedRecommendations({ goalId }: { goalId?: string }) {
     }
   };
 
-  if (isLoading || !recommendations?.recommendations?.length) {
+  React.useEffect(() => {
+    let t: any;
+    if (isLoading) {
+      setElapsed(0);
+      t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    }
+    return () => { if (t) clearInterval(t); };
+  }, [isLoading]);
+
+  if (isLoading) {
     return (
       <Card className="bg-gray-900/50 border-gray-800">
         <CardHeader>
           <CardTitle className="text-white">Insights</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-gray-400">
-            No insights available yet. Run the optimization and save, then click "Generate AI Insights" to see personalized recommendations.
-          </p>
+          <p className="text-sm text-purple-200">Generating… {elapsed}s</p>
+        </CardContent>
+      </Card>
+    );
+  }
+  if (!recommendations?.recommendations?.length) {
+    return (
+      <Card className="bg-gray-900/50 border-gray-800">
+        <CardHeader>
+          <CardTitle className="text-white">Insights</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-gray-400">No insights available yet.</p>
         </CardContent>
       </Card>
     );
@@ -1378,9 +1391,7 @@ function PersonalizedRecommendations({ goalId }: { goalId?: string }) {
             <Lightbulb className="h-5 w-5 text-yellow-400" />
             Personalized Action Plan
           </CardTitle>
-          <p className="text-gray-400 text-sm">
-            Prioritized recommendations to improve your education funding
-          </p>
+          {/* Subtitle removed per request */}
         </div>
         <div className="flex items-center gap-3">
           {recommendations?.lastGeneratedAt && (
