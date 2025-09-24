@@ -233,7 +233,7 @@ export interface IStorage {
   getAdvisorClients(advisorId: number): Promise<Array<{ id: number; email: string; fullName: string | null; status: string; lastUpdated: Date | null }>>;
   linkAdvisorToClient(advisorId: number, clientId: number): Promise<AdvisorClient>;
   getAdvisorClientLink(advisorId: number, clientId: number): Promise<AdvisorClient | undefined>;
-  createAdvisorInvite(advisorId: number, email: string, tokenHash: string, expiresAt: Date): Promise<AdvisorInvite>;
+  createAdvisorInvite(advisorId: number, email: string, inviteToken: string, tokenHash: string, expiresAt: Date): Promise<AdvisorInvite>;
   getInviteByTokenHash(tokenHash: string): Promise<AdvisorInvite | undefined>;
   markInviteAccepted(inviteId: number, clientId: number): Promise<void>;
   getPendingInvitesByEmail(email: string): Promise<AdvisorInvite[]>;
@@ -1644,10 +1644,10 @@ export class DatabaseStorage implements IStorage {
     return row as any || undefined;
   }
 
-  async createAdvisorInvite(advisorId: number, email: string, tokenHash: string, expiresAt: Date): Promise<AdvisorInvite> {
+  async createAdvisorInvite(advisorId: number, email: string, inviteToken: string, tokenHash: string, expiresAt: Date): Promise<AdvisorInvite> {
     const [invite] = await db
       .insert(advisorInvites)
-      .values({ advisorId, email, tokenHash, expiresAt, status: 'sent' })
+      .values({ advisorId, email, inviteToken, tokenHash, expiresAt, status: 'sent' })
       .returning();
     return invite as AdvisorInvite;
   }

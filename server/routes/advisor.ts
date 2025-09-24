@@ -120,7 +120,7 @@ export function setupAdvisorRoutes(app: Express) {
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    const invite = await storage.createAdvisorInvite(advisor.id, email, tokenHash, expiresAt);
+    const invite = await storage.createAdvisorInvite(advisor.id, email, token, tokenHash, expiresAt);
     const origin = process.env.APP_ORIGIN || `${req.protocol}://${req.get('host')}`;
     const link = `${origin}/invite/accept?token=${token}`;
     await sendAdvisorInviteEmail({ 

@@ -32,6 +32,7 @@ export const advisorInvites = pgTable("advisor_invites", {
   id: serial("id").primaryKey(),
   advisorId: integer("advisor_id").references(() => users.id).notNull(),
   email: text("email").notNull(),
+  inviteToken: text("invite_token").notNull(),
   tokenHash: text("token_hash").notNull(),
   status: text("status").notNull().default('sent'), // 'sent' | 'accepted' | 'expired'
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Sidebar } from "@/components/sidebar";
 import { Dashboard } from "@/components/dashboard";
 import { IntakeForm } from "@/components/intake-form";
@@ -36,6 +36,7 @@ export default function HomePage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [tipsOpen, setTipsOpen] = useState(false);
   const [showFloatingAssistant, setShowFloatingAssistant] = useState(true);
+  const [isAdvisorActingAs, setIsAdvisorActingAs] = useState(false);
 
   // Get user from auth context
   const { user } = useAuth();
@@ -403,10 +404,36 @@ export default function HomePage() {
     );
   }
 
+  const isMounted = useRef(false);
+
+  useEffect(() => {
+    if (!isMounted.current && typeof document !== 'undefined') {
+      isMounted.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    const update = () => {
+      if (typeof document !== 'undefined') {
+        setIsAdvisorActingAs(document.body.classList.contains('advisor-acting-as'));
+      }
+    };
+
+    update();
+
+    if (typeof MutationObserver !== 'undefined') {
+      const observer = new MutationObserver(update);
+      observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      return () => observer.disconnect();
+    }
+
+    return undefined;
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-900">
       {/* Achievement Bar - only show when user is logged in and data is loaded */}
-      {user && !achievementLoading && (
+      {user && !achievementLoading && !isAdvisorActingAs && (
         <PersistentAchievementBar
           userId={user.id.toString()}
           currentLevel={levelInfo?.level || 1}

@@ -12,6 +12,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction
 } from "@/components/ui/alert-dialog";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription, DrawerFooter, DrawerClose } from "@/components/ui/drawer";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter, SheetClose } from "@/components/ui/sheet";
 import { useAuth } from "@/hooks/use-auth";
 import { queryClient } from "@/lib/queryClient";
 import { Label } from "@/components/ui/label";
@@ -42,7 +43,7 @@ Privacy — The Firm’s Privacy Policy describes how client information is coll
 
 Contact — [Your Firm Name], [Your Address], [Phone], [Email].`; 
 
-function BrandingSettings() {
+function BrandingSettings({ onSaved }: { onSaved?: () => void }) {
   const { toast } = useToast();
   const { data: branding, refetch } = useQuery({
     queryKey: ['/api/advisor/branding'],
@@ -81,13 +82,19 @@ function BrandingSettings() {
       if (!res.ok) throw new Error('Failed to save branding');
       toast({ title: 'Branding saved', description: 'White-label settings updated.' });
       refetch();
+      onSaved?.();
     } catch (e: any) {
       toast({ title: 'Save failed', description: e?.message || String(e), variant: 'destructive' });
     }
   };
 
+  console.log("[BrandingSettings] render", {
+    hasBranding: !!branding,
+    firmName: branding?.firmName,
+  });
+
   return (
-    <div className="space-y-4">
+    <div className="flex h-full flex-col space-y-4">
       <div className="flex items-center gap-4">
         {branding?.logoUrl && (
           <img src={branding.logoUrl} alt="Logo" className="h-12 w-auto rounded bg-gray-900/40 p-2" />
@@ -97,7 +104,7 @@ function BrandingSettings() {
           <Input type="file" accept="image/*" onChange={(e) => setLogoFile(e.target.files?.[0] || null)} className="bg-gray-900 border-gray-700 text-gray-200" />
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div>
           <Label className="text-gray-300">Firm Name</Label>
           <Input value={firmName} onChange={(e) => setFirmName(e.target.value)} className="bg-gray-900 border-gray-700 text-gray-200" />
@@ -115,11 +122,16 @@ function BrandingSettings() {
           <Input value={address} onChange={(e) => setAddress(e.target.value)} className="bg-gray-900 border-gray-700 text-gray-200" />
         </div>
       </div>
-      <div>
+      <div className="flex flex-1 flex-col">
         <Label className="text-gray-300">Default Disclaimer</Label>
-        <textarea value={defaultDisclaimer} onChange={(e) => setDefaultDisclaimer(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded text-gray-200 p-2 min-h-[100px]" />
+        <textarea
+          value={defaultDisclaimer}
+          onChange={(e) => setDefaultDisclaimer(e.target.value)}
+          className="mt-2 flex-1 resize-none rounded border border-gray-700 bg-gray-900 p-2 text-gray-200"
+          style={{ minHeight: "45vh" }}
+        />
       </div>
-      <div className="flex justify-end">
+      <div className="mt-2 flex justify-end">
         <Button onClick={onSave}>Save Branding</Button>
       </div>
     </div>
@@ -134,20 +146,36 @@ export default function AdvisorPortal() {
   const { user } = useAuth();
   const [brandingOpen, setBrandingOpen] = useState(false);
   const brandingAllowCloseRef = useRef(false);
-  const onBrandingOpenChange = (next: boolean) => {
-    // Allow all openings without interference
-    if (next) {
+  const handleBrandingOpenChange = (open: boolean) => {
+    console.log("[BrandingDrawer] onOpenChange", {
+      requestedOpen: open,
+      allowCloseFlag: brandingAllowCloseRef.current,
+    });
+    if (!open && !brandingAllowCloseRef.current) {
       setBrandingOpen(true);
       return;
     }
-    // Block closes unless explicitly allowed via the X button
-    if (!brandingAllowCloseRef.current) {
-      return; // ignore attempted close (overlay/Escape)
-    }
-    // Allow close once, then reset the flag
     brandingAllowCloseRef.current = false;
-    setBrandingOpen(false);
+    setBrandingOpen(open);
+    console.log("[BrandingDrawer] setBrandingOpen", open);
   };
+
+  useEffect(() => {
+    console.log("[BrandingDrawer] brandingOpen state", brandingOpen);
+    if (brandingOpen) {
+      requestAnimationFrame(() => {
+        const drawerEl = document.querySelector('[data-test-id="branding-sheet-content"]');
+        if (drawerEl instanceof HTMLElement) {
+          const rect = drawerEl.getBoundingClientRect();
+          console.log("[BrandingDrawer] drawer rect", rect);
+          console.log("[BrandingDrawer] drawer inline transform", drawerEl.style.transform);
+          console.log("[BrandingDrawer] drawer data-state", drawerEl.getAttribute('data-state'));
+        } else {
+          console.log("[BrandingDrawer] drawer element not found");
+        }
+      });
+    }
+  }, [brandingOpen]);
   const { data: clients, isLoading, refetch: refetchClients, error: clientsError } = useQuery({
     queryKey: ["/api/advisor/clients"],
     queryFn: async () => {
@@ -376,26 +404,38 @@ export default function AdvisorPortal() {
 
       {/* (Accordion removed per request; branding is edited via the drawer button) */}
 
-      {/* Bottom Drawer: White-Label Branding (close only via top-right icon) */}
-      <Drawer open={brandingOpen} onOpenChange={onBrandingOpenChange} shouldScaleBackground={false}>
-        <DrawerContent className="bg-gray-900 border-gray-800 relative">
-          <DrawerHeader className="bg-gray-900 text-white relative">
-            <DrawerTitle className="text-white">White-Label Branding</DrawerTitle>
-            <DrawerDescription className="text-gray-400">Upload your logo and firm details to customize report headers.</DrawerDescription>
-            <button
-              type="button"
-              aria-label="Close branding"
-              className="absolute right-4 top-4 text-white/80 hover:text-white"
-              onClick={() => { brandingAllowCloseRef.current = true; setBrandingOpen(false); }}
+      <Sheet open={brandingOpen} onOpenChange={handleBrandingOpenChange}>
+        <SheetContent
+          side="bottom"
+          hideClose
+          className="flex h-[90vh] flex-col bg-gray-900 text-white border-t border-gray-800"
+          data-test-id="branding-sheet-content"
+        >
+          <SheetHeader className="relative pb-2">
+            <SheetTitle className="text-white">White-Label Branding</SheetTitle>
+            <SheetDescription className="text-gray-400">
+              Upload your logo and firm details to customize report headers.
+            </SheetDescription>
+            <SheetClose
+              className="absolute right-4 top-4 rounded-md bg-transparent text-white/80 hover:text-white focus:outline-none"
+              onClick={() => {
+                brandingAllowCloseRef.current = true;
+              }}
             >
               <X className="h-5 w-5" />
-            </button>
-          </DrawerHeader>
-          <div className="px-4 pb-4 text-white bg-gray-900">
-            <BrandingSettings />
+              <span className="sr-only">Close</span>
+            </SheetClose>
+          </SheetHeader>
+          <div className="flex flex-1 flex-col overflow-y-auto pt-2 text-white">
+            <BrandingSettings
+              onSaved={() => {
+                brandingAllowCloseRef.current = true;
+                setBrandingOpen(false);
+              }}
+            />
           </div>
-        </DrawerContent>
-      </Drawer>
+        </SheetContent>
+      </Sheet>
 
       <div className="p-6 max-w-6xl mx-auto space-y-6">
         {/* Quick Stats */}
