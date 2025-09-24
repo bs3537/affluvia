@@ -7909,6 +7909,8 @@ Return ONLY valid JSON like:
       
       const profile = await storage.getFinancialProfile(req.user!.id);
       let recommendations: string;
+      let deps: any = {};
+      const { widgetCacheManager } = await import('./widget-cache-manager');
       
       if (allGoals) {
         // Get recommendations for all goals
@@ -7920,6 +7922,20 @@ Return ONLY valid JSON like:
           })
         );
         recommendations = await generateAllGoalsRecommendations(goalsWithProjections, profile);
+        deps = {
+          allGoals: true,
+          goals: goalsWithProjections.map(g => ({
+            id: g.id,
+            updatedAt: g.updatedAt,
+            projectionSummary: {
+              totalCost: g.projection?.totalCost,
+              totalFunded: g.projection?.totalFunded,
+              fundingPercentage: g.projection?.fundingPercentage,
+              monthlyContributionNeeded: g.projection?.monthlyContributionNeeded,
+            }
+          })),
+          profileLastUpdated: profile?.lastUpdated,
+        };
       } else {
         // Get recommendations for specific goal
         const goal = await storage.getEducationGoal(req.user!.id, goalId);
@@ -7929,9 +7945,28 @@ Return ONLY valid JSON like:
         
         const projection = await calculateEducationProjection(goal, req.user!.id);
         recommendations = await generateEducationRecommendations(goal, projection, profile);
+        deps = {
+          goalId,
+          goalUpdatedAt: goal.updatedAt,
+          projectionSummary: {
+            totalCost: projection.totalCost,
+            totalFunded: projection.totalFunded,
+            fundingPercentage: projection.fundingPercentage,
+            monthlyContributionNeeded: projection.monthlyContributionNeeded,
+          },
+          profileLastUpdated: profile?.lastUpdated,
+        };
       }
       
-      res.json({ recommendationText: recommendations });
+      // Persist AI text in widget cache for durability and reuse
+      try {
+        const inputHash = widgetCacheManager.generateInputHash("education_goal_ai_text", deps);
+        await widgetCacheManager.cacheWidget(req.user!.id, "education_goal_ai_text", inputHash, { text: recommendations }, 24);
+      } catch (cacheErr) {
+        console.warn('[Education] failed to cache AI text:', (cacheErr as any)?.message || cacheErr);
+      }
+
+      res.json({ recommendationText: recommendations, persisted: true, generatedAt: new Date().toISOString() });
     } catch (error) {
       next(error);
     }
