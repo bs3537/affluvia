@@ -56,6 +56,9 @@ function RothConversionImpactWidget({ profileData }: { profileData: any }) {
     estateValueIncrease?: number;
     hasAnalysis?: boolean;
     calculatedAt?: string;
+    message?: string;
+    baselineEstateValue?: number | null;
+    optimizedEstateValue?: number | null;
   } | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -76,71 +79,135 @@ function RothConversionImpactWidget({ profileData }: { profileData: any }) {
   }, [isCalculating]);
 
   useEffect(() => {
-    async function fetchRothAnalysis() {
-      // Check if we have optimization variables locked (requirement for Roth analysis)
-      const optimizationVariables = profileData?.optimizationVariables;
-      const currentLockedAt = optimizationVariables?.lockedAt;
-      
-      if (!currentLockedAt) {
-        console.log('[ROTH-CONVERSION-WIDGET] Variables not locked');
-        setRothData(null);
-        calculatedForRef.current = null;
-        return;
+    let isMounted = true;
+
+    const resolveEstateSummary = (payload: any): {
+      delta: number | null;
+      baseline?: number | null;
+      optimized?: number | null;
+    } | null => {
+      if (!payload) return null;
+
+      const baseline = Number(payload?.results?.baselineScenario?.projections?.afterTaxEstateValueAt85);
+      const strategies = Array.isArray(payload?.results?.strategies) ? payload.results.strategies : [];
+      const firstStrategy = strategies.length ? strategies[0] : null;
+      const strategyValue = Number(firstStrategy?.projections?.afterTaxEstateValueAt85);
+
+      if (Number.isFinite(baseline) && Number.isFinite(strategyValue)) {
+        return {
+          delta: strategyValue - baseline,
+          baseline,
+          optimized: strategyValue,
+        };
       }
 
-      // Skip if we already calculated for this lock timestamp
-      if (calculatedForRef.current === currentLockedAt) {
-        console.log('[ROTH-CONVERSION-WIDGET] Already calculated for this lock timestamp');
+      const summaryValue = Number(payload?.summary?.estateValueIncrease);
+      if (Number.isFinite(summaryValue) && !Number.isNaN(summaryValue)) {
+        return {
+          delta: summaryValue,
+          baseline: Number.isFinite(baseline) ? baseline : null,
+          optimized: Number.isFinite(strategyValue) ? strategyValue : Number.isFinite(baseline) ? baseline + summaryValue : null,
+        };
+      }
+
+      return null;
+    };
+
+    async function fetchRothAnalysis() {
+      const analysisKey =
+        profileData?.calculations?.rothConversionAnalysis?.calculatedAt ||
+        profileData?.calculations?.rothConversionAnalysis?.updatedAt ||
+        profileData?.optimizationVariables?.lockedAt ||
+        (profileData ? "profile-present" : "no-profile");
+
+      if (calculatedForRef.current === analysisKey) {
         return;
       }
 
       setIsCalculating(true);
       try {
-        console.log('[ROTH-CONVERSION-WIDGET] Fetching stored Roth conversion analysis');
-        
+        console.log("[ROTH-CONVERSION-WIDGET] Fetching stored Roth conversion analysis");
+
         const response = await fetch('/api/roth-conversion/analysis', {
           credentials: 'include',
         });
 
+        if (!isMounted) return;
+
         if (response.ok) {
           const data = await response.json();
           if (data.hasAnalysis) {
-            // Use the pre-calculated estate value increase from saved analysis data
-            // This is faster and more reliable than parsing complex nested structures
-            const estateValueIncrease = data.summary?.estateValueIncrease || 0;
-            
+            const summary = resolveEstateSummary(data);
+
             setRothData({
-              estateValueIncrease,
+              estateValueIncrease: summary?.delta ?? 0,
               hasAnalysis: true,
-              calculatedAt: data.calculatedAt
+              calculatedAt: data.calculatedAt,
+              baselineEstateValue: summary?.baseline ?? null,
+              optimizedEstateValue: summary?.optimized ?? (summary?.baseline != null && summary?.delta != null ? summary.baseline + summary.delta : null)
             });
-            calculatedForRef.current = currentLockedAt;
-            console.log('[ROTH-CONVERSION-WIDGET] Successfully loaded Roth analysis:', { estateValueIncrease });
+            calculatedForRef.current = analysisKey;
+            console.log("[ROTH-CONVERSION-WIDGET] Successfully loaded Roth analysis:", { summary });
           } else {
-            // No analysis found
-            setRothData({ hasAnalysis: false });
-            calculatedForRef.current = currentLockedAt;
-            console.log('[ROTH-CONVERSION-WIDGET] No Roth conversion analysis found');
+            setRothData({
+              hasAnalysis: false,
+              message: "Run a Roth conversion analysis to populate this widget."
+            });
+            calculatedForRef.current = analysisKey;
+            console.log("[ROTH-CONVERSION-WIDGET] No Roth conversion analysis found");
           }
         } else if (response.status === 404) {
-          // No analysis found
-          setRothData({ hasAnalysis: false });
-          calculatedForRef.current = currentLockedAt;
-          console.log('[ROTH-CONVERSION-WIDGET] No Roth conversion analysis found (404)');
+          setRothData({
+            hasAnalysis: false,
+            message: "Run a Roth conversion analysis to populate this widget."
+          });
+          calculatedForRef.current = analysisKey;
+          console.log("[ROTH-CONVERSION-WIDGET] No Roth conversion analysis found (404)");
         } else {
-          throw new Error('Failed to fetch Roth conversion analysis');
+          throw new Error("Failed to fetch Roth conversion analysis");
         }
       } catch (error) {
-        console.error('[ROTH-CONVERSION-WIDGET] Error fetching Roth analysis:', error);
-        setRothData({ hasAnalysis: false });
-        calculatedForRef.current = currentLockedAt;
+        if (!isMounted) return;
+        console.error("[ROTH-CONVERSION-WIDGET] Error fetching Roth analysis:", error);
+        setRothData({
+          hasAnalysis: false,
+          message: "Unable to load Roth conversion impact right now."
+        });
+        calculatedForRef.current = null;
       } finally {
-        setIsCalculating(false);
+        if (isMounted) {
+          setIsCalculating(false);
+        }
       }
     }
 
     fetchRothAnalysis();
-  }, [profileData?.optimizationVariables?.lockedAt]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    profileData?.id,
+    profileData?.calculations?.rothConversionAnalysis?.calculatedAt,
+    profileData?.calculations?.rothConversionAnalysis?.updatedAt,
+    profileData?.optimizationVariables?.lockedAt
+  ]);
+
+  const currencyFormatter = useMemo(
+    () => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }),
+    []
+  );
+
+  const formatCurrency = (value: number) => currencyFormatter.format(value);
+
+  const formatCurrencyMagnitude = (value: number) => currencyFormatter.format(Math.abs(value));
+
+  const formatWithSign = (value: number) => {
+    const formatted = formatCurrencyMagnitude(value);
+    if (value > 0) return `+${formatted}`;
+    if (value < 0) return `-${formatted}`;
+    return formatted;
+  };
 
   if (isCalculating) {
     return (
@@ -158,40 +225,45 @@ function RothConversionImpactWidget({ profileData }: { profileData: any }) {
       <div className="flex flex-col items-center justify-center min-h-[80px]">
         <div className="text-lg font-semibold text-white mb-1">—</div>
         <div className="text-xs text-gray-400 text-center">
-          No analysis available
+          {rothData?.message || 'No analysis available'}
         </div>
       </div>
     );
   }
   
   // Handle case where estate value increase is 0 or negative
-  if (rothData.estateValueIncrease === undefined || rothData.estateValueIncrease <= 0) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[80px]">
-        <div className="text-3xl font-bold text-orange-400 mb-1">
-          ${Math.abs(rothData.estateValueIncrease || 0).toLocaleString()}
-        </div>
-        <div className="text-xs text-gray-400 text-center">
-          {rothData.estateValueIncrease === 0 ? 'neutral impact' : 'potential decrease'}
-        </div>
-        <div className="text-xs text-gray-500 text-center mt-1">
-          (optimized plan)
-        </div>
-      </div>
-    );
-  }
+  const delta = rothData.estateValueIncrease ?? 0;
+  const baseline = rothData.baselineEstateValue ?? null;
+  const optimized = rothData.optimizedEstateValue ?? (baseline != null ? baseline + delta : null);
+  const percentChange = baseline && baseline !== 0 ? (delta / baseline) * 100 : null;
+  const isNeutral = delta === 0;
+  const isPositive = delta > 0;
+
+  const percentText = percentChange != null
+    ? `${percentChange > 0 ? "+" : ""}${percentChange.toFixed(1)}% ${isPositive ? "increase" : isNeutral ? "change" : "decrease"}`
+    : "—% change";
+
+  const amountColor = isNeutral ? "text-gray-300" : isPositive ? "text-green-400" : "text-orange-400";
+  const percentColor = percentChange != null
+    ? (percentChange === 0 ? "text-gray-400" : percentChange > 0 ? "text-green-400" : "text-orange-400")
+    : "text-gray-400";
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[80px]">
-      <div className="text-3xl font-bold text-green-400 mb-1">
-        ${Math.round(rothData.estateValueIncrease).toLocaleString()}
+      <div className={`text-3xl font-bold ${amountColor} mb-1`}>
+        {formatWithSign(delta)}
       </div>
-      <div className="text-xs text-gray-400 text-center">
-        increase in estate value
+      <div className={`text-sm mt-2 ${percentColor}`}>
+        {percentText}
       </div>
-      <div className="text-xs text-gray-500 text-center mt-1">
-        (optimized plan)
+      <div className="text-xs text-gray-400 text-center mt-1">
+        Net to heirs (age 93)
       </div>
+      {baseline != null && optimized != null && (
+        <div className="text-xs text-gray-500 text-center mt-1">
+          {`${formatCurrency(baseline)} → ${formatCurrency(optimized)}`}
+        </div>
+      )}
     </div>
   );
 }
