@@ -45,6 +45,7 @@ Contact — [Your Firm Name], [Your Address], [Phone], [Email].`;
 
 function BrandingSettings({ onSaved }: { onSaved?: () => void }) {
   const { toast } = useToast();
+  const rqClient = useQueryClient();
   const { data: branding, refetch } = useQuery({
     queryKey: ['/api/advisor/branding'],
     queryFn: async () => {
@@ -81,7 +82,8 @@ function BrandingSettings({ onSaved }: { onSaved?: () => void }) {
       const res = await fetch('/api/advisor/branding', { method: 'PUT', body: form, credentials: 'include' });
       if (!res.ok) throw new Error('Failed to save branding');
       toast({ title: 'Branding saved', description: 'White-label settings updated.' });
-      refetch();
+      await rqClient.invalidateQueries({ queryKey: ['/api/advisor/branding'] });
+      await refetch();
       onSaved?.();
     } catch (e: any) {
       toast({ title: 'Save failed', description: e?.message || String(e), variant: 'destructive' });

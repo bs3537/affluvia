@@ -31,7 +31,7 @@ export function MetricDisplay({
   };
   
   const colorClasses = {
-    positive: 'text-[#B040FF]',
+    positive: 'text-green-400',
     negative: 'text-red-400',
     neutral: 'text-white'
   };

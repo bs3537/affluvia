@@ -826,6 +826,11 @@ router.post('/api/retirement/optimization-refresh', async (req, res, next) => {
 
     // Optional persistence (no overwriting of variables themselves)
     if (persist) {
+      const baselineProbabilityDecimal = (baselineEnhanced as any)?.probabilityOfSuccess ?? 0;
+      const improvementDecimal = probabilityDecimal - baselineProbabilityDecimal;
+      const existingPlanning = (profile as any)?.retirementPlanningData || {};
+      const optimizedAtIso = out.calculatedAt;
+
       // Build input snapshot for tracking what data was used
       const inputSnapshot = {
         variables: optimizationVariables,
@@ -861,7 +866,11 @@ router.post('/api/retirement/optimization-refresh', async (req, res, next) => {
           hasOptimized: true // Mark as optimized
         },
         retirementPlanningData: {
-          ...(profile as any).retirementPlanningData,
+          ...existingPlanning,
+          lastOptimizedAt: optimizedAtIso,
+          optimizedScore: probabilityDecimal,
+          baselineScore: baselineProbabilityDecimal,
+          improvement: improvementDecimal,
           optimizationInputSnapshot: inputSnapshot, // Store snapshot
           impactOnPortfolioBalance: {
             projectionData: out.impact.projectionData,

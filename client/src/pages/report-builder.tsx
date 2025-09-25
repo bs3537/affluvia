@@ -955,7 +955,7 @@ function ReportBuilder() {
 
   // Branding
   const { data: branding } = useQuery<Branding | null>({
-    queryKey: ['advisorBranding', user?.id],
+    queryKey: ['/api/advisor/branding'],
     queryFn: async () => {
       if (!isAdvisor) return null;
       const res = await fetch('/api/advisor/branding', { credentials: 'include' });
@@ -963,6 +963,10 @@ function ReportBuilder() {
       return res.json();
     },
     enabled: !!user?.id && isAdvisor,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
   // Fetch profile with calculations for widget previews (other than the 3 main metrics)
@@ -1653,7 +1657,7 @@ function ReportBuilder() {
                                   <div 
                                     className={`h-3 rounded-full transition-all duration-500 ${
                                       (healthScore ?? 0) >= 75 ? 'bg-green-500' :
-                                      (healthScore ?? 0) >= 50 ? 'bg-blue-500' :
+                                      (healthScore ?? 0) >= 50 ? 'bg-yellow-500' :
                                       'bg-red-500'
                                     }`}
                                     style={{ width: `${Math.min(100, Math.max(0, healthScore ?? 0))}%` }}
@@ -1793,28 +1797,58 @@ function ReportBuilder() {
                           ) : w === 'optimized_retirement_confidence' ? (
                             // New widget for optimized retirement confidence score
                             <div className="flex flex-col items-center w-full space-y-2">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Optimized Retirement Confidence Score</div>
+                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Optimized Retirement Success Probability</div>
                               {(() => {
                                 const rp = (profileData as any)?.retirementPlanningData || {};
-                                const optimizedScore = rp.optimizedScore;
-                                const baselineScore = rp.baselineScore;
-                                const improvement = rp.improvement;
-                                
+                                const optVars = (profileData as any)?.optimizationVariables || {};
+                                const calcBaselineRaw = calc?.retirementReadinessScore ?? calc?.retirementScore ?? null;
+                                const normalize = (value: any) => {
+                                  if (typeof value !== 'number' || Number.isNaN(value)) return null;
+                                  return value > 1 ? value / 100 : value;
+                                };
+
+                                let optimizedScore = normalize(rp.optimizedScore);
+                                if (optimizedScore === null) {
+                                  optimizedScore = normalize(optVars.optimizedRetirementSuccessProbability);
+                                  if (optimizedScore === null) optimizedScore = normalize(optVars.optimizedScore?.probabilityOfSuccess);
+                                }
+
+                                let baselineScore = normalize(rp.baselineScore);
+                                if (baselineScore === null) baselineScore = normalize(optVars.optimizedScore?.sensitivityAnalysis?.baselineSuccess);
+                                if (baselineScore === null) baselineScore = normalize(optVars.baselineSuccessProbability);
+                                if (baselineScore === null) baselineScore = normalize(calcBaselineRaw);
+
+                                let improvement = normalize(rp.improvement);
+                                if (improvement === null) improvement = normalize(optVars.optimizedScore?.sensitivityAnalysis?.absoluteChange);
+                                if (improvement === null && optimizedScore !== null && baselineScore !== null) {
+                                  improvement = optimizedScore - baselineScore;
+                                }
+                                if (improvement === null && optimizedScore !== null) {
+                                  improvement = optimizedScore - normalize(calcBaselineRaw ?? optimizedScore);
+                                }
+
                                 console.log('[REPORT-BUILDER] Optimized Retirement Confidence data:', {
-                                  hasOptimizedScore: optimizedScore !== undefined,
                                   optimizedScore,
                                   baselineScore,
                                   improvement
                                 });
-                                
-                                if (optimizedScore !== undefined) {
+
+                                if (optimizedScore !== null) {
                                   const optimizedValue = Math.round(optimizedScore * 100);
                                   const baselineValue = Math.round((baselineScore || 0) * 100);
                                   const improvementValue = Math.round((improvement || 0) * 100);
-                                  
+                                  const improvementClass = improvementValue >= 0 ? 'text-green-400' : 'text-red-400';
+
                                   return (
                                     <>
-                                      <div className="text-3xl font-bold text-white">{optimizedValue}</div>
+                                      <div className="text-3xl font-bold text-white flex items-center gap-2">
+                                        <span>{optimizedValue}%</span>
+                                        {baselineScore !== null && (
+                                          <span className={`text-base font-semibold ${improvementClass}`}>
+                                            ({improvementValue >= 0 ? '+' : ''}{improvementValue}% )
+                                          </span>
+                                        )}
+                                      </div>
                                       <div className="text-xs text-gray-500 text-center">
                                         {optimizedValue >= 80 ? 'High Confidence' :
                                          optimizedValue >= 65 ? 'Good Confidence' : 'Needs Improvement'}
@@ -1824,27 +1858,27 @@ function ReportBuilder() {
                                           <div 
                                             className={`h-3 rounded-full transition-all duration-500 ${
                                               optimizedValue >= 80 ? 'bg-green-500' :
-                                              optimizedValue >= 65 ? 'bg-blue-500' : 'bg-red-500'
+                                              optimizedValue >= 65 ? 'bg-yellow-500' : 'bg-red-500'
                                             }`}
                                             style={{ width: `${Math.min(100, Math.max(0, optimizedValue))}%` }}
                                           />
                                         </div>
                                       </div>
-                                      {baselineScore > 0 && (
+                                      {baselineScore !== null && (
                                         <div className="text-xs text-gray-400 mt-1">
-                                          +{improvementValue} from baseline ({baselineValue})
+                                          Baseline: {baselineValue}%
                                         </div>
                                       )}
                                     </>
                                   );
-                                } else {
-                                  return (
-                                    <div className="text-center">
-                                      <div className="text-gray-500 text-sm">No optimization data</div>
-                                      <div className="text-xs text-gray-600 mt-2">Run retirement optimization first</div>
-                                    </div>
-                                  );
                                 }
+
+                                return (
+                                  <div className="text-center">
+                                    <div className="text-gray-500 text-sm">No optimization data</div>
+                                    <div className="text-xs text-gray-600 mt-2">Save retirement optimization to view results</div>
+                                  </div>
+                                );
                               })()}
                             </div>
                           ) : w === 'ending_portfolio_value_increase' ? (

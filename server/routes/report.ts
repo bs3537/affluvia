@@ -152,16 +152,43 @@ async function buildWidgetsSnapshot(userId: number, layout: string[]) {
     optimized_retirement_confidence: (() => {
       console.log('[REPORT-GEN] Extracting optimized retirement confidence...');
       const rp = (profile as any)?.retirementPlanningData || {};
+      const optVars = (profile as any)?.optimizationVariables || {};
+
+      const normalize = (value: any) => {
+        if (typeof value !== 'number' || Number.isNaN(value)) return null;
+        return value > 1 ? value / 100 : value;
+      };
+
+      let optimizedScore = normalize(rp.optimizedScore);
+      if (optimizedScore === null) {
+        optimizedScore = normalize(optVars.optimizedRetirementSuccessProbability);
+        if (optimizedScore === null) optimizedScore = normalize(optVars.optimizedScore?.probabilityOfSuccess);
+      }
+
+      let baselineScore = normalize(rp.baselineScore);
+      if (baselineScore === null) {
+        baselineScore = normalize(optVars.baselineSuccessProbability);
+        if (baselineScore === null) baselineScore = normalize(optVars.optimizedScore?.sensitivityAnalysis?.baselineSuccess);
+      }
+
+      let improvement = normalize(rp.improvement);
+      if (improvement === null) {
+        improvement = normalize(optVars.optimizedScore?.sensitivityAnalysis?.absoluteChange);
+        if (improvement === null && optimizedScore !== null && baselineScore !== null) {
+          improvement = optimizedScore - baselineScore;
+        }
+      }
+
       console.log('[REPORT-GEN] Optimized score data:', {
-        hasOptimizedScore: rp.optimizedScore !== undefined,
-        optimizedScore: rp.optimizedScore,
-        baselineScore: rp.baselineScore,
-        improvement: rp.improvement
+        optimizedScore,
+        baselineScore,
+        improvement
       });
+
       return {
-        optimizedScore: rp.optimizedScore || null,
-        baselineScore: rp.baselineScore || null,
-        improvement: rp.improvement || null
+        optimizedScore,
+        baselineScore,
+        improvement
       };
     })(),
     
