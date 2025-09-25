@@ -952,6 +952,22 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
     
     // Convert optimized profile to Monte Carlo parameters
     const params = profileToRetirementParams(optimizedProfile);
+    if (!params.currentRetirementAssets || params.currentRetirementAssets <= 0) {
+      console.warn('[OPT-BANDS] Optimized params returned non-positive retirement assets; falling back to baseline assets', {
+        currentRetirementAssets: params.currentRetirementAssets
+      });
+      const baselineParamsFallback = profileToRetirementParams(profile);
+      if (baselineParamsFallback.currentRetirementAssets && baselineParamsFallback.currentRetirementAssets > 0) {
+        params.currentRetirementAssets = baselineParamsFallback.currentRetirementAssets;
+        console.warn('[OPT-BANDS] Applied baseline currentRetirementAssets fallback', {
+          fallbackAssets: params.currentRetirementAssets
+        });
+      } else {
+        console.error('[OPT-BANDS] Baseline fallback also missing retirement assets', {
+          baselineAssets: baselineParamsFallback.currentRetirementAssets
+        });
+      }
+    }
     // Align with enhanced endpoint behavior: run in nominal dollars and display in today's dollars
     (params as any).useNominalDollars = false;
     (params as any).displayInTodaysDollars = true;
