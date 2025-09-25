@@ -385,7 +385,7 @@ export default function AdvisorPortal() {
       {/* Branded Header */}
       <div className="relative overflow-hidden">
         <div className="absolute inset-0 gradient-bg opacity-90" />
-        <div className="relative z-10 container mx-auto px-6 py-10">
+        <div className="relative z-10 container mx-auto px-6 py-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <TrendingUp className="w-8 h-8 text-white" />
@@ -400,7 +400,7 @@ export default function AdvisorPortal() {
               <Paintbrush className="h-4 w-4 mr-2" /> White-label Branding
             </Button>
           </div>
-          <p className="text-white/80 mt-2">Welcome{user?.fullName ? `, ${user.fullName}` : ''}. Manage clients, send invites, and open client portals.</p>
+          <p className="text-white/80 mt-1">Welcome{user?.fullName ? `, ${user.fullName}` : ''}. Manage clients, send invites, and open client portals.</p>
         </div>
       </div>
 

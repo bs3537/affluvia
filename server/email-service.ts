@@ -1,26 +1,65 @@
-import nodemailer from 'nodemailer';
-import type { SendMailOptions } from 'nodemailer';
+import nodemailer from "nodemailer";
+import type { SendMailOptions } from "nodemailer";
 
-// Create reusable transporter object using SMTP transport
+const DEFAULT_SMTP_HOST = "smtp.mailgun.org";
+const DEFAULT_SMTP_PORT = 587;
+
+const sanitizeEnv = (value?: string | null) => {
+  if (!value) return undefined;
+  return value.replace(/^['"]|['"]$/g, "").trim();
+};
+
+const resolveBoolean = (value: string | undefined, fallback: boolean) => {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
+};
+
+let cachedTransporter: nodemailer.Transporter | null = null;
+
+const resolveAuthCredentials = () => {
+  const user = sanitizeEnv(process.env.SMTP_USER) || sanitizeEnv(process.env.MAILGUN_SMTP_USER);
+  const pass = sanitizeEnv(process.env.SMTP_PASS) || sanitizeEnv(process.env.MAILGUN_SMTP_PASS) || sanitizeEnv(process.env.MAILGUN_API_KEY);
+  return { user, pass };
+};
+
+const getDefaultFrom = () => {
+  const { user } = resolveAuthCredentials();
+  const email = sanitizeEnv(process.env.EMAIL_FROM_ADDRESS) || sanitizeEnv(process.env.SMTP_FROM_EMAIL) || user || "noreply@affluvia.com";
+  const name = sanitizeEnv(process.env.EMAIL_FROM_NAME) || "Affluvia";
+  return { email, name };
+};
+
+const formatFromAddress = (name?: string, email?: string) => {
+  const defaults = getDefaultFrom();
+  const finalEmail = email || defaults.email;
+  const finalName = name !== undefined ? name : defaults.name;
+  return finalName ? `"${finalName}" <${finalEmail}>` : finalEmail;
+};
+
+// Create reusable transporter object using SMTP transport (Mailgun by default)
 const createTransporter = () => {
-  // Check if email configuration is available
-  const emailConfig = {
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  };
+  if (cachedTransporter) return cachedTransporter;
 
-  // Return null if credentials are not configured
-  if (!emailConfig.auth.user || !emailConfig.auth.pass) {
-    console.warn('Email service not configured. SMTP_USER and SMTP_PASS environment variables required.');
+  const host = sanitizeEnv(process.env.SMTP_HOST) || sanitizeEnv(process.env.MAILGUN_SMTP_HOST) || DEFAULT_SMTP_HOST;
+  const port = Number(sanitizeEnv(process.env.SMTP_PORT) || sanitizeEnv(process.env.MAILGUN_SMTP_PORT) || DEFAULT_SMTP_PORT);
+  const secure = resolveBoolean(sanitizeEnv(process.env.SMTP_SECURE), port === 465);
+  const { user, pass } = resolveAuthCredentials();
+
+  if (!user || !pass) {
+    console.warn("Email service not configured. Set SMTP_USER and SMTP_PASS (or Mailgun credentials).");
     return null;
   }
 
-  return nodemailer.createTransport(emailConfig);
+  cachedTransporter = nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+    tls: { ciphers: "TLSv1.2" },
+  });
+
+  return cachedTransporter;
 };
 
 export interface InvestmentUpdateEmailOptions {
@@ -113,7 +152,7 @@ export async function sendInvestmentUpdateEmail(options: InvestmentUpdateEmailOp
     `;
 
     const mailOptions: SendMailOptions = {
-      from: `"Affluvia Admin" <${process.env.SMTP_USER || 'noreply@affluvia.com'}>`,
+      from: formatFromAddress("Affluvia Admin"),
       bcc: options.to, // Use BCC to protect user privacy
       subject: `[Affluvia ${options.tabName}] ${options.subject}`,
       text: options.message,
@@ -172,13 +211,15 @@ export async function sendAdvisorInviteEmail({ to, advisorName, link, replyTo }:
       </html>
     `;
 
-    const displayName = `${advisorName} via Affluvia`;
+    const defaults = getDefaultFrom();
+    const defaultSenderName = `${advisorName} via ${defaults.name}`;
+    const fromAddress = formatFromAddress(defaultSenderName);
     const mailOptions: SendMailOptions = {
-      from: `"${displayName}" <${process.env.SMTP_USER || 'noreply@affluvia.com'}>`,
+      from: fromAddress,
       to,
       subject: `${advisorName} invited you to Affluvia` ,
       html: htmlContent,
-      replyTo: replyTo || process.env.SMTP_USER || undefined,
+      replyTo: replyTo || defaults.email,
     };
 
     const result = await transporter.sendMail(mailOptions);

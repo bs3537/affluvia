@@ -120,11 +120,13 @@ SESSION_SECRET=your_session_secret
 # Google Gemini API
 GOOGLE_GEMINI_API_KEY=your_gemini_api_key
 
-# Email (optional, for admin notifications)
-SMTP_HOST=smtp.gmail.com
+# Email (Mailgun SMTP)
+SMTP_HOST=smtp.mailgun.org
 SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password
+SMTP_USER=postmaster@your-sandbox-domain.mailgun.org
+SMTP_PASS=your_mailgun_smtp_password
+EMAIL_FROM_ADDRESS=advisors@affluvia.com
+EMAIL_FROM_NAME=Affluvia
 
 # Environment
 NODE_ENV=development

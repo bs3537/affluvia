@@ -70,17 +70,15 @@ export function AdvisorActingAsBanner() {
 
   return (
     <div className="fixed top-0 left-0 right-0 z-[9999] gradient-bg text-white border-b border-purple-500/40">
-      <div className="w-full px-4 py-2 lg:pl-20 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2 text-white">
-            <TrendingUp className="h-5 w-5" />
-            <span className="text-base font-semibold tracking-wide uppercase">Affluvia</span>
-          </div>
-          <div className="text-sm text-white/90">
-            Advisor Mode — Viewing <strong>{data.client?.fullName || data.client?.email}</strong>
-          </div>
+      <div className="w-full px-6 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-3 text-white">
+          <TrendingUp className="h-8 w-8" />
+          <span className="text-2xl font-semibold tracking-wide uppercase">Affluvia</span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="text-center text-lg text-white/90 font-medium">
+          Advisor Mode — Viewing <strong>{data.client?.fullName || data.client?.email}</strong>
+        </div>
+        <div className="flex items-center justify-end gap-3">
           {Array.isArray(clientsQuery.data) && clientsQuery.data.length > 0 && (
             <SwitchClient clients={clientsQuery.data} currentId={data.client?.id} onSwitch={(id) => switchMutation.mutate(id)} />
           )}

@@ -10,6 +10,7 @@ import { AnnualSocialSecurityCashFlowsNew } from '@/components/retirement/Annual
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DollarSign, Info } from 'lucide-react';
+import { LastCalculated } from '@/components/ui/last-calculated';
 import { 
   calculateScenarios, 
   calculateBreakevenAnalysis,
@@ -166,6 +167,10 @@ const SocialSecurityAnalysis: React.FC<SocialSecurityAnalysisProps> = ({
           <DollarSign className="w-6 h-6 text-green-400" />
           Social Security Lifetime Income Analysis
         </CardTitle>
+        <LastCalculated
+          timestamp={profile?.socialSecurityOptimization?.calculatedAt || profile?.retirementPlanningData?.lastOptimizedAt || profile?.lastUpdated}
+          label="Social Security analysis"
+        />
       </CardHeader>
       <CardContent>
         {/* Info Alert */}

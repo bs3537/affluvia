@@ -159,20 +159,24 @@ export class MonteCarloValidator {
    * Validate financial parameters
    */
   private static validateFinancialParameters(params: RetirementMonteCarloParams, errors: ValidationError[], warnings: ValidationError[]): void {
-    // Asset validation
-    if (!params.currentRetirementAssets || params.currentRetirementAssets < 0) {
+    // Asset validation - allow zero but reject undefined, null, or negative
+    if (params.currentRetirementAssets === undefined || params.currentRetirementAssets === null || params.currentRetirementAssets < 0) {
       errors.push({
         field: 'currentRetirementAssets',
-        message: 'Current retirement assets must be a positive number',
+        message: 'Current retirement assets must be a non-negative number',
         severity: 'error'
       });
     }
 
     // Minimum asset threshold check
-    if (params.currentRetirementAssets && params.currentRetirementAssets < 10000) {
+    if (params.currentRetirementAssets !== undefined && params.currentRetirementAssets < 10000) {
+      // Only warn for zero if it's likely unintentional (not an optimization scenario)
+      const warningMessage = params.currentRetirementAssets === 0 
+        ? 'Zero retirement assets - ensure this is intentional for optimization scenarios'
+        : 'Very low retirement assets may result in unreliable projections';
       warnings.push({
         field: 'currentRetirementAssets',
-        message: 'Very low retirement assets may result in unreliable projections',
+        message: warningMessage,
         severity: 'warning'
       });
     }

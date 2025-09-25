@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { BarChart3, RefreshCw, TrendingUp, Calculator, Lock } from 'lucide-react';
@@ -46,6 +46,32 @@ interface ImpactPortfolioBalanceNewProps {
   active?: boolean;
   autoStartOnActive?: boolean;
 }
+
+const isProjectionDataValid = (rows: any): boolean => {
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  let hasFiniteRow = false;
+  let hasBaselinePositive = false;
+  let hasOptimizedPositive = false;
+
+  for (const row of rows) {
+    const baseline = Number(row?.baseline ?? 0);
+    const optimized = Number(row?.optimized ?? 0);
+
+    if (Number.isFinite(baseline) || Number.isFinite(optimized)) {
+      hasFiniteRow = true;
+    }
+    if (Number.isFinite(baseline) && baseline > 0) {
+      hasBaselinePositive = true;
+    }
+    if (Number.isFinite(optimized) && optimized > 0) {
+      hasOptimizedPositive = true;
+    }
+  }
+
+  if (!hasFiniteRow) return false;
+  if (hasBaselinePositive && !hasOptimizedPositive) return false;
+  return true;
+};
 
 const currency = (v: number) => {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
@@ -99,6 +125,7 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
   const [needsCalculation, setNeedsCalculation] = useState(true);
   const [savedProjectionData, setSavedProjectionData] = useState<ProjectionData[] | null>(null);
   const [savedComparison, setSavedComparison] = useState<Comparison | null>(null);
+  const persistedFingerprintRef = useRef<string | null>(null);
 
   // Check for saved Impact on Portfolio Balance data from profile first
   useEffect(() => {
@@ -140,11 +167,15 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
       // 0) Instant render from profile snapshot if available
       try {
         const impact = profile?.retirementPlanningData?.impactOnPortfolioBalance;
-        if (!cancelled && impact && Array.isArray(impact.projectionData) && impact.projectionData.length > 0) {
+        if (!cancelled && impact && isProjectionDataValid(impact.projectionData)) {
           setSavedProjectionData(impact.projectionData);
           setSavedComparison(impact.comparison || null);
           setNeedsCalculation(false);
           // No return on purpose: allow background cache fetch to validate freshness
+        } else if (!cancelled) {
+          setSavedProjectionData(null);
+          setSavedComparison(null);
+          setNeedsCalculation(true);
         }
       } catch (_) { /* ignore */ }
 
@@ -153,7 +184,7 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
         const res = await fetch('/api/retirement/impact-on-portfolio-balance-cache', { credentials: 'include' });
         if (!cancelled && res.ok) {
           const data = await res.json();
-          if (data?.cached && data?.data?.projectionData) {
+          if (data?.cached && isProjectionDataValid(data?.data?.projectionData)) {
             setSavedProjectionData(data.data.projectionData);
             setSavedComparison(data.data.comparison || null);
             setNeedsCalculation(false);
@@ -413,72 +444,88 @@ export function ImpactPortfolioBalanceNew({ variables, isLocked, profile, active
     };
   }, [loading, loadingStart]);
 
-  const { projectionData, comparison } = useMemo(() => {
+  const { projectionData, comparison, source } = useMemo(() => {
     // Use saved data if available (from database persistence)
-    if (savedProjectionData && savedProjectionData.length > 0) {
+    const hasBaseline = Array.isArray(baselineData?.percentiles?.p50) && (baselineData?.percentiles?.p50?.length || 0) > 0;
+    const hasOptimized = Array.isArray(optimizedData?.percentiles?.p50) && (optimizedData?.percentiles?.p50?.length || 0) > 0;
+
+    if (hasBaseline && hasOptimized) {
+      const baselineAges = baselineData?.ages || [];
+      const optimizedAges = optimizedData?.ages || [];
+      const baselineMedian = baselineData?.percentiles?.p50 || [];
+      const optimizedMedian = optimizedData?.percentiles?.p50 || [];
+
+      const calculatedProjectionData: ProjectionData[] = [];
+
+      const minLength = Math.min(baselineAges.length, optimizedAges.length, baselineMedian.length, optimizedMedian.length);
+
+      for (let i = 0; i < minLength; i++) {
+        const age = baselineAges[i] || optimizedAges[i];
+        const baselineValue = Math.round(baselineMedian[i] || 0);
+        const optimizedValue = Math.round(optimizedMedian[i] || 0);
+
+        calculatedProjectionData.push({
+          age,
+          baseline: baselineValue,
+          optimized: optimizedValue,
+          difference: optimizedValue - baselineValue
+        });
+      }
+
+      const last = calculatedProjectionData[calculatedProjectionData.length - 1];
+      const calculatedComparison: Comparison | null = last ? {
+        finalBaseline: last.baseline,
+        finalOptimized: last.optimized,
+        finalDifference: last.difference,
+        percentageImprovement: last.baseline > 0 ? Math.round(((last.optimized - last.baseline) / last.baseline) * 100) : 0
+      } : null;
+
+      return {
+        projectionData: calculatedProjectionData,
+        comparison: calculatedComparison,
+        source: 'calculated' as const,
+      };
+    }
+
+    if (savedProjectionData && isProjectionDataValid(savedProjectionData)) {
       console.log('Using saved projection data from database');
       return { 
         projectionData: savedProjectionData, 
-        comparison: savedComparison 
+        comparison: savedComparison,
+        source: 'saved' as const,
       };
     }
 
     // Otherwise calculate from retirement bands data
     if (!baselineData || !optimizedData) {
-      return { projectionData: [] as ProjectionData[], comparison: null as Comparison | null };
+      return { projectionData: [] as ProjectionData[], comparison: null as Comparison | null, source: 'empty' as const };
     }
-
-    const baselineAges = baselineData.ages || [];
-    const optimizedAges = optimizedData.ages || [];
-    const baselineMedian = baselineData.percentiles?.p50 || [];
-    const optimizedMedian = optimizedData.percentiles?.p50 || [];
-    
-    const calculatedProjectionData: ProjectionData[] = [];
-    
-    // Use the common age range from both datasets
-    const minLength = Math.min(baselineAges.length, optimizedAges.length, baselineMedian.length, optimizedMedian.length);
-    
-    for (let i = 0; i < minLength; i++) {
-      const age = baselineAges[i] || optimizedAges[i];
-      const baselineValue = Math.round(baselineMedian[i] || 0);
-      const optimizedValue = Math.round(optimizedMedian[i] || 0);
-      
-      calculatedProjectionData.push({
-        age,
-        baseline: baselineValue,
-        optimized: optimizedValue,
-        difference: optimizedValue - baselineValue
-      });
-    }
-
-    const last = calculatedProjectionData[calculatedProjectionData.length - 1];
-    const calculatedComparison: Comparison | null = last ? {
-      finalBaseline: last.baseline,
-      finalOptimized: last.optimized,
-      finalDifference: last.difference,
-      percentageImprovement: last.baseline > 0 ? Math.round(((last.optimized - last.baseline) / last.baseline) * 100) : 0
-    } : null;
-
-    return { projectionData: calculatedProjectionData, comparison: calculatedComparison };
+    return { projectionData: [] as ProjectionData[], comparison: null as Comparison | null, source: 'empty' as const };
   }, [baselineData, optimizedData, savedProjectionData, savedComparison]);
+
+  const usingCalculated = useMemo(() => source === 'calculated', [source]);
 
   // After computing from baseline/optimized (not from saved), persist to server
   useEffect(() => {
-    if (!savedProjectionData && projectionData.length > 0) {
-      (async () => {
-        try {
-          await fetch('/api/retirement/impact-on-portfolio-balance-cache', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ projectionData, comparison })
-          });
-        } catch (err) {
-          console.warn('Failed to save Impact on Portfolio Balance cache:', err);
-        }
-      })();
-    }
-  }, [savedProjectionData, projectionData, comparison]);
+    if (!usingCalculated || projectionData.length === 0) return;
+
+    const fingerprint = JSON.stringify({ projectionData, comparison });
+    if (persistedFingerprintRef.current === fingerprint) return;
+    persistedFingerprintRef.current = fingerprint;
+
+    (async () => {
+      try {
+        await fetch('/api/retirement/impact-on-portfolio-balance-cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ projectionData, comparison })
+        });
+      } catch (err) {
+        console.warn('Failed to save Impact on Portfolio Balance cache:', err);
+      }
+    })();
+  }, [usingCalculated, projectionData, comparison]);
 
   const retirementAge = baselineData?.meta?.retirementAge || optimizedData?.meta?.retirementAge;
 

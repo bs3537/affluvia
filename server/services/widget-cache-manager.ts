@@ -5,6 +5,7 @@
  */
 
 import { createClient } from 'redis';
+import crypto from 'node:crypto';
 
 class WidgetCacheManager {
   private redisClient: any = null;
@@ -54,6 +55,21 @@ class WidgetCacheManager {
     const key = `widget:${userId}:${widgetName}`;
     return suffix ? `${key}:${suffix}` : key;
   }
+
+  generateInputHash(widgetName: string, dependencies: any): string {
+    try {
+      const payload = {
+        widgetName,
+        dependencies,
+        version: 1
+      };
+      const json = JSON.stringify(payload);
+      return crypto.createHash('sha256').update(json).digest('hex').slice(0, 32);
+    } catch (error) {
+      console.error('[WidgetCache] Failed to generate input hash:', error);
+      return `${widgetName}:${Date.now().toString(36)}`;
+    }
+  }
   
   /**
    * Cache widget data
@@ -63,7 +79,7 @@ class WidgetCacheManager {
     
     try {
       const cacheKey = this.getCacheKey(userId, widgetName, key);
-      const ttlSeconds = ttl || this.defaultTTL;
+      const ttlSeconds = ttl != null ? Math.max(1, Math.floor(ttl * 3600)) : this.defaultTTL;
       
       await this.redisClient.setEx(
         cacheKey,
@@ -101,6 +117,17 @@ class WidgetCacheManager {
     }
     
     return null;
+  }
+
+  async getCachedWidget(userId: number, widgetName: string, inputHash: string): Promise<{ data: any; calculatedAt: string; inputHash: string; isExpired?: boolean } | null> {
+    const cached = await this.getWidget(userId, widgetName, inputHash);
+    if (!cached) return null;
+    return {
+      data: cached.data,
+      calculatedAt: cached.cachedAt || new Date().toISOString(),
+      inputHash,
+      isExpired: false,
+    };
   }
   
   /**

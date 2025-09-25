@@ -5,8 +5,25 @@ import type { Request } from 'express';
 export function applyOptimizationVariables(profile: any, rawVars: any) {
   const optimizationVariables = rawVars || {};
 
+  // Start with a DEEP copy of the profile to preserve ALL fields
+  // This ensures fields like dateOfBirth, maritalStatus, etc. are preserved for calculations
   const optimizedProfile: any = {
     ...profile,
+    
+    // CRITICAL: Explicitly ensure assets and key fields are preserved from the original profile
+    assets: profile.assets,
+    additionalAssets: profile.additionalAssets,
+    dateOfBirth: profile.dateOfBirth,
+    spouseDateOfBirth: profile.spouseDateOfBirth,
+    maritalStatus: profile.maritalStatus,
+    state: profile.state,
+    retirementState: profile.retirementState,
+    annualIncome: profile.annualIncome,
+    spouseAnnualIncome: profile.spouseAnnualIncome,
+    userLifeExpectancy: profile.userLifeExpectancy,
+    spouseLifeExpectancy: profile.spouseLifeExpectancy,
+    riskQuestions: profile.riskQuestions,
+    spouseRiskQuestions: profile.spouseRiskQuestions,
 
     // Retirement ages
     desiredRetirementAge: optimizationVariables.retirementAge ?? profile.desiredRetirementAge,
@@ -59,6 +76,19 @@ export function applyOptimizationVariables(profile: any, rawVars: any) {
       optimizationVariables.spouseAssetAllocation === 'glide-path' ? -1 :
       parseFloat(optimizationVariables.spouseAssetAllocation) / 100;
   }
+
+  // Debug logging to verify assets preservation
+  const assetCount = Array.isArray(optimizedProfile.assets) ? optimizedProfile.assets.length : 0;
+  const additionalAssetCount = Array.isArray(optimizedProfile.additionalAssets) ? optimizedProfile.additionalAssets.length : 0;
+  const totalAssetValue = (optimizedProfile.assets || []).reduce((sum: number, a: any) => sum + (Number(a?.value) || 0), 0) +
+                          (optimizedProfile.additionalAssets || []).reduce((sum: number, a: any) => sum + (Number(a?.value) || 0), 0);
+  
+  console.log('[OPTIMIZATION] Assets preserved:', {
+    assetCount,
+    additionalAssetCount,
+    totalAssetValue: totalAssetValue.toFixed(0),
+    hasAssets: assetCount > 0 || additionalAssetCount > 0
+  });
 
   return optimizedProfile;
 }

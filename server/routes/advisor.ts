@@ -40,12 +40,22 @@ export function setupAdvisorRoutes(app: Express) {
         id SERIAL PRIMARY KEY,
         advisor_id INTEGER NOT NULL REFERENCES users(id),
         email TEXT NOT NULL,
+        invite_token TEXT NOT NULL,
         token_hash TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'sent',
         expires_at TIMESTAMPTZ NOT NULL,
         client_id INTEGER REFERENCES users(id),
         created_at TIMESTAMP DEFAULT NOW()
       );`);
+    } catch {}
+    try {
+      await db.execute(sql`ALTER TABLE advisor_invites ADD COLUMN IF NOT EXISTS invite_token TEXT`);
+    } catch {}
+    try {
+      await db.execute(sql`UPDATE advisor_invites SET invite_token = token_hash WHERE invite_token IS NULL`);
+    } catch {}
+    try {
+      await db.execute(sql`ALTER TABLE advisor_invites ALTER COLUMN invite_token SET NOT NULL`);
     } catch {}
     try {
       await db.execute(sql`CREATE TABLE IF NOT EXISTS white_label_profiles (
@@ -169,7 +179,7 @@ export function setupAdvisorRoutes(app: Express) {
     const token = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await storage.updateAdvisorInviteToken(inviteId, tokenHash, expiresAt);
+    await storage.updateAdvisorInviteToken(inviteId, token, tokenHash, expiresAt);
     const origin = process.env.APP_ORIGIN || `${req.protocol}://${req.get('host')}`;
     const link = `${origin}/invite/accept?token=${token}`;
     await sendAdvisorInviteEmail({ 

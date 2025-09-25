@@ -4,6 +4,7 @@
  */
 
 import { Router } from 'express';
+import type { Request } from 'express';
 import os from 'os';
 import { storage } from '../storage';
 import { runEnhancedMonteCarloSimulation, runParallelMonteCarloSimulation, DEFAULT_RETURN_CONFIG, DEFAULT_DISTRIBUTION, DEFAULT_VARIANCE_REDUCTION } from '../monte-carlo-enhanced';
@@ -21,6 +22,14 @@ import { applyOptimizationVariables } from '../services/apply-optimization-varia
 import { runMcScore, runMcBands, mergePerYearPercentiles, RUNS_DEFAULT, MAX_THREADS } from '../services/mc-runner';
 
 const router = Router();
+
+const resolveUserId = (req: Request & { session?: any }): number => {
+  const actingAsClientId = req.session?.actingAsClientId as number | undefined;
+  if (actingAsClientId && Number.isFinite(actingAsClientId)) {
+    return actingAsClientId;
+  }
+  return req.user!.id;
+};
 
 /**
  * Helper function to merge per-year percentiles from multiple workers
@@ -102,8 +111,7 @@ const calculatePercentile = (sortedArray: number[], percentile: number): number 
 router.get('/api/retirement-score', async (req, res, next) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const actingAsClientId = (req.session as any)?.actingAsClientId as number | undefined;
-    const userId = actingAsClientId || req.user!.id;
+    const userId = resolveUserId(req);
     
     const profile = await storage.getFinancialProfile(userId);
     if (!profile) {
@@ -186,8 +194,7 @@ router.get('/api/retirement-score', async (req, res, next) => {
 router.get('/api/retirement-bands', async (req, res, next) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const actingAsClientId = (req.session as any)?.actingAsClientId as number | undefined;
-    const userId = actingAsClientId || req.user!.id;
+    const userId = resolveUserId(req);
     
     const profile = await storage.getFinancialProfile(userId);
     if (!profile) {
@@ -235,7 +242,7 @@ router.get('/api/retirement-bands', async (req, res, next) => {
 router.post('/api/calculate-retirement-score', async (req, res, next) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const userId = req.user!.id;
+    const userId = resolveUserId(req);
     
     console.log('🎯 On-demand retirement score calculation requested for user', userId);
     
@@ -435,7 +442,7 @@ router.post('/api/calculate-retirement-score', async (req, res, next) => {
 router.post('/api/calculate-retirement-bands', async (req, res, next) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const userId = req.user!.id;
+    const userId = resolveUserId(req);
     
     console.log('📊 On-demand retirement bands calculation requested for user', userId);
     
@@ -643,7 +650,7 @@ router.post('/api/calculate-retirement-bands', async (req, res, next) => {
 router.delete('/api/retirement-calculations-cache', async (req, res) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const userId = req.user!.id;
+    const userId = resolveUserId(req);
     
     await widgetCacheManager.invalidateWidget(userId, 'retirement_confidence_score');
     await widgetCacheManager.invalidateWidget(userId, 'retirement_confidence_bands');
@@ -667,7 +674,7 @@ router.delete('/api/retirement-calculations-cache', async (req, res) => {
 router.post('/api/retirement/optimization-refresh', async (req, res, next) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const userId = req.user!.id;
+    const userId = resolveUserId(req);
 
     const body = (req.body || {}) as any;
     const persist = Boolean(body.persist);
@@ -895,7 +902,7 @@ router.post('/api/retirement/optimization-refresh', async (req, res, next) => {
 router.post('/api/optimize-retirement-score', async (req, res, next) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const userId = req.user!.id;
+    const userId = resolveUserId(req);
     // Accept both payload shapes:
     // 1) { optimizationVariables: { ... }, skipCache }
     // 2) { retirementAge, socialSecurityAge, ... } (top-level variables)
@@ -951,22 +958,92 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
     const startTime = Date.now();
     
     // Convert optimized profile to Monte Carlo parameters
+    console.log('[OPT-SCORE] Converting optimized profile to retirement params...');
+    console.log('[OPT-SCORE] Optimized profile assets count:', (optimizedProfile.assets || []).length);
     const params = profileToRetirementParams(optimizedProfile);
-    if (!params.currentRetirementAssets || params.currentRetirementAssets <= 0) {
-      console.warn('[OPT-BANDS] Optimized params returned non-positive retirement assets; falling back to baseline assets', {
-        currentRetirementAssets: params.currentRetirementAssets
-      });
-      const baselineParamsFallback = profileToRetirementParams(profile);
-      if (baselineParamsFallback.currentRetirementAssets && baselineParamsFallback.currentRetirementAssets > 0) {
-        params.currentRetirementAssets = baselineParamsFallback.currentRetirementAssets;
-        console.warn('[OPT-BANDS] Applied baseline currentRetirementAssets fallback', {
-          fallbackAssets: params.currentRetirementAssets
-        });
-      } else {
-        console.error('[OPT-BANDS] Baseline fallback also missing retirement assets', {
-          baselineAssets: baselineParamsFallback.currentRetirementAssets
+    console.log('[OPT-SCORE] Calculated retirement assets from profile:', params.currentRetirementAssets);
+    const computeManualRetirementAssets = (profileData: any) => {
+      if (!profileData) return 0;
+      const assetArrays: any[] = [];
+      if (Array.isArray(profileData.assets)) assetArrays.push(...profileData.assets);
+      if (Array.isArray(profileData.additionalAssets)) assetArrays.push(...profileData.additionalAssets);
+      const sum = assetArrays.reduce((total, asset) => {
+        if (!asset) return total;
+        const value = Number(asset.value ?? asset.balance ?? asset.amount ?? 0);
+        if (!Number.isFinite(value) || value <= 0) return total;
+        // Respect explicit exclusion flags if present
+        if (asset.includeInRetirement === false) return total;
+        if (asset.retirementExcluded === true) return total;
+        return total + value;
+      }, 0);
+      return sum;
+    };
+
+    // Only apply fallback for truly missing assets (undefined/null), not for zero values
+    // Zero might be a legitimate optimization scenario  
+    if (params.currentRetirementAssets === undefined || params.currentRetirementAssets === null) {
+      console.warn('[OPT-SCORE] Retirement assets undefined/null, applying fallback...');
+
+      const fallbackSources: Array<{ [key: string]: any } | null | undefined> = [];
+
+      try {
+        const baselineParamsFallback = profileToRetirementParams(profile);
+        fallbackSources.push(baselineParamsFallback);
+      } catch (baselineError) {
+        console.warn('[OPT-SCORE] Failed to compute baseline params for fallback', baselineError);
+      }
+
+      const snapshotParams = (profile as any)?.retirementPlanningData?.optimizationInputSnapshot?.params;
+      if (snapshotParams) fallbackSources.push(snapshotParams);
+
+      const manualAssets = computeManualRetirementAssets(profile);
+
+      if (manualAssets && manualAssets > 0) {
+        fallbackSources.push({
+          currentRetirementAssets: manualAssets,
+          totalAssets: manualAssets,
         });
       }
+
+      let appliedFallback = false;
+      for (const source of fallbackSources) {
+        if (!source) continue;
+        const fallbackAssets = Number(source.currentRetirementAssets || source.totalAssets);
+        if (fallbackAssets !== undefined && fallbackAssets !== null && Number.isFinite(fallbackAssets)) {
+          params.currentRetirementAssets = fallbackAssets;
+          const assetFields = [
+            'userAssetTotal',
+            'spouseAssetTotal',
+            'jointAssetTotal',
+            'totalAssets',
+            'assetBuckets',
+            'userAssetBuckets',
+            'spouseAssetBuckets',
+            'jointAssetBuckets',
+          ];
+          for (const field of assetFields) {
+            if (source[field] !== undefined) {
+              (params as any)[field] = source[field];
+            }
+          }
+          console.warn('[OPT-SCORE] Applied retirement asset fallback', {
+            fallbackAssets,
+            sourceKeys: Object.keys(source)
+          });
+          appliedFallback = true;
+          break;
+        }
+      }
+
+      if (!appliedFallback) {
+        // If no fallback worked, set to 0 (legitimate scenario)
+        params.currentRetirementAssets = 0;
+        console.warn('[OPT-SCORE] No fallback available, using 0 for retirement assets');
+      }
+    } else if (params.currentRetirementAssets < 0) {
+      // Negative values should be corrected to 0
+      console.warn('[OPT-SCORE] Correcting negative retirement assets to 0');
+      params.currentRetirementAssets = 0;
     }
     // Align with enhanced endpoint behavior: run in nominal dollars and display in today's dollars
     (params as any).useNominalDollars = false;
@@ -1145,7 +1222,7 @@ router.post('/api/optimize-retirement-score', async (req, res, next) => {
 router.post('/api/calculate-retirement-bands-optimization', async (req, res, next) => {
   try {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const userId = req.user!.id;
+    const userId = resolveUserId(req);
     const optimizationVariables = req.body || {};
     const skipCache = Boolean((req.body || {}).skipCache);
     
@@ -1184,8 +1261,79 @@ router.post('/api/calculate-retirement-bands-optimization', async (req, res, nex
     }
 
     // Run enhanced Monte Carlo with detailed scenarios (same logic as calculate-retirement-bands)
+    console.log('[OPT-BANDS] Converting optimized profile to retirement params...');
+    console.log('[OPT-BANDS] Optimized profile assets count:', (optimizedProfile.assets || []).length);
     const params = profileToRetirementParams(optimizedProfile);
+    console.log('[OPT-BANDS] Calculated retirement assets from profile:', params.currentRetirementAssets);
+
+    // Apply fallback when assets are missing or zeroed out after optimization mapping
+    if (!params.currentRetirementAssets || params.currentRetirementAssets <= 0) {
+      console.log('[OPT-BANDS] Retirement assets missing or zero, applying fallback...');
+      
+      const computeManualRetirementAssets = (profileData: any) => {
+        if (!profileData) return 0;
+        const assetArrays: any[] = [];
+        if (Array.isArray(profileData.assets)) assetArrays.push(...profileData.assets);
+        if (Array.isArray(profileData.additionalAssets)) assetArrays.push(...profileData.additionalAssets);
+        return assetArrays.reduce((total, asset) => {
+          if (!asset) return total;
+          const value = Number(asset.value ?? asset.balance ?? asset.amount ?? 0);
+          if (!Number.isFinite(value) || value <= 0) return total;
+          if (asset.includeInRetirement === false) return total;
+          if (asset.retirementExcluded === true) return total;
+          return total + value;
+        }, 0);
+      };
+      
+      const fallbackSources: Array<Record<string, any> | null | undefined> = [];
+      try {
+        const baselineParams = profileToRetirementParams(profile);
+        fallbackSources.push(baselineParams);
+      } catch {}
+      const snapshotParams = (profile as any)?.retirementPlanningData?.optimizationInputSnapshot?.params;
+      if (snapshotParams) fallbackSources.push(snapshotParams);
+      const manualAssets = computeManualRetirementAssets(profile);
+      if (manualAssets && manualAssets > 0) {
+        fallbackSources.push({ currentRetirementAssets: manualAssets, totalAssets: manualAssets });
+      }
+      
+      let appliedFallback = false;
+      for (const source of fallbackSources) {
+        if (!source) continue;
+        const fallbackAssets = Number(source.currentRetirementAssets || source.totalAssets);
+        if (fallbackAssets !== undefined && fallbackAssets !== null && Number.isFinite(fallbackAssets) && fallbackAssets > 0) {
+          params.currentRetirementAssets = fallbackAssets;
+          const assetFields = [
+            "userAssetTotal", "spouseAssetTotal", "jointAssetTotal", "totalAssets",
+            "assetBuckets", "userAssetBuckets", "spouseAssetBuckets", "jointAssetBuckets",
+          ];
+          for (const f of assetFields) if (source[f] !== undefined) (params as any)[f] = source[f];
+          appliedFallback = true;
+          console.log('[OPT-BANDS] Applied fallback assets:', fallbackAssets);
+          break;
+        }
+      }
+      
+      if (!appliedFallback) {
+        const manualAssets = computeManualRetirementAssets(profile);
+        if (manualAssets > 0) {
+          params.currentRetirementAssets = manualAssets;
+          console.log('[OPT-BANDS] Manual asset fallback applied as last resort:', manualAssets);
+        } else {
+          params.currentRetirementAssets = 0;
+          console.log('[OPT-BANDS] No fallback available, using 0 for retirement assets');
+        }
+      }
+    } else if (params.currentRetirementAssets < 0) {
+      // Negative values should be corrected to 0
+      console.log('[OPT-BANDS] Correcting negative retirement assets to 0');
+      params.currentRetirementAssets = 0;
+    }
+
+    (params as any).useNominalDollars = false;
+    (params as any).displayInTodaysDollars = true;
     const start = Date.now();
+    console.log('[OPT-BANDS] Final currentRetirementAssets passed to MC:', params.currentRetirementAssets);
     const bands = await runMcBands(params, RUNS_DEFAULT, 93);
     const duration = Date.now() - start;
     // Slim API payload (remove p05/p95)

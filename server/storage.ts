@@ -104,6 +104,7 @@ import memorystore from "memorystore";
 import pg from "pg";
 import { lookup as dnsLookup } from 'node:dns';
 import { pool as sharedPool } from "./db";
+import crypto from "node:crypto";
 
 const PgStore = pgSession(session);
 const MemoryStore = memorystore(session);
@@ -233,13 +234,13 @@ export interface IStorage {
   getAdvisorClients(advisorId: number): Promise<Array<{ id: number; email: string; fullName: string | null; status: string; lastUpdated: Date | null }>>;
   linkAdvisorToClient(advisorId: number, clientId: number): Promise<AdvisorClient>;
   getAdvisorClientLink(advisorId: number, clientId: number): Promise<AdvisorClient | undefined>;
-  createAdvisorInvite(advisorId: number, email: string, inviteToken: string, tokenHash: string, expiresAt: Date): Promise<AdvisorInvite>;
+  createAdvisorInvite(advisorId: number, email: string, inviteToken: string | undefined, tokenHash: string | undefined, expiresAt: Date): Promise<AdvisorInvite>;
   getInviteByTokenHash(tokenHash: string): Promise<AdvisorInvite | undefined>;
   markInviteAccepted(inviteId: number, clientId: number): Promise<void>;
   getPendingInvitesByEmail(email: string): Promise<AdvisorInvite[]>;
   createAdvisorAuditLog(entry: Omit<AdvisorAuditLog, 'id' | 'createdAt'>): Promise<AdvisorAuditLog>;
   getAdvisorInvites(advisorId: number): Promise<AdvisorInvite[]>;
-  updateAdvisorInviteToken(inviteId: number, tokenHash: string, expiresAt: Date): Promise<AdvisorInvite>;
+  updateAdvisorInviteToken(inviteId: number, inviteToken: string | undefined, tokenHash: string | undefined, expiresAt: Date): Promise<AdvisorInvite>;
   cancelAdvisorInvite(inviteId: number): Promise<void>;
 
   // Advisor branding (white label)
@@ -1644,10 +1645,12 @@ export class DatabaseStorage implements IStorage {
     return row as any || undefined;
   }
 
-  async createAdvisorInvite(advisorId: number, email: string, inviteToken: string, tokenHash: string, expiresAt: Date): Promise<AdvisorInvite> {
+  async createAdvisorInvite(advisorId: number, email: string, inviteToken: string | undefined, tokenHash: string | undefined, expiresAt: Date): Promise<AdvisorInvite> {
+    const rawToken = (inviteToken && inviteToken.trim().length > 0) ? inviteToken : crypto.randomBytes(32).toString("hex");
+    const hashedToken = (tokenHash && tokenHash.trim().length > 0) ? tokenHash : crypto.createHash("sha256").update(rawToken).digest("hex");
     const [invite] = await db
       .insert(advisorInvites)
-      .values({ advisorId, email, inviteToken, tokenHash, expiresAt, status: 'sent' })
+      .values({ advisorId, email, inviteToken: rawToken, tokenHash: hashedToken, expiresAt, status: "sent" })
       .returning();
     return invite as AdvisorInvite;
   }
@@ -1693,10 +1696,12 @@ export class DatabaseStorage implements IStorage {
     return rows as any;
   }
 
-  async updateAdvisorInviteToken(inviteId: number, tokenHash: string, expiresAt: Date): Promise<AdvisorInvite> {
+  async updateAdvisorInviteToken(inviteId: number, inviteToken: string | undefined, tokenHash: string | undefined, expiresAt: Date): Promise<AdvisorInvite> {
+    const rawToken = (inviteToken && inviteToken.trim().length > 0) ? inviteToken : crypto.randomBytes(32).toString("hex");
+    const hashedToken = (tokenHash && tokenHash.trim().length > 0) ? tokenHash : crypto.createHash("sha256").update(rawToken).digest("hex");
     const [row] = await db
       .update(advisorInvites)
-      .set({ tokenHash, expiresAt, createdAt: new Date(), status: 'sent' })
+      .set({ inviteToken: rawToken, tokenHash: hashedToken, expiresAt, createdAt: new Date(), status: 'sent' })
       .where(eq(advisorInvites.id, inviteId))
       .returning();
     if (!row) throw new Error('Invite not found');

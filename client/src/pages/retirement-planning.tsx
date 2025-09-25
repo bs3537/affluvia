@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Gauge } from '@/components/ui/gauge';
@@ -62,6 +62,7 @@ import { RetirementInsights } from '@/components/retirement/retirement-insights'
 import { RetirementBaselineWidget } from '@/components/retirement-baseline-widget';
 import { RetirementOptimizationWidget } from '@/components/retirement-optimization-widget';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { LastCalculated } from '@/components/ui/last-calculated';
 
 // Removed ScenarioAnalysisComponent - now using ImpactPortfolioBalanceNew component
 
@@ -157,16 +158,22 @@ function CashFlowContent({
 
   // Fetch cash flow data when component mounts or when scores change
   const isMarried = (profile?.maritalStatus === 'married' || profile?.maritalStatus === 'partnered');
+  const [refreshKey, setRefreshKey] = useState(0);
+
   useEffect(() => {
     const abortController = new AbortController();
+    const force = refreshKey > 0;
 
-    const fetchCashFlowData = async () => {
-      // Skip fetching only if we have detailed withdrawal breakdown data
+    const run = async () => {
       const hasDetailedBaseline = hasDetailedWithdrawalData(currentCashFlowData);
       const hasDetailedOptimized = hasDetailedWithdrawalData(optimizedCashFlowData);
 
-      // Only show spinner if we have no detailed data to display yet
-      if (!hasDetailedBaseline && !hasDetailedOptimized) {
+      if (!force && dataFetched && (hasDetailedBaseline || hasDetailedOptimized)) {
+        return;
+      }
+
+      const shouldShowSpinner = force || (!hasDetailedBaseline && !hasDetailedOptimized);
+      if (shouldShowSpinner) {
         setIsLoading(true);
         setLoadingStart(Date.now());
       }
@@ -179,106 +186,102 @@ function CashFlowContent({
 
         const tasks: Promise<void>[] = [];
 
-        // Fetch baseline data if we don't have detailed withdrawal breakdown
-        if (!hasDetailedBaseline) {
-          tasks.push(
-            (async () => {
-              try {
-                const res = await fetch('/api/calculate-monte-carlo-withdrawal-sequence', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ startFromCurrentAge: true, projectionYears: yearsToProject }),
-                  signal: abortController.signal
-                });
-                if (res.ok) {
-                  const data = await res.json();
-                  if (data?.projections?.length) {
-                    const baselineVars = {
-                      retirementAge: profile?.desiredRetirementAge || 65,
-                      spouseRetirementAge: profile?.spouseDesiredRetirementAge || 65,
-                      socialSecurityAge: profile?.socialSecurityClaimAge || 67,
-                      spouseSocialSecurityAge: profile?.spouseSocialSecurityClaimAge || 67,
-                      monthlyExpenses: profile?.expectedMonthlyExpensesRetirement ?? undefined,
-                      partTimeIncome: profile?.partTimeIncomeRetirement || 0,
-                      spousePartTimeIncome: profile?.spousePartTimeIncomeRetirement || 0
-                    };
-                    const flows = transformMonteCarloToCashFlow(
-                      data.projections,
-                      baselineVars,
-                      profile,
-                      false
-                    );
-                    setCurrentCashFlowData(flows);
-                    return;
-                  }
-                }
-              } catch (error) {
-                if (!abortController.signal.aborted) {
-                  console.warn('Failed to fetch baseline data from API:', error);
+        if (!hasDetailedBaseline || force) {
+          tasks.push((async () => {
+            try {
+              const res = await fetch('/api/calculate-monte-carlo-withdrawal-sequence', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ startFromCurrentAge: true, projectionYears: yearsToProject }),
+                signal: abortController.signal
+              });
+              if (res.ok) {
+                const data = await res.json();
+                if (data?.projections?.length) {
+                  const baselineVars = {
+                    retirementAge: profile?.desiredRetirementAge || 65,
+                    spouseRetirementAge: profile?.spouseDesiredRetirementAge || 65,
+                    socialSecurityAge: profile?.socialSecurityClaimAge || 67,
+                    spouseSocialSecurityAge: profile?.spouseSocialSecurityClaimAge || 67,
+                    monthlyExpenses: profile?.expectedMonthlyExpensesRetirement ?? undefined,
+                    partTimeIncome: profile?.partTimeIncomeRetirement || 0,
+                    spousePartTimeIncome: profile?.spousePartTimeIncomeRetirement || 0
+                  };
+                  const flows = transformMonteCarloToCashFlow(
+                    data.projections,
+                    baselineVars,
+                    profile,
+                    false
+                  );
+                  setCurrentCashFlowData(flows);
+                  setBaselineTimestamp(new Date().toISOString());
+                  return;
                 }
               }
-              // Fallback to transforming currentScore if endpoint unavailable
-              if (currentScore?.yearlyCashFlows?.length) {
-                const baselineVars = {
-                  retirementAge: profile?.desiredRetirementAge || 65,
-                  spouseRetirementAge: profile?.spouseDesiredRetirementAge || 65,
-                  socialSecurityAge: profile?.socialSecurityClaimAge || 67,
-                  spouseSocialSecurityAge: profile?.spouseSocialSecurityClaimAge || 67,
-                  monthlyExpenses: profile?.expectedMonthlyExpensesRetirement ?? undefined,
-                  partTimeIncome: profile?.partTimeIncomeRetirement || 0,
-                  spousePartTimeIncome: profile?.spousePartTimeIncomeRetirement || 0
-                };
-                const flows = transformMonteCarloToCashFlow(currentScore.yearlyCashFlows, baselineVars, profile, false);
-                setCurrentCashFlowData(flows);
+            } catch (error) {
+              if (!abortController.signal.aborted) {
+                console.warn('Failed to fetch baseline data from API:', error);
               }
-            })()
-          );
+            }
+            if (currentScore?.yearlyCashFlows?.length) {
+              const baselineVars = {
+                retirementAge: profile?.desiredRetirementAge || 65,
+                spouseRetirementAge: profile?.spouseDesiredRetirementAge || 65,
+                socialSecurityAge: profile?.socialSecurityClaimAge || 67,
+                spouseSocialSecurityAge: profile?.spouseSocialSecurityClaimAge || 67,
+                monthlyExpenses: profile?.expectedMonthlyExpensesRetirement ?? undefined,
+                partTimeIncome: profile?.partTimeIncomeRetirement || 0,
+                spousePartTimeIncome: profile?.spousePartTimeIncomeRetirement || 0
+              };
+              const flows = transformMonteCarloToCashFlow(currentScore.yearlyCashFlows, baselineVars, profile, false);
+              setCurrentCashFlowData(flows);
+              if (currentScore?.calculatedAt) setBaselineTimestamp(currentScore.calculatedAt);
+            }
+          })());
         }
 
-        // Fetch optimized data if we don't have detailed withdrawal breakdown
-        if (!hasDetailedOptimized && variables) {
-          tasks.push(
-            (async () => {
-              try {
-                const res = await fetch('/api/calculate-monte-carlo-withdrawal-sequence', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ ...variables, startFromCurrentAge: true, projectionYears: yearsToProject }),
-                  signal: abortController.signal
-                });
-                if (res.ok) {
-                  const data = await res.json();
-                  if (data?.projections?.length) {
-                    const flows = transformMonteCarloToCashFlow(
-                      data.projections,
-                      {
-                        retirementAge: variables?.retirementAge || profile?.desiredRetirementAge || 67,
-                        spouseRetirementAge: variables?.spouseRetirementAge || profile?.spouseDesiredRetirementAge || 67,
-                        socialSecurityAge: variables?.socialSecurityAge || profile?.socialSecurityClaimAge || 67,
-                        spouseSocialSecurityAge: variables?.spouseSocialSecurityAge || profile?.spouseSocialSecurityClaimAge || 67,
-                        monthlyExpenses: variables?.monthlyExpenses ?? profile?.expectedMonthlyExpensesRetirement ?? undefined,
-                        partTimeIncome: variables?.partTimeIncome || profile?.partTimeIncomeRetirement || 0,
-                        spousePartTimeIncome: variables?.spousePartTimeIncome || profile?.spousePartTimeIncomeRetirement || 0
-                      },
-                      profile,
-                      true
-                    );
-                    setOptimizedCashFlowData(flows);
-                    return;
-                  }
-                }
-              } catch (error) {
-                if (!abortController.signal.aborted) {
-                  console.warn('Failed to fetch optimized data from API:', error);
+        if (!hasDetailedOptimized || force) {
+          tasks.push((async () => {
+            try {
+              const res = await fetch('/api/calculate-monte-carlo-withdrawal-sequence', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...variables, startFromCurrentAge: true, projectionYears: yearsToProject }),
+                signal: abortController.signal
+              });
+              if (res.ok) {
+                const data = await res.json();
+                if (data?.projections?.length) {
+                  const flows = transformMonteCarloToCashFlow(
+                    data.projections,
+                    {
+                      retirementAge: variables?.retirementAge || profile?.desiredRetirementAge || 67,
+                      spouseRetirementAge: variables?.spouseRetirementAge || profile?.spouseDesiredRetirementAge || 67,
+                      socialSecurityAge: variables?.socialSecurityAge || profile?.socialSecurityClaimAge || 67,
+                      spouseSocialSecurityAge: variables?.spouseSocialSecurityAge || profile?.spouseSocialSecurityClaimAge || 67,
+                      monthlyExpenses: variables?.monthlyExpenses ?? profile?.expectedMonthlyExpensesRetirement ?? undefined,
+                      partTimeIncome: variables?.partTimeIncome || profile?.partTimeIncomeRetirement || 0,
+                      spousePartTimeIncome: variables?.spousePartTimeIncome || profile?.spousePartTimeIncomeRetirement || 0
+                    },
+                    profile,
+                    true
+                  );
+                  setOptimizedCashFlowData(flows);
+                  setOptimizedTimestamp(new Date().toISOString());
+                  return;
                 }
               }
-              // Fallback to transforming optimizedScore if endpoint unavailable
-              if (optimizedScore?.yearlyCashFlows?.length) {
-                const flows = transformMonteCarloToCashFlow(optimizedScore.yearlyCashFlows, variables, profile, true);
-                setOptimizedCashFlowData(flows);
+            } catch (error) {
+              if (!abortController.signal.aborted) {
+                console.warn('Failed to fetch optimized data from API:', error);
               }
-            })()
-          );
+            }
+            if (optimizedScore?.yearlyCashFlows?.length) {
+              const flows = transformMonteCarloToCashFlow(optimizedScore.yearlyCashFlows, variables, profile, true);
+              setOptimizedCashFlowData(flows);
+              if (optimizedScore?.calculatedAt) setOptimizedTimestamp(optimizedScore.calculatedAt);
+            }
+          })());
         }
 
         if (tasks.length) {
@@ -298,14 +301,10 @@ function CashFlowContent({
       }
     };
 
-    // Guard: if data was fetched and we have something to show, avoid refetching
-    if (!(dataFetched && (currentCashFlowData?.length || optimizedCashFlowData?.length))) {
-      fetchCashFlowData();
-    }
+    run();
 
     return () => abortController.abort();
-  // Do not depend on currentCashFlowData/optimizedCashFlowData to avoid loops
-  }, [variables, profile, currentScore, optimizedScore, dataFetched]);
+  }, [profile, variables, currentScore, optimizedScore, currentCashFlowData, optimizedCashFlowData, dataFetched, refreshKey]);
   
   // Loading timer ticker
   useEffect(() => {
@@ -318,6 +317,10 @@ function CashFlowContent({
   
   // Add state for selected plan - default to 'optimized'
   const [selectedPlan, setSelectedPlan] = useState<'baseline' | 'optimized'>('optimized');
+  const handleCashFlowRefresh = useCallback(() => {
+    setRefreshKey(prev => prev + 1);
+    setDataFetched(false);
+  }, []);
   
   // Keep Optimized selected by default - don't auto-switch to baseline
   // User can manually switch if they want to see baseline data
@@ -337,6 +340,7 @@ function CashFlowContent({
   const postRetDisplayData = (displayData || []).filter(d => (d?.age ?? Infinity) >= minRetirementAge);
   
   const hasAnyData = !!(currentCashFlowData?.length || optimizedCashFlowData?.length);
+  const activeTimestamp = selectedPlan === 'baseline' ? baselineTimestamp : optimizedTimestamp;
   if (isLoading && !hasAnyData) {
     return (
       <div className="flex items-center justify-center p-8">
@@ -350,7 +354,7 @@ function CashFlowContent({
     <div className="space-y-6">
       {/* Plan Toggle - Same design as MC Withdrawals tab */}
       <div className="text-center">
-        <div className="inline-flex rounded-md shadow-sm" role="group">
+      <div className="inline-flex rounded-md shadow-sm" role="group">
           <button
             type="button"
             onClick={() => setSelectedPlan('baseline')}
@@ -373,8 +377,15 @@ function CashFlowContent({
           >
             Optimized Plan
           </button>
-        </div>
       </div>
+    </div>
+
+      <LastCalculated
+        timestamp={activeTimestamp}
+        onRefresh={handleCashFlowRefresh}
+        refreshing={isLoading}
+        label={`${selectedPlan === 'baseline' ? 'Baseline' : 'Optimized'} cash flows`}
+      />
       
       {displayData?.length ? (
         <div className="space-y-4">
@@ -612,6 +623,8 @@ function MonteCarloWithdrawalContent({
   const [isLoading, setIsLoading] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded from saved state
   const [loadingSeconds, setLoadingSeconds] = useState(0); // Timer for loading state
+  const [baselineTimestamp, setBaselineTimestamp] = useState<string | null>(null);
+  const [optimizedTimestamp, setOptimizedTimestamp] = useState<string | null>(null);
 
   // Load saved MC Withdrawals data from profile if available
   useEffect(() => {
@@ -637,11 +650,15 @@ function MonteCarloWithdrawalContent({
       if (hasDetailedBaselineData) {
         setBaselineData(savedData.baselineData);
         if (savedData.baselineSummary) setBaselineSummary(savedData.baselineSummary);
+        if (savedData.baselineCalculatedAt) setBaselineTimestamp(savedData.baselineCalculatedAt);
+        else if (savedData.savedAt) setBaselineTimestamp(savedData.savedAt);
       }
       
       if (hasDetailedOptimizedData) {
         setOptimizedData(savedData.optimizedData);
         if (savedData.optimizedSummary) setOptimizedSummary(savedData.optimizedSummary);
+        if (savedData.optimizedCalculatedAt) setOptimizedTimestamp(savedData.optimizedCalculatedAt);
+        else if (savedData.savedAt) setOptimizedTimestamp(savedData.savedAt);
       }
       
       // Only mark as loaded if we have detailed data
@@ -682,13 +699,12 @@ function MonteCarloWithdrawalContent({
         'taxFreeWithdrawal' in d
       ));
     
-    // Only skip fetching if we already have detailed withdrawal breakdown data
-    if ( hasOptimizedOnce && !hasDetailedData) {
+    if (hasOptimizedOnce && !hasDetailedData) {
       fetchMonteCarloWithdrawals();
     }
-  }, [ hasOptimizedOnce, variables, baselineData, optimizedData]);
+  }, [hasOptimizedOnce, baselineData, optimizedData, fetchMonteCarloWithdrawals]);
 
-  const fetchMonteCarloWithdrawals = async () => {
+  const fetchMonteCarloWithdrawals = useCallback(async () => {
     setIsLoading(true);
     try {
       console.log('Fetching Monte Carlo withdrawals - Both baseline and optimized');
@@ -732,6 +748,10 @@ function MonteCarloWithdrawalContent({
         setOptimizedData(optimizedResult.projections);
         setBaselineSummary(baselineResult.monteCarloSummary || null);
         setOptimizedSummary(optimizedResult.monteCarloSummary || null);
+        const baselineCalcAt = baselineResult.monteCarloSummary?.calculatedAt ?? new Date().toISOString();
+        const optimizedCalcAt = optimizedResult.monteCarloSummary?.calculatedAt ?? new Date().toISOString();
+        setBaselineTimestamp(baselineCalcAt);
+        setOptimizedTimestamp(optimizedCalcAt);
         
         // Notify parent component of data update
         if (onDataUpdate) {
@@ -739,7 +759,10 @@ function MonteCarloWithdrawalContent({
             baselineData: baselineResult.projections,
             optimizedData: optimizedResult.projections,
             baselineSummary: baselineResult.monteCarloSummary,
-            optimizedSummary: optimizedResult.monteCarloSummary
+            optimizedSummary: optimizedResult.monteCarloSummary,
+            baselineCalculatedAt: baselineCalcAt,
+            optimizedCalculatedAt: optimizedCalcAt,
+            savedAt: new Date().toISOString()
           });
         }
       } else {
@@ -747,20 +770,53 @@ function MonteCarloWithdrawalContent({
         if (baselineResult && baselineResult.projections) {
           setBaselineData(baselineResult.projections);
           setBaselineSummary(baselineResult.monteCarloSummary || null);
+          const baselineCalcAt = baselineResult.monteCarloSummary?.calculatedAt ?? new Date().toISOString();
+          setBaselineTimestamp(baselineCalcAt);
         }
         if (optimizedResult && optimizedResult.projections) {
           setOptimizedData(optimizedResult.projections);
           setOptimizedSummary(optimizedResult.monteCarloSummary || null);
+          const optimizedCalcAt = optimizedResult.monteCarloSummary?.calculatedAt ?? new Date().toISOString();
+          setOptimizedTimestamp(optimizedCalcAt);
         }
         
         // Try to use any available score data as fallback
         if (!baselineResult && currentScore?.yearlyCashFlows) {
           console.log('Using currentScore as fallback for baseline data');
           setBaselineData(currentScore.yearlyCashFlows);
+          if (currentScore?.calculatedAt) {
+            setBaselineTimestamp(currentScore.calculatedAt);
+          }
         }
         if (!optimizedResult && optimizedScore?.yearlyCashFlows) {
           console.log('Using optimizedScore as fallback for optimized data');
           setOptimizedData(optimizedScore.yearlyCashFlows);
+          if (optimizedScore?.calculatedAt) {
+            setOptimizedTimestamp(optimizedScore.calculatedAt);
+          }
+        }
+
+        if (onDataUpdate) {
+          const payload: any = { savedAt: new Date().toISOString() };
+          if (baselineResult?.projections) {
+            payload.baselineData = baselineResult.projections;
+            payload.baselineSummary = baselineResult.monteCarloSummary;
+            payload.baselineCalculatedAt = baselineResult.monteCarloSummary?.calculatedAt ?? payload.savedAt;
+          } else if (!baselineResult && currentScore?.yearlyCashFlows) {
+            payload.baselineData = currentScore.yearlyCashFlows;
+            if (currentScore?.calculatedAt) payload.baselineCalculatedAt = currentScore.calculatedAt;
+          }
+          if (optimizedResult?.projections) {
+            payload.optimizedData = optimizedResult.projections;
+            payload.optimizedSummary = optimizedResult.monteCarloSummary;
+            payload.optimizedCalculatedAt = optimizedResult.monteCarloSummary?.calculatedAt ?? payload.savedAt;
+          } else if (!optimizedResult && optimizedScore?.yearlyCashFlows) {
+            payload.optimizedData = optimizedScore.yearlyCashFlows;
+            if (optimizedScore?.calculatedAt) payload.optimizedCalculatedAt = optimizedScore.calculatedAt;
+          }
+          if (payload.baselineData || payload.optimizedData) {
+            onDataUpdate(payload);
+          }
         }
       }
     } catch (error) {
@@ -768,7 +824,7 @@ function MonteCarloWithdrawalContent({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentScore, optimizedScore, hasOptimizedOnce, onDataUpdate, profile, variables]);
 
   if (!hasOptimizedOnce) {
     return (
@@ -814,6 +870,10 @@ function MonteCarloWithdrawalContent({
   // Get current data based on selected plan
   const currentData = selectedPlan === 'baseline' ? baselineData : optimizedData;
   const currentSummary = selectedPlan === 'baseline' ? baselineSummary : optimizedSummary;
+  const activeTimestamp = selectedPlan === 'baseline' ? baselineTimestamp : optimizedTimestamp;
+  const handleWithdrawalsRefresh = useCallback(() => {
+    fetchMonteCarloWithdrawals();
+  }, [fetchMonteCarloWithdrawals]);
 
   return (
     <div className="space-y-6">
@@ -857,8 +917,15 @@ function MonteCarloWithdrawalContent({
           >
             Optimized Plan
           </button>
-        </div>
       </div>
+    </div>
+
+      <LastCalculated
+        timestamp={activeTimestamp}
+        onRefresh={handleWithdrawalsRefresh}
+        refreshing={isLoading}
+        label={`${selectedPlan === 'baseline' ? 'Baseline' : 'Optimized'} income projections`}
+      />
 
       {/* Monte Carlo Visualization Component */}
       <MonteCarloWithdrawalVisualization 
@@ -1828,9 +1895,15 @@ function RetirementPlanningInner() {
           // Load saved cash flow data if available in optimizationVariables
           if (savedOpt.currentCashFlowData) {
             setCurrentCashFlowData(savedOpt.currentCashFlowData);
+            if (savedOpt.cashFlowBaselineCalculatedAt) {
+              setBaselineTimestamp(savedOpt.cashFlowBaselineCalculatedAt);
+            }
           }
           if (savedOpt.optimizedCashFlowData) {
             setOptimizedCashFlowData(savedOpt.optimizedCashFlowData);
+            if (savedOpt.cashFlowOptimizedCalculatedAt) {
+              setOptimizedTimestamp(savedOpt.cashFlowOptimizedCalculatedAt);
+            }
           }
           
           // NEW: Also load cash flows persisted by backend optimize endpoint

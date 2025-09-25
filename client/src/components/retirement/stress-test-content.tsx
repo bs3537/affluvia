@@ -8,9 +8,11 @@ import { StressTestScenarios } from './stress-test-scenarios';
 import { StressTestOverview } from './stress-test-overview';
 import { 
   StressScenario, 
-  StressTestResponse 
+  StressTestResponse,
+  DEFAULT_STRESS_SCENARIOS
 } from '@/../../shared/stress-test-types';
 import { useToast } from '@/hooks/use-toast';
+import { LastCalculated } from '@/components/ui/last-calculated';
 
 interface StressTestContentProps {
   variables: any;
@@ -44,6 +46,7 @@ export const StressTestContent: React.FC<StressTestContentProps> = ({
   const [cachedResultsOptimized, setCachedResultsOptimized] = useState<StressTestResponse | null>(null);
   const [cacheAge, setCacheAge] = useState<number>(0);
   const [isCached, setIsCached] = useState(false);
+  const [lastRunConfig, setLastRunConfig] = useState<{ scenarios: StressScenario[]; runCombined: boolean } | null>(null);
   
   // Calculate baseline score early to avoid temporal dead zone
   const baselineScore = React.useMemo(() => {
@@ -172,6 +175,8 @@ export const StressTestContent: React.FC<StressTestContentProps> = ({
   ): Promise<StressTestResponse> => {
     setIsLoading(true);
     setShowLastResults(false); // We're running a new test
+    const clonedScenarios = scenarios.map(s => ({ ...s }));
+    setLastRunConfig({ scenarios: clonedScenarios, runCombined });
     
     try {
       // Prepare request body with updated field name
@@ -212,14 +217,18 @@ export const StressTestContent: React.FC<StressTestContentProps> = ({
         return handleRunStressTest(scenarios, runCombined);
       }
       
-      setStressTestResults(results);
+      const stampedResults = {
+        ...results,
+        timestamp: results.timestamp ?? Date.now()
+      } as StressTestResponse;
+      setStressTestResults(stampedResults);
       
       toast({
         title: "Stress Test Complete",
         description: `Analyzed ${scenarios.filter(s => s.enabled).length} stress scenarios for ${selectedPlan} plan`,
       });
       
-      return results;
+      return stampedResults;
     } catch (error) {
       console.error('Stress test error:', error);
       toast({
@@ -232,6 +241,26 @@ export const StressTestContent: React.FC<StressTestContentProps> = ({
       setIsLoading(false);
     }
   }, [selectedPlan, profile, toast]);
+
+  const activeResults = stressTestResults || cachedResults;
+  const activeTimestamp = activeResults?.timestamp ?? profile?.lastStressTestResults?.timestamp ?? profile?.lastStressTestDate ?? null;
+
+  const handleRefreshClick = useCallback(async () => {
+    const baseScenarios = lastRunConfig
+      ? lastRunConfig.scenarios.map(s => ({ ...s }))
+      : DEFAULT_STRESS_SCENARIOS.map(s => ({
+          ...s,
+          enabled: selectedScenarios.length > 0 ? selectedScenarios.includes(s.id) : true
+        }));
+
+    const enabledCount = baseScenarios.filter(s => s.enabled).length;
+    if (enabledCount === 0) {
+      // Ensure at least one scenario runs
+      baseScenarios[0] = { ...baseScenarios[0], enabled: true };
+    }
+
+    await handleRunStressTest(baseScenarios, lastRunConfig?.runCombined ?? true);
+  }, [handleRunStressTest, lastRunConfig, selectedScenarios]);
 
   // Check if Step 11 (retirement planning) is complete
   const hasBaselineData = profile?.retirementContributions !== undefined || 
@@ -332,6 +361,13 @@ export const StressTestContent: React.FC<StressTestContentProps> = ({
           </button>
         </div>
       </div>
+
+      <LastCalculated
+        timestamp={activeTimestamp}
+        onRefresh={handleRefreshClick}
+        refreshing={isLoading}
+        label={`${selectedPlan === 'baseline' ? 'Baseline' : 'Optimized'} stress tests`}
+      />
 
       {/* Automatic Stress Test Overview - Shows immediately on load */}
       <StressTestOverview 
