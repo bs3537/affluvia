@@ -43,6 +43,20 @@
       "when": 1755466624617,
       "tag": "0005_chunky_the_renegades",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1774387200000,
+      "tag": "2025-09-25-001-create-roth-conversion-analyses",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1758839521011,
+      "tag": "0007_wooden_namora",
+      "breakpoints": true
     }
   ]
 }

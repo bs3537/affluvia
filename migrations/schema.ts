@@ -848,6 +848,22 @@ export const financialProfiles = pgTable("financial_profiles", {
 	check("financial_profiles_user_health_status_check", sql`user_health_status = ANY (ARRAY['excellent'::text, 'good'::text, 'fair'::text, 'poor'::text])`),
 ]);
 
+export const rothConversionAnalyses = pgTable("roth_conversion_analyses", {
+	id: serial().primaryKey().notNull(),
+	userId: integer("user_id").notNull(),
+	analysis: jsonb("analysis").notNull(),
+	createdAt: timestamp("created_at", { mode: 'string' }).default(sql`CURRENT_TIMESTAMP`),
+	updatedAt: timestamp("updated_at", { mode: 'string' }).default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [users.id],
+			name: "roth_conversion_analyses_user_id_fkey"
+		}).onDelete("cascade"),
+	unique("roth_conversion_analyses_user_id_key").on(table.userId),
+	index("roth_conversion_analyses_updated_idx").using("btree", table.updatedAt.desc().nullsFirst().op("timestamp_ops")),
+]);
+
 export const debtPayoffPlans = pgTable("debt_payoff_plans", {
 	id: serial().primaryKey().notNull(),
 	userId: integer("user_id").notNull(),

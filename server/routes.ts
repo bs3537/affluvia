@@ -45,6 +45,7 @@ import {
   generateEstateInsightsFromContext,
   type EstateInsightsPayload,
 } from "./estate-insights-generator";
+import { normalizeStoredRothAnalysis, buildRothAnalysisMeta } from "./services/roth-conversion-utils";
 
 const PG_UNDEFINED_TABLE = '42P01';
 
@@ -636,6 +637,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const profile = await storage.getFinancialProfile(userId);
+      const rothAnalysisRecord = await storage.getRothConversionAnalysis(userId);
+      const normalizedRothAnalysis = normalizeStoredRothAnalysis(rothAnalysisRecord);
+      const rothAnalysisMeta = buildRothAnalysisMeta(normalizedRothAnalysis);
 
       // Note: education goal insights persistence is handled in education routes; do not reference 'goal' here
 
@@ -866,7 +870,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             emergencyReadinessScore: Math.round(calculations.emergencyScore ?? 0),
             retirementReadinessScore: Math.round(calculations.retirementScore ?? 0),
             riskManagementScore: Math.round(calculations.insuranceAdequacy?.score ?? calculations.insuranceScore ?? 0)
-          })
+          }),
+          ...(rothAnalysisMeta ? { rothConversionAnalysisMeta: rothAnalysisMeta } : {})
         };
         res.json(profileWithCalculations);
       } else {
@@ -9680,22 +9685,10 @@ Response format:
         transformedResult: transformedResult
       };
       
-      // Update the calculations field in the financial profile
-      const updatedCalculations = {
-        ...(completeProfile.calculations || {}),
-        rothConversionAnalysis: analysisData
-      };
-      
-      // Save to database
-      await db.update(financialProfiles)
-        .set({ 
-          calculations: updatedCalculations,
-          updatedAt: new Date()
-        })
-        .where(eq(financialProfiles.userId, req.user!.id));
-      
-      console.log('✅ Roth conversion analysis results saved to database');
-      
+      analysisData.updatedAt = currentDateTime;
+      await storage.saveRothConversionAnalysis(req.user!.id, analysisData);
+      console.log('✅ Roth conversion analysis results saved to dedicated storage');
+
       res.json(transformedResult);
     } catch (error) {
       console.error('Error in comprehensive Roth conversion analysis:', error);
@@ -9707,24 +9700,27 @@ Response format:
   app.get("/api/roth-conversion/analysis", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.sendStatus(401);
-      
-      const profile = await db.query.financialProfiles.findFirst({
-        where: eq(financialProfiles.userId, req.user!.id)
-      });
 
-      if (!profile || !profile.calculations || !profile.calculations.rothConversionAnalysis) {
-        return res.status(404).json({ 
-          error: "No Roth conversion analysis found. Please run an analysis first." 
+      const userId = req.user!.id;
+      const persisted = await storage.getRothConversionAnalysis(userId);
+      const normalized = normalizeStoredRothAnalysis(persisted);
+
+      if (!normalized) {
+        return res.status(404).json({
+          error: "No Roth conversion analysis found. Please run an analysis first."
         });
       }
 
-      const analysisData = profile.calculations.rothConversionAnalysis;
+      const analysisData: any = normalized.analysis;
+      const analysisMeta = buildRothAnalysisMeta(normalized);
+
+      const profile = await storage.getFinancialProfile(userId);
 
       // Prepare response, but first attempt to recompute after-heir-tax estate values at age 93
       // from stored raw projections to ensure consistency with Estate Planning New.
-      let summaryEstateIncrease = analysisData.estateValueIncrease;
-      let resultsOut: any = analysisData.transformedResult || analysisData.results;
-      const raw = analysisData.results;
+      let summaryEstateIncrease = analysisData?.estateValueIncrease;
+      let resultsOut: any = analysisData?.transformedResult || analysisData?.results;
+      const raw = analysisData?.results;
 
       try {
         if (raw && Array.isArray(raw.withoutConversionProjection) && Array.isArray(raw.withConversionProjection)) {
@@ -9751,7 +9747,6 @@ Response format:
           const convAtTarget = pickRowAtTarget(raw.withConversionProjection);
 
           if (baseAtTarget && convAtTarget) {
-            // 1) Compute retirement at target and real estate to age 93
             const retirementWithout = Math.max(0,
               (baseAtTarget?.traditionalBalance || 0) +
               (baseAtTarget?.rothBalance || 0) +
@@ -9777,7 +9772,6 @@ Response format:
             const factor = Math.pow(1.03, yearsUntilTarget);
             const realEstateAtDeath = Math.round(currentRE * factor);
 
-            // 2) Align baseline retirement value with the Overview (optimized MC at 93)
             let retirementAtTarget = 0;
             try {
               const impact: any = (profile as any)?.retirementPlanningData?.impactOnPortfolioBalance;
@@ -9797,13 +9791,11 @@ Response format:
               }
             } catch {}
 
-            // 3) Mirror Overview baseline/overlay construction
             const projectedEstateValue = Math.max(0, retirementAtTarget + realEstateAtDeath);
             const baselineRetirement = retirementAtTarget;
-            const rothRetirement = retirementWith; // engine with-conversion retirement sum at target
+            const rothRetirement = retirementWith;
             const baseEstateValueRoth = Math.max(0, projectedEstateValue - baselineRetirement + rothRetirement);
 
-            // Use the same baseline composition as Overview (from profile), keep illiquid constant
             const profileComposition = buildAssetCompositionFromProfile(profile || {});
             const overlayComposition = {
               taxable: Math.max(0, (convAtTarget?.taxableBalance || 0) + (convAtTarget?.savingsBalance || 0)),
@@ -9830,7 +9822,6 @@ Response format:
             const withAfterHeir = Math.max(0, withSummary.heirTaxEstimate.netAfterIncomeTax);
             summaryEstateIncrease = withAfterHeir - baselineAfterHeir;
 
-            // Also update transformed result projections so UI tiles that derive differences from them align
             if (resultsOut && resultsOut.baselineScenario && resultsOut.baselineScenario.projections) {
               resultsOut.baselineScenario.projections.afterTaxEstateValueAt85 = baselineAfterHeir;
             }
@@ -9843,20 +9834,20 @@ Response format:
         console.warn('[GET /api/roth-conversion/analysis] Could not recompute estate overlay at 93:', (e as any)?.message || e);
       }
 
+      const calculatedAt = analysisMeta?.calculatedAt || normalized.updatedAtIso || normalized.createdAtIso;
+
       res.json({
         hasAnalysis: true,
-        calculatedAt: analysisData.calculatedAt,
-        strategy: analysisData.strategy,
+        calculatedAt,
+        strategy: analysisData?.strategy,
         summary: {
-          lifetimeTaxSavings: analysisData.lifetimeTaxSavings,
-          totalConversions: analysisData.totalConversions,
+          lifetimeTaxSavings: analysisData?.lifetimeTaxSavings,
+          totalConversions: analysisData?.totalConversions,
           estateValueIncrease: summaryEstateIncrease,
-          conversionYears: analysisData.conversionYears
+          conversionYears: analysisData?.conversionYears
         },
-        // Maintain existing client contract: primary 'results' preferred for transformed UI payload
         results: resultsOut,
-        // Always include raw engine results for advanced consumers (e.g., estate overlay)
-        rawResults: analysisData.results
+        rawResults: analysisData?.results
       });
     } catch (error) {
       console.error('Error retrieving Roth conversion analysis:', error);
@@ -9873,8 +9864,10 @@ Response format:
 
       const profile = await storage.getFinancialProfile(userId);
       const estatePlan = await storage.getEstatePlan(userId);
-      const calculations = profile?.calculations as any;
-      const saved = calculations?.rothConversionAnalysis;
+      const persisted = await storage.getRothConversionAnalysis(userId);
+      const normalized = normalizeStoredRothAnalysis(persisted);
+      const saved: any = normalized?.analysis;
+
       if (!saved?.results?.withConversionProjection || !saved?.results?.withoutConversionProjection) {
         return res.status(404).json({ error: "No saved Roth analysis raw projections" });
       }

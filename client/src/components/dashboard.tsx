@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -18,6 +18,7 @@ import { Gauge } from "@/components/ui/gauge";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { MetricDisplay } from "@/components/ui/metric-display";
 import { RiskProfileIndicator } from "@/components/ui/risk-profile-indicator";
+import { computeEmergencyReadinessMetrics } from "@/utils/emergency-readiness";
 import { RecommendationAccordion } from "@/components/ui/recommendation-accordion";
 import { ValueTeaserCard, ValueTeaserInline } from "@/components/ui/value-teaser-card";
 import ComprehensiveInsightsSection from "@/components/comprehensive-insights-section";
@@ -415,6 +416,19 @@ export function Dashboard() {
   const snapSpouseRisk: any = pickWidget(dashSnapshot, 'spouse_risk_profile');
   const snapInsurance: any = pickWidget(dashSnapshot, 'insurance_adequacy');
 
+  const emergencySnapshotScore =
+    typeof snapEmergency?.score === 'number' && !Number.isNaN(snapEmergency.score)
+      ? snapEmergency.score
+      : null;
+
+  const emergencyMetrics = useMemo(
+    () => computeEmergencyReadinessMetrics(profile, {
+      snapshot: dashSnapshot,
+      snapshotScore: emergencySnapshotScore,
+    }),
+    [profile, dashSnapshot, emergencySnapshotScore]
+  );
+
   
   // Progressive disclosure states for dashboard widgets
   const [expandedSections, setExpandedSections] = useState<{
@@ -480,52 +494,6 @@ export function Dashboard() {
       profile?.calculations?.breakdown?.insuranceScore ??
       profile?.riskManagementScore ?? 0);
 
-  // Calculate Emergency Readiness Score
-  const calculateEmergencyReadinessScore = () => {
-    if (!profile) return 0;
-    
-    // Get emergency fund size from profile or calculate from assets if not available
-    let emergencyFundSize = Number(profile?.emergencyFundSize || 0);
-    
-    // Fallback: calculate from liquid assets if emergency fund size not set
-    if (emergencyFundSize === 0 && profile?.assets) {
-      emergencyFundSize = profile.assets
-        .filter((asset: any) => 
-          asset.type && (
-            asset.type.toLowerCase().includes('emergency') ||
-            asset.type.toLowerCase().includes('savings') ||
-            asset.type.toLowerCase().includes('checking')
-          )
-        )
-        .reduce((sum: number, asset: any) => sum + (Number(asset.value) || 0), 0);
-    }
-    
-    // Calculate essential monthly expenses
-    const monthlyExpenses = profile?.monthlyExpenses || {};
-    const essentialExpenses = 
-      (Number(monthlyExpenses.housing) || 0) +
-      (Number(monthlyExpenses.food) || 0) +
-      (Number(monthlyExpenses.transportation) || 0) +
-      (Number(monthlyExpenses.utilities) || 0) +
-      (Number(monthlyExpenses.healthcare) || 0) +
-      (Number(monthlyExpenses.insurance) || 0) +
-      (Number(monthlyExpenses.childcare) || 0) +
-      (Number(monthlyExpenses.otherDebtPayments) || 0) +
-      (Number(monthlyExpenses.householdExpenses) || 0) +
-      (Number(monthlyExpenses.monthlyTaxes) || 0);
-    
-    const monthsCovered = essentialExpenses > 0 ? emergencyFundSize / essentialExpenses : 0;
-    
-    // Simplified scoring: 6 months = 100, 3 months = 50, linear scale
-    let score = Math.min(100, (monthsCovered / 6) * 100);
-    if (monthsCovered >= 6) score = 100;
-    else if (monthsCovered >= 3) score = 50 + ((monthsCovered - 3) / 3) * 50;
-    else if (monthsCovered >= 1) score = 25 + ((monthsCovered - 1) / 2) * 25;
-    else score = Math.max(0, monthsCovered * 25);
-    
-    return Math.round(score);
-  };
-
   // Toggle expanded state for dashboard sections
   const toggleSection = (sectionKey: string) => {
     setExpandedSections(prev => ({
@@ -553,11 +521,7 @@ export function Dashboard() {
     }
     
     // Auto-expand if emergency fund is inadequate
-    const emergencyScore = (typeof snapEmergency?.score === 'number')
-      ? Math.round(snapEmergency.score)
-      : (profile?.emergencyReadinessScore !== undefined && profile?.emergencyReadinessScore !== null
-        ? profile.emergencyReadinessScore
-        : (profile?.emergencyReadinessScoreCFP || calculateEmergencyReadinessScore()));
+    const emergencyScore = emergencyMetrics.score;
     if (emergencyScore < 60) {
       autoExpandSections.emergencyFund = true;
     }
@@ -568,7 +532,7 @@ export function Dashboard() {
     }
     
     setExpandedSections(prev => ({ ...prev, ...autoExpandSections }));
-  }, [profile, insuranceScore]);
+  }, [profile, insuranceScore, emergencyMetrics.score]);
 
   // Navigate to intake form with specific section
   const navigateToIntakeSection = (sectionType: string) => {
@@ -1946,47 +1910,17 @@ export function Dashboard() {
               refreshing={isRefreshing}
             />
             {(() => {
-              // Use the persisted emergency readiness score from database first
-              const finalScore = (typeof snapEmergency?.score === 'number')
-                ? Math.round(snapEmergency.score)
-                : (profile?.emergencyReadinessScore !== undefined && profile?.emergencyReadinessScore !== null
-                  ? profile.emergencyReadinessScore
-                  : (profile?.calculations?.emergencyReadinessScoreCFP || profile?.emergencyReadinessScoreCFP || calculateEmergencyReadinessScore()));
-              
-              // Get emergency fund size from profile or calculate from assets if not available
-              let emergencyFundSize = Number(profile?.emergencyFundSize || 0);
-              
-              // Fallback: calculate from liquid assets if emergency fund size not set
-              if (emergencyFundSize === 0 && profile?.assets) {
-                emergencyFundSize = profile.assets
-                  .filter((asset: any) => 
-                    asset.type && (
-                      asset.type.toLowerCase().includes('emergency') ||
-                      asset.type.toLowerCase().includes('savings') ||
-                      asset.type.toLowerCase().includes('checking')
-                    )
-                  )
-                  .reduce((sum: number, asset: any) => sum + (asset.value || 0), 0);
-              }
-              
-              const monthlyExpenses = profile?.monthlyExpenses || {};
-              
-              // Calculate essential monthly expenses (excluding entertainment)
-              const essentialExpenses = 
-                (Number(monthlyExpenses.housing) || 0) +
-                (Number(monthlyExpenses.transportation) || 0) +
-                (Number(monthlyExpenses.food) || 0) +
-                (Number(monthlyExpenses.utilities) || 0) +
-                (Number(monthlyExpenses.healthcare) || 0) +
-                (Number(monthlyExpenses.creditCardPayments) || 0) +
-                (Number(monthlyExpenses.studentLoanPayments) || 0) +
-                (Number(monthlyExpenses.otherDebtPayments) || 0) +
-                (Number(monthlyExpenses.householdExpenses) || 0) +
-                (Number(monthlyExpenses.monthlyTaxes) || 0) +
-                (Number(monthlyExpenses.other) || 0);
-              
-              const monthsCovered = essentialExpenses > 0 ? emergencyFundSize / essentialExpenses : 0;
-              
+              const finalScore = emergencyMetrics.score;
+              const emergencyFundSize = Number.isFinite(emergencyMetrics.emergencyFundAmount)
+                ? emergencyMetrics.emergencyFundAmount
+                : 0;
+              const essentialExpenses = Number.isFinite(emergencyMetrics.essentialMonthlyExpenses)
+                ? emergencyMetrics.essentialMonthlyExpenses
+                : 0;
+              const monthsCovered = Number.isFinite(emergencyMetrics.monthsCovered)
+                ? emergencyMetrics.monthsCovered
+                : 0;
+
               return (
                 <>
                   <div className="mb-4">

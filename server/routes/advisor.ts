@@ -312,7 +312,9 @@ export function setupAdvisorRoutes(app: Express) {
       email: email ?? null,
       defaultDisclaimer: defaultDisclaimer ?? null,
     };
-    if (logoUrl) data.logoUrl = logoUrl;
+    if (logoUrl !== undefined) {
+      data.logoUrl = logoUrl;
+    }
 
     const updated = await storage.upsertWhiteLabelProfile(advisorId, data);
     res.json(updated);

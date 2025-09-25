@@ -235,6 +235,38 @@ async function buildWidgetsSnapshot(userId: number, layout: string[]) {
 }
 
 export function setupReportRoutes(app: Express) {
+  app.get('/api/report/branding', requireAuth, async (req, res) => {
+    const user = (req as any).user as any;
+    const realUser = (req as any).realUser as any | undefined;
+
+    let advisorId: number | null = null;
+    if (realUser && realUser.role === 'advisor') {
+      advisorId = realUser.id;
+    } else if (user?.role === 'advisor') {
+      advisorId = user.id;
+    } else {
+      advisorId = await storage.getPrimaryAdvisorForClient(user.id);
+    }
+
+    let branding = null;
+    if (advisorId) {
+      branding = await storage.getWhiteLabelProfile(advisorId);
+    }
+
+    if (!branding) {
+      return res.json({
+        firmName: 'Affluvia',
+        logoUrl: null,
+        address: null,
+        phone: null,
+        email: null,
+        defaultDisclaimer: null,
+      });
+    }
+
+    res.json(branding);
+  });
+
   // Get saved layout
   app.get('/api/report/layout', requireAuth, async (req, res) => {
     const userId = (req as any).user.id as number;

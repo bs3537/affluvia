@@ -23,6 +23,7 @@ import {
   lifeGoalsTable,
   actionPlanTasks,
   dashboardInsights,
+  rothConversionAnalyses,
   advisorClients,
   advisorInvites,
   advisorAuditLogs,
@@ -89,7 +90,9 @@ import {
   type InsertLifeGoal,
   type ActionPlanTask,
   type DashboardInsight,
-  type InsertDashboardInsight
+  type InsertDashboardInsight,
+  type RothConversionAnalysis,
+  type InsertRothConversionAnalysis
   , type AdvisorClient, type AdvisorInvite, type AdvisorAuditLog
   , type WhiteLabelProfile, type InsertWhiteLabelProfile
   , type ReportLayout, type InsertReportLayout
@@ -134,6 +137,9 @@ export interface IStorage {
   getFinancialProfile(userId: number): Promise<FinancialProfile | undefined>;
   updateFinancialProfile(userId: number, data: Partial<InsertFinancialProfile>): Promise<FinancialProfile>;
   deleteFinancialProfile(userId: number): Promise<void>;
+  getRothConversionAnalysis(userId: number): Promise<RothConversionAnalysis | undefined>;
+  saveRothConversionAnalysis(userId: number, analysis: unknown): Promise<RothConversionAnalysis>;
+  deleteRothConversionAnalysis(userId: number): Promise<void>;
   
   // Comprehensive reset - deletes ALL user data
   deleteAllUserData(userId: number): Promise<void>;
@@ -240,12 +246,13 @@ export interface IStorage {
   getPendingInvitesByEmail(email: string): Promise<AdvisorInvite[]>;
   createAdvisorAuditLog(entry: Omit<AdvisorAuditLog, 'id' | 'createdAt'>): Promise<AdvisorAuditLog>;
   getAdvisorInvites(advisorId: number): Promise<AdvisorInvite[]>;
+  getPrimaryAdvisorForClient(clientId: number): Promise<number | null>;
   updateAdvisorInviteToken(inviteId: number, inviteToken: string | undefined, tokenHash: string | undefined, expiresAt: Date): Promise<AdvisorInvite>;
   cancelAdvisorInvite(inviteId: number): Promise<void>;
 
   // Advisor branding (white label)
   getWhiteLabelProfile(advisorId: number): Promise<WhiteLabelProfile | undefined>;
-  upsertWhiteLabelProfile(advisorId: number, data: InsertWhiteLabelProfile): Promise<WhiteLabelProfile>;
+  upsertWhiteLabelProfile(advisorId: number, data: Partial<InsertWhiteLabelProfile>): Promise<WhiteLabelProfile>;
 
   // Report builder persistence
   getReportLayout(userId: number): Promise<ReportLayout | undefined>;
@@ -593,6 +600,55 @@ export class DatabaseStorage implements IStorage {
       }
       return this.parseProfileJsonFields(updated);
     });
+  }
+
+  async getRothConversionAnalysis(userId: number): Promise<RothConversionAnalysis | undefined> {
+    const [record] = await db
+      .select()
+      .from(rothConversionAnalyses)
+      .where(eq(rothConversionAnalyses.userId, userId))
+      .limit(1);
+
+    return record || undefined;
+  }
+
+  async saveRothConversionAnalysis(userId: number, analysis: unknown): Promise<RothConversionAnalysis> {
+    let normalized = analysis;
+    if (typeof analysis === 'string') {
+      try {
+        normalized = JSON.parse(analysis);
+      } catch (error) {
+        console.warn('[saveRothConversionAnalysis] Failed to parse string analysis payload, storing raw string');
+      }
+    }
+
+    const now = new Date();
+    const payload: InsertRothConversionAnalysis = {
+      userId,
+      analysis: normalized as any,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const [record] = await db
+      .insert(rothConversionAnalyses)
+      .values(payload)
+      .onConflictDoUpdate({
+        target: rothConversionAnalyses.userId,
+        set: {
+          analysis: payload.analysis,
+          updatedAt: now,
+        },
+      })
+      .returning();
+
+    return record;
+  }
+
+  async deleteRothConversionAnalysis(userId: number): Promise<void> {
+    await db
+      .delete(rothConversionAnalyses)
+      .where(eq(rothConversionAnalyses.userId, userId));
   }
 
   private parseProfileJsonFields(profile: any): FinancialProfile {
@@ -1143,19 +1199,27 @@ export class DatabaseStorage implements IStorage {
     return row || undefined;
   }
 
-  async upsertWhiteLabelProfile(advisorId: number, data: InsertWhiteLabelProfile): Promise<WhiteLabelProfile> {
+  async upsertWhiteLabelProfile(advisorId: number, data: Partial<InsertWhiteLabelProfile>): Promise<WhiteLabelProfile> {
     const existing = await this.getWhiteLabelProfile(advisorId);
     if (existing) {
+      const updatePayload: Record<string, any> = { ...data, updatedAt: new Date() };
+      if (!('logoUrl' in data)) {
+        delete updatePayload.logoUrl;
+      }
       const [updated] = await db
         .update(whiteLabelProfiles)
-        .set({ ...data, updatedAt: new Date() } as any)
+        .set(updatePayload as any)
         .where(eq(whiteLabelProfiles.advisorId, advisorId))
         .returning();
       return updated;
     } else {
+      const insertPayload: Record<string, any> = { ...data, advisorId };
+      if (!('logoUrl' in data)) {
+        insertPayload.logoUrl = null;
+      }
       const [created] = await db
         .insert(whiteLabelProfiles)
-        .values({ ...data, advisorId })
+        .values(insertPayload)
         .returning();
       return created;
     }
@@ -1694,6 +1758,16 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(advisorInvites.advisorId, advisorId), eq(advisorInvites.status, 'sent')))
       .orderBy(desc(advisorInvites.createdAt));
     return rows as any;
+  }
+
+  async getPrimaryAdvisorForClient(clientId: number): Promise<number | null> {
+    const rows = await db
+      .select({ advisorId: advisorClients.advisorId, updatedAt: advisorClients.updatedAt })
+      .from(advisorClients)
+      .where(and(eq(advisorClients.clientId, clientId), eq(advisorClients.status, 'active')))
+      .orderBy(desc(advisorClients.updatedAt))
+      .limit(1);
+    return rows.length ? rows[0].advisorId : null;
   }
 
   async updateAdvisorInviteToken(inviteId: number, inviteToken: string | undefined, tokenHash: string | undefined, expiresAt: Date): Promise<AdvisorInvite> {

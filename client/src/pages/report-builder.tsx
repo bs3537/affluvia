@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useAuth } from '@/hooks/use-auth';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,11 +17,13 @@ import {
   AlertDialogTitle, 
   AlertDialogTrigger 
 } from '@/components/ui/alert-dialog';
-import { FileDown, GripVertical, Plus, Save, Trash2, Eye, RefreshCw, X } from 'lucide-react';
+import { FileDown, GripVertical, Plus, Save, Trash2, Eye, RefreshCw, X, TrendingUp } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Gauge } from '@/components/ui/gauge';
 import { MetricDisplay } from '@/components/ui/metric-display';
 import { useReportWidgets } from '@/hooks/use-report-widgets';
+import { useDashboardSnapshot, pickWidget } from '@/hooks/useDashboardSnapshot';
+import { computeEmergencyReadinessMetrics } from '@/utils/emergency-readiness';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
@@ -45,13 +47,13 @@ const DEFAULT_WIDGETS: string[] = [
   'roth_conversion_impact',           // Roth conversion impact - Row 3, Position 2 (middle)
   'life_goals_progress',              // Life goals funding progress - Row 3, Position 3 (middle-right)
   'insurance_adequacy_score',         // Row 3, Position 4 (right)
-  'emergency_readiness_score',        // Row 4, Position 1
+  'emergency_readiness_score_new',    // Row 4, Position 1
 ];
 
 type InsightItem = { id?: string; text: string; order: number; isCustom?: boolean };
 
 // Independent component for Roth conversion impact
-function RothConversionImpactWidget({ profileData }: { profileData: any }) {
+function RothConversionImpactWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
   const [rothData, setRothData] = useState<{
     estateValueIncrease?: number;
     hasAnalysis?: boolean;
@@ -63,6 +65,7 @@ function RothConversionImpactWidget({ profileData }: { profileData: any }) {
   const [isCalculating, setIsCalculating] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const calculatedForRef = useRef<string | null>(null);
+  const prevRefreshRef = useRef<number | null>(null);
 
   // Timer effect
   useEffect(() => {
@@ -79,6 +82,12 @@ function RothConversionImpactWidget({ profileData }: { profileData: any }) {
   }, [isCalculating]);
 
   useEffect(() => {
+    if (prevRefreshRef.current !== refreshSignal) {
+      prevRefreshRef.current = refreshSignal;
+      calculatedForRef.current = null;
+      setRothData(null);
+    }
+
     let isMounted = true;
 
     const resolveEstateSummary = (payload: any): {
@@ -115,9 +124,10 @@ function RothConversionImpactWidget({ profileData }: { profileData: any }) {
 
     async function fetchRothAnalysis() {
       const analysisKey =
-        profileData?.calculations?.rothConversionAnalysis?.calculatedAt ||
-        profileData?.calculations?.rothConversionAnalysis?.updatedAt ||
+        profileData?.rothConversionAnalysisMeta?.updatedAt ||
+        profileData?.rothConversionAnalysisMeta?.calculatedAt ||
         profileData?.optimizationVariables?.lockedAt ||
+        profileData?.lastUpdated ||
         (profileData ? "profile-present" : "no-profile");
 
       if (calculatedForRef.current === analysisKey) {
@@ -188,9 +198,11 @@ function RothConversionImpactWidget({ profileData }: { profileData: any }) {
     };
   }, [
     profileData?.id,
-    profileData?.calculations?.rothConversionAnalysis?.calculatedAt,
-    profileData?.calculations?.rothConversionAnalysis?.updatedAt,
-    profileData?.optimizationVariables?.lockedAt
+    profileData?.rothConversionAnalysisMeta?.calculatedAt,
+    profileData?.rothConversionAnalysisMeta?.updatedAt,
+    profileData?.optimizationVariables?.lockedAt,
+    profileData?.lastUpdated,
+    refreshSignal
   ]);
 
   const currencyFormatter = useMemo(
@@ -269,7 +281,7 @@ function RothConversionImpactWidget({ profileData }: { profileData: any }) {
 }
 
 // Independent component for calculating portfolio impact
-function EndingPortfolioImpactWidget({ profileData }: { profileData: any }) {
+function EndingPortfolioImpactWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
   const [impactData, setImpactData] = useState<{
     finalDifference?: number;
     percentageImprovement?: number;
@@ -279,6 +291,7 @@ function EndingPortfolioImpactWidget({ profileData }: { profileData: any }) {
   const [isCalculating, setIsCalculating] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const calculatedForRef = useRef<string | null>(null);
+  const prevRefreshRef = useRef<number | null>(null);
 
   // Timer effect
   useEffect(() => {
@@ -295,6 +308,12 @@ function EndingPortfolioImpactWidget({ profileData }: { profileData: any }) {
   }, [isCalculating]);
 
   useEffect(() => {
+    if (prevRefreshRef.current !== refreshSignal) {
+      prevRefreshRef.current = refreshSignal;
+      calculatedForRef.current = null;
+      setImpactData(null);
+    }
+
     async function calculateImpact() {
       // Check if optimization variables are locked
       const optimizationVariables = profileData?.optimizationVariables;
@@ -391,7 +410,7 @@ function EndingPortfolioImpactWidget({ profileData }: { profileData: any }) {
     if (profileData) {
       calculateImpact();
     }
-  }, [profileData]); // Only depend on profileData changes
+  }, [profileData, refreshSignal]); // Depend on profileData changes and manual refresh
 
   const formatCurrency = (v: number) => 
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -448,11 +467,12 @@ function EndingPortfolioImpactWidget({ profileData }: { profileData: any }) {
 }
 
 // Independent component for Retirement Stress Test
-function RetirementStressTestWidget({ profileData }: { profileData: any }) {
+function RetirementStressTestWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
   const [stressResults, setStressResults] = useState<any[]>([]);
   const [isCalculating, setIsCalculating] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const calculatedForRef = useRef<string | null>(null);
+  const prevRefreshRef = useRef<number | null>(null);
 
   // Define stress scenarios matching the backend format
   const stressScenarios = [
@@ -525,6 +545,12 @@ function RetirementStressTestWidget({ profileData }: { profileData: any }) {
   }, [isCalculating]);
 
   useEffect(() => {
+    if (prevRefreshRef.current !== refreshSignal) {
+      prevRefreshRef.current = refreshSignal;
+      calculatedForRef.current = null;
+      setStressResults([]);
+    }
+
     async function calculateStressTests() {
       const optimizationVariables = profileData?.optimizationVariables;
       const currentLockedAt = optimizationVariables?.lockedAt;
@@ -612,7 +638,7 @@ function RetirementStressTestWidget({ profileData }: { profileData: any }) {
     if (profileData) {
       calculateStressTests();
     }
-  }, [profileData]); // Only depend on profileData changes
+  }, [profileData, refreshSignal]); // Depend on profileData changes and manual refresh
 
   if (isCalculating) {
     return (
@@ -661,7 +687,7 @@ function RetirementStressTestWidget({ profileData }: { profileData: any }) {
 }
 
 // Life Goals Progress Widget
-function LifeGoalsProgressWidget() {
+function LifeGoalsProgressWidget({ refreshSignal }: { refreshSignal: number }) {
   const [goals, setGoals] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -681,8 +707,12 @@ function LifeGoalsProgressWidget() {
   }, [isLoading]);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function fetchGoals() {
       try {
+        setIsLoading(true);
+        setElapsedSeconds(0);
         // Fetch all three types of goals in parallel
         const [lifeGoalsRes, profileRes, educationRes] = await Promise.all([
           fetch('/api/life-goals', { credentials: 'include' }),
@@ -690,7 +720,7 @@ function LifeGoalsProgressWidget() {
           fetch('/api/education/goals', { credentials: 'include' })
         ]);
         
-        const allGoals = [];
+        const allGoals: any[] = [];
         
         // Process life goals (custom goals)
         if (lifeGoalsRes.ok) {
@@ -735,103 +765,99 @@ function LifeGoalsProgressWidget() {
           });
         }
         
-        // Process retirement goal from profile
-        if (profileRes.ok) {
-          const profile = await profileRes.json();
-          
-          // Add retirement goal if it exists
-          const retirementAge = profile.desiredRetirementAge || profile.retirementAge || 65;
-          const currentAge = profile.age || 30;
-          const yearsToRetirement = Math.max(0, retirementAge - currentAge);
-          const retirementTarget = profile.legacyGoal || profile.retirementIncome || 0;
-          const currentRetirementSavings = profile.assets?.filter((a: any) => 
-            a.type?.toLowerCase().includes('401k') || 
-            a.type?.toLowerCase().includes('ira') || 
-            a.type?.toLowerCase().includes('retirement')
-          ).reduce((sum: number, a: any) => sum + Number(a.value || 0), 0) || 0;
-          
-          // Use Monte Carlo probabilityOfSuccess for retirement progress
-          let retirementProgress = 0;
-          
-          // Extract probabilityOfSuccess from Monte Carlo simulation results
-          const monteCarloResults = profile.monteCarloSimulation?.retirementSimulation?.results;
-          if (monteCarloResults) {
-            if (typeof monteCarloResults.probabilityOfSuccess === 'number' && monteCarloResults.probabilityOfSuccess > 1) {
-              // Already a percentage (0-100)
-              retirementProgress = Math.round(monteCarloResults.probabilityOfSuccess);
-            } else if (typeof monteCarloResults.successProbability === 'number') {
-              // Convert from 0-1 decimal to percentage
-              retirementProgress = Math.round(monteCarloResults.successProbability * 100);
-            } else if (typeof monteCarloResults.probabilityOfSuccess === 'number') {
-              // Might be 0-1 decimal, convert to percentage
-              retirementProgress = Math.round(monteCarloResults.probabilityOfSuccess * 100);
-            }
-          }
-          
-          // Fallback to calculations field if Monte Carlo not available
-          if (retirementProgress === 0 && profile.calculations?.retirementScore) {
-            retirementProgress = Math.round(profile.calculations.retirementScore);
-          }
-          
-          // Final fallback to simple calculation if no Monte Carlo data
-          if (retirementProgress === 0 && yearsToRetirement > 0 && retirementTarget > 0) {
-            retirementProgress = Math.min(100, (currentRetirementSavings / (retirementTarget * 0.25)) * 100);
-          }
-            
-          // Show retirement goal if we have either a target or Monte Carlo data
-          if (retirementTarget > 0 || retirementProgress > 0) {
-            allGoals.push({
-              id: 'retirement',
-              goalName: 'Retirement',
-              description: `Retire at age ${retirementAge}`,
-              type: 'retirement',
-              progress: Math.round(retirementProgress)
-            });
-          }
-        }
-        
         // Process education goals
         if (educationRes.ok) {
-          const educationGoals = await educationRes.json();
-          
-          educationGoals.forEach((goal: any) => {
-            // Use comprehensiveFundingPercentage from projection if available, otherwise fall back to basic calculation
-            let progress = 0;
-            if (goal.projection && goal.projection.comprehensiveFundingPercentage != null) {
-              progress = Number(goal.projection.comprehensiveFundingPercentage);
+          const educationPayload = await educationRes.json().catch(() => null);
+          const educationGoalsArray: any[] = Array.isArray(educationPayload)
+            ? educationPayload
+            : Array.isArray(educationPayload?.goals)
+              ? educationPayload.goals
+              : [];
+
+          if (educationPayload && !Array.isArray(educationPayload) && !Array.isArray(educationPayload?.goals)) {
+            console.warn('[LIFE-GOALS-WIDGET] Unexpected education goals payload shape:', educationPayload);
+          }
+
+          educationGoalsArray.forEach((goal: any) => {
+            const projection = goal.projection || {};
+            const successProbability = Number(
+              projection.probabilityOfSuccess ??
+              projection.monteCarloAnalysis?.probabilityOfSuccess ??
+              (projection.monteCarloAnalysis?.probabilityOfComprehensiveCoverage ?? null)
+            );
+
+            let progress: number;
+            if (Number.isFinite(successProbability) && successProbability > 0) {
+              progress = successProbability;
+            } else if (projection.comprehensiveFundingPercentage != null) {
+              progress = Number(projection.comprehensiveFundingPercentage);
             } else if (goal.comprehensiveFundingPercentage != null) {
               progress = Number(goal.comprehensiveFundingPercentage);
             } else {
-              // Fallback to basic calculation
-              const targetAmount = Number(goal.totalCost || goal.estimatedCost || 0);
-              const currentAmount = Number(goal.currentSavings || 0);
+              const targetAmount = Number(goal.totalCost || goal.estimatedCost || projection.totalCost || 0);
+              const currentAmount = Number(goal.currentSavings || projection.totalFunded || 0);
               progress = targetAmount > 0 ? (currentAmount / targetAmount) * 100 : 0;
             }
-            
+
+            const normalizedProgress = Math.max(0, Math.min(100, Math.round(progress)));
+
+            const savedOptimization = goal.savedOptimization || goal.savedOptimizationResult;
+            const hasOptimizedEducation = Boolean(
+              savedOptimization?.result?.optimizedProbabilityOfSuccess != null ||
+                savedOptimization?.optimizedProbabilityOfSuccess != null
+            );
+
+            const baseEducationName = goal.studentName
+              ? `${goal.studentName}'s Education`
+              : goal.childName
+                ? `${goal.childName}'s Education`
+                : 'Education';
+
+            const educationLabel = hasOptimizedEducation
+              ? `${baseEducationName} (optimized)`
+              : baseEducationName;
+
             allGoals.push({
               ...goal,
-              goalName: goal.studentName ? `${goal.studentName}'s Education` : goal.childName ? `${goal.childName}'s Education` : 'Education',
+              goalName: educationLabel,
               type: 'education',
-              progress: Math.round(progress)
+              progress: normalizedProgress,
+              successProbability: Number.isFinite(successProbability) ? successProbability : null,
             });
           });
         }
-        
+
         // Sort by progress and take top 6
-        const sortedGoals = allGoals
-          .sort((a: any, b: any) => b.progress - a.progress)
-          .slice(0, 6);
-          
-        setGoals(sortedGoals);
+        const educationGoals = allGoals.filter((goal: any) => goal.type === 'education');
+        const nonEducationGoals = allGoals.filter((goal: any) => goal.type !== 'education');
+
+        const educationByPriority = educationGoals.sort(
+          (a: any, b: any) => (b.successProbability ?? b.progress) - (a.successProbability ?? a.progress)
+        );
+        const primaryEducationGoal = educationByPriority[0] ?? null;
+
+        const remainingGoals = nonEducationGoals
+          .sort((a: any, b: any) => (b.successProbability ?? b.progress) - (a.successProbability ?? a.progress))
+          .slice(0, primaryEducationGoal ? 2 : 3);
+
+        const finalGoals = primaryEducationGoal
+          ? [primaryEducationGoal, ...remainingGoals]
+          : remainingGoals;
+
+        if (!cancelled) setGoals(finalGoals);
       } catch (error) {
         console.error('[LIFE-GOALS-WIDGET] Error fetching goals:', error);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     }
     
     fetchGoals();
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSignal]);
 
   if (isLoading) {
     return (
@@ -878,7 +904,7 @@ function LifeGoalsProgressWidget() {
 }
 
 // Independent component for Social Security Optimization Impact
-function SocialSecurityOptimizationWidget({ profileData }: { profileData: any }) {
+function SocialSecurityOptimizationWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
   const [ssData, setSSData] = useState<{
     totalDifference?: number;
     percentageGain?: number;
@@ -888,6 +914,7 @@ function SocialSecurityOptimizationWidget({ profileData }: { profileData: any })
   const [isCalculating, setIsCalculating] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const calculatedForRef = useRef<string | null>(null);
+  const prevRefreshRef = useRef<number | null>(null);
 
   // Timer effect
   useEffect(() => {
@@ -904,6 +931,12 @@ function SocialSecurityOptimizationWidget({ profileData }: { profileData: any })
   }, [isCalculating]);
 
   useEffect(() => {
+    if (prevRefreshRef.current !== refreshSignal) {
+      prevRefreshRef.current = refreshSignal;
+      calculatedForRef.current = null;
+      setSSData(null);
+    }
+
     async function calculateSSOptimization() {
       // Check if we have basic profile data
       if (!profileData?.dateOfBirth || !profileData?.annualIncome) {
@@ -971,7 +1004,7 @@ function SocialSecurityOptimizationWidget({ profileData }: { profileData: any })
     if (profileData) {
       calculateSSOptimization();
     }
-  }, [profileData]);
+  }, [profileData, refreshSignal]);
 
   const formatCurrency = (v: number) => 
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -1024,17 +1057,19 @@ function ReportBuilder() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const isAdvisor = user?.role === 'advisor';
+  const [refreshSignal, setRefreshSignal] = useState(0);
+  const refreshInFlightRef = useRef(false);
+  const initialRefreshTriggeredRef = useRef(false);
 
   // Branding
   const { data: branding } = useQuery<Branding | null>({
-    queryKey: ['/api/advisor/branding'],
+    queryKey: ['/api/report/branding', user?.id],
     queryFn: async () => {
-      if (!isAdvisor) return null;
-      const res = await fetch('/api/advisor/branding', { credentials: 'include' });
+      const res = await fetch('/api/report/branding', { credentials: 'include' });
       if (!res.ok) return null;
       return res.json();
     },
-    enabled: !!user?.id && isAdvisor,
+    enabled: !!user?.id,
     staleTime: 0,
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
@@ -1050,11 +1085,14 @@ function ReportBuilder() {
       return res.json();
     },
     enabled: !!user?.id,
-    staleTime: 60_000, // Cache for 1 minute
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: 'always',
   });
 
   // Use the dedicated hook for the metrics to avoid Dashboard imports
-  const { healthScore, monthlyCashFlow, netWorth, emergencyReadinessScore, optimizationImpact } = useReportWidgets();
+  const { healthScore, monthlyCashFlow, netWorth, optimizationImpact } = useReportWidgets();
   
   // Fetch cached Impact on Portfolio Balance data
   const { data: impactOnPortfolioData } = useQuery({
@@ -1079,14 +1117,132 @@ function ReportBuilder() {
       return data;
     },
     enabled: !!user?.id,
-    staleTime: 10_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: 'always',
   });
+
+  const refreshAllWidgets = useCallback(async () => {
+    if (refreshInFlightRef.current) {
+      console.log('[REPORT-BUILDER] Refresh already in progress, skipping duplicate trigger.');
+      return;
+    }
+
+    refreshInFlightRef.current = true;
+    console.log('[REPORT-BUILDER] Refreshing all widget data...');
+    try {
+      // 1. Refetch profile data (includes calculations, monte carlo, optimization variables)
+      await refetchProfile();
+
+      // 2. Force recalculation of key financial metrics 
+      try {
+        const recalcResponse = await fetch('/api/financial-profile/recalculate', {
+          method: 'POST',
+          credentials: 'include'
+        });
+        if (recalcResponse.ok) {
+          console.log('[REPORT-BUILDER] Financial metrics recalculated');
+        }
+      } catch (error) {
+        console.error('[REPORT-BUILDER] Error recalculating metrics:', error);
+      }
+
+      // 3. Force refresh Social Security optimization cache
+      try {
+        const ssResponse = await fetch('/api/calculate-cumulative-ss-optimization?force=true', {
+          method: 'POST',
+          credentials: 'include'
+        });
+        if (ssResponse.ok) {
+          console.log('[REPORT-BUILDER] Social Security optimization cache refreshed');
+        }
+      } catch (error) {
+        console.error('[REPORT-BUILDER] Error refreshing SS optimization:', error);
+      }
+
+      // 4. Invalidate widget caches on the server
+      try {
+        const cacheResponse = await fetch('/api/widget-cache/invalidate-all', {
+          method: 'POST',
+          credentials: 'include'
+        });
+        if (cacheResponse.ok) {
+          console.log('[REPORT-BUILDER] Server widget caches invalidated');
+        }
+      } catch (error) {
+        console.error('[REPORT-BUILDER] Error invalidating server caches:', error);
+      }
+
+      // 5. Invalidate all report-related queries for fresh data
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['/api/financial-profile'] }),
+        queryClient.invalidateQueries({ queryKey: ['centralInsights'] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/retirement/impact-on-portfolio-balance-cache'] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/life-goals'] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/education/goals'] }),
+        queryClient.invalidateQueries({ queryKey: ['api/dashboard-snapshot'] }),
+      ]);
+    } catch (error) {
+      console.error('[REPORT-BUILDER] Unexpected error during refresh:', error);
+    } finally {
+      setRefreshSignal(prev => prev + 1);
+      refreshInFlightRef.current = false;
+      console.log('[REPORT-BUILDER] Widget refresh signal dispatched');
+    }
+  }, [refetchProfile, queryClient]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (initialRefreshTriggeredRef.current) return;
+    initialRefreshTriggeredRef.current = true;
+    void refreshAllWidgets();
+  }, [user?.id, refreshAllWidgets]);
 
   // Currency formatter and calc alias for other metrics
   const formatCurrency = (v: number | null | undefined) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
       .format(Number(v || 0));
   const calc = (profileData as any)?.calculations || {};
+
+  // Align insurance score with dashboard snapshot methodology
+  const { data: dashboardSnapshot } = useDashboardSnapshot();
+  const snapInsurance = pickWidget<any>(dashboardSnapshot, 'insurance_adequacy');
+  const snapEmergency = pickWidget<any>(dashboardSnapshot, 'emergency_readiness');
+  const emergencySnapshotScore =
+    typeof snapEmergency?.score === 'number' && !Number.isNaN(snapEmergency.score)
+      ? snapEmergency.score
+      : null;
+  const emergencyMetrics = useMemo(
+    () => computeEmergencyReadinessMetrics(profileData, {
+      snapshot: dashboardSnapshot,
+      snapshotScore: emergencySnapshotScore,
+    }),
+    [profileData, dashboardSnapshot, emergencySnapshotScore, refreshSignal]
+  );
+  const emergencyReadinessScoreDashboard = emergencyMetrics.score;
+  const insuranceScore = useMemo(() => {
+    const snapshotScore = snapInsurance?.score;
+    if (typeof snapshotScore === 'number' && !Number.isNaN(snapshotScore)) {
+      return Math.round(snapshotScore);
+    }
+
+    const candidates = [
+      profileData?.calculations?.insuranceAdequacy?.score,
+      profileData?.calculations?.riskManagementScore,
+      (profileData?.calculations as any)?.breakdown?.insuranceScore,
+      profileData?.riskManagementScore,
+      calc?.insuranceScore,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'number' && !Number.isNaN(candidate)) {
+        return Math.round(candidate);
+      }
+    }
+
+    return 0;
+  }, [snapInsurance?.score, profileData?.calculations, profileData?.riskManagementScore, calc?.insuranceScore]);
 
   // Layout
   const { data: layoutData } = useQuery<{ layout: string[]; insightsSectionTitle: string } | null>({
@@ -1102,7 +1258,8 @@ function ReportBuilder() {
   const [widgets, setWidgets] = useState<string[]>(
     (layoutData?.layout || DEFAULT_WIDGETS)
       .filter(Boolean) // remove empty strings
-      .filter((w) => w !== 'increase_in_portfolio_value') // drop removed widget
+      .filter((w) => w !== 'increase_in_portfolio_value') // drop removed widgets
+      .filter((w) => w !== 'emergency_readiness_score')
   );
   const [insightsTitle, setInsightsTitle] = useState<string>(layoutData?.insightsSectionTitle || (isAdvisor ? 'Recommendations' : 'Insights'));
   const [isLightTheme, setIsLightTheme] = useState(false);
@@ -1112,7 +1269,8 @@ function ReportBuilder() {
       // If saved layout doesn't have the new widget, add it
       const savedWidgets = layoutData.layout
         .filter(Boolean) // remove empty strings
-        .filter((w) => w !== 'increase_in_portfolio_value'); // drop removed widget
+        .filter((w) => w !== 'increase_in_portfolio_value')
+        .filter((w) => w !== 'emergency_readiness_score'); // drop removed widgets
       
       // Add new widget if it's not in the saved layout
       if (!savedWidgets.includes('ending_portfolio_value_increase')) {
@@ -1131,6 +1289,13 @@ function ReportBuilder() {
         // Insert at position 7 to be in row 3, position 2 (middle)
         const insertPosition = Math.min(7, savedWidgets.length);
         savedWidgets.splice(insertPosition, 0, 'roth_conversion_impact');
+      }
+
+      // Add Emergency Readiness (New) widget next to the legacy emergency widget
+      if (!savedWidgets.includes('emergency_readiness_score_new')) {
+        const insuranceIndex = savedWidgets.indexOf('insurance_adequacy_score');
+        const insertPosition = insuranceIndex >= 0 ? insuranceIndex + 1 : savedWidgets.length;
+        savedWidgets.splice(insertPosition, 0, 'emergency_readiness_score_new');
       }
       
       setWidgets(savedWidgets);
@@ -1480,15 +1645,15 @@ function ReportBuilder() {
       'roth_conversion_impact': 'Roth Conversion Impact',
       'life_goals_progress': 'Life Goals Progress',
       'insurance_adequacy_score': 'Insurance Adequacy',
-      'emergency_readiness_score': 'Emergency Readiness',
+      'emergency_readiness_score_new': 'Emergency Readiness (New)',
     };
     return names[widgetKey] || widgetKey.replace(/_/g, ' ');
   };
 
   const headerBranding = useMemo(() => {
-    if (isAdvisor && branding) return branding;
-    return { firmName: 'Affluvia', logoUrl: null } as Branding;
-  }, [branding, isAdvisor]);
+    if (branding) return branding;
+    return { firmName: 'Affluvia', logoUrl: null, address: null, phone: null, email: null } as Branding;
+  }, [branding]);
 
   return (
     <>
@@ -1570,8 +1735,15 @@ function ReportBuilder() {
           <CardTitle className="text-white">Report Header</CardTitle>
         </CardHeader>
         <CardContent className="flex items-center gap-4" data-header-section>
-          {headerBranding?.logoUrl && (
+          {headerBranding?.logoUrl ? (
             <img src={headerBranding.logoUrl} alt="Logo" className="h-12 w-auto rounded bg-gray-900/40 p-2" />
+          ) : (
+            <div className="h-12 flex items-center">
+              <div className="flex items-center gap-2 rounded bg-gray-900/60 border border-gray-700 px-3 py-2">
+                <TrendingUp className="h-5 w-5 text-white" />
+                <span className="text-lg font-semibold text-white">{headerBranding?.firmName || 'Affluvia'}</span>
+              </div>
+            </div>
           )}
           <div className="text-gray-200">
             <div className="text-lg font-semibold">{headerBranding?.firmName || 'Affluvia'}</div>
@@ -1585,59 +1757,7 @@ function ReportBuilder() {
             <Button 
               size="sm" 
               className="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white"
-              onClick={async () => {
-                // Refresh all widget data sources
-                console.log('[REPORT-BUILDER] Refreshing all widget data...');
-                
-                // 1. Refetch profile data (includes calculations, monte carlo, optimization variables)
-                await refetchProfile();
-                
-                // 2. Force recalculation of key financial metrics 
-                try {
-                  const recalcResponse = await fetch('/api/financial-profile/recalculate', {
-                    method: 'POST',
-                    credentials: 'include'
-                  });
-                  if (recalcResponse.ok) {
-                    console.log('[REPORT-BUILDER] Financial metrics recalculated');
-                  }
-                } catch (error) {
-                  console.error('[REPORT-BUILDER] Error recalculating metrics:', error);
-                }
-                
-                // 3. Force refresh Social Security optimization cache
-                try {
-                  const ssResponse = await fetch('/api/calculate-cumulative-ss-optimization?force=true', {
-                    method: 'POST',
-                    credentials: 'include'
-                  });
-                  if (ssResponse.ok) {
-                    console.log('[REPORT-BUILDER] Social Security optimization cache refreshed');
-                  }
-                } catch (error) {
-                  console.error('[REPORT-BUILDER] Error refreshing SS optimization:', error);
-                }
-                
-                // 4. Invalidate widget caches on the server
-                try {
-                  const cacheResponse = await fetch('/api/widget-cache/invalidate-all', {
-                    method: 'POST',
-                    credentials: 'include'
-                  });
-                  if (cacheResponse.ok) {
-                    console.log('[REPORT-BUILDER] Server widget caches invalidated');
-                  }
-                } catch (error) {
-                  console.error('[REPORT-BUILDER] Error invalidating server caches:', error);
-                }
-                
-                // 5. Invalidate all report-related queries for fresh data
-                queryClient.invalidateQueries({ queryKey: ['/api/financial-profile'] });
-                queryClient.invalidateQueries({ queryKey: ['centralInsights'] });
-                queryClient.invalidateQueries({ queryKey: ['/api/retirement/impact-on-portfolio-balance-cache'] });
-                
-                console.log('[REPORT-BUILDER] All widget data refreshed');
-              }}
+              onClick={() => { void refreshAllWidgets(); }}
             >
               <RefreshCw className="h-3 w-3 mr-1" />
               Refresh Data
@@ -1956,52 +2076,44 @@ function ReportBuilder() {
                           ) : w === 'ending_portfolio_value_increase' ? (
                             <div className="flex flex-col items-center w-full">
                               <div className="text-xs text-gray-400 uppercase tracking-wide mb-2 text-center">Optimization Impact on Portfolio Balance</div>
-                              <EndingPortfolioImpactWidget profileData={profileData} />
+                              <EndingPortfolioImpactWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'insurance_adequacy_score' ? (
                             <div className="flex flex-col items-center w-full space-y-2">
                               <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Insurance Adequacy Score</div>
                               <div className="text-3xl font-bold text-white">
-                                {Math.round(profileData?.calculations?.insuranceAdequacy?.score || profileData?.calculations?.riskManagementScore || calc?.insuranceScore || 0)}
+                                {insuranceScore}
                               </div>
                               <div className="text-xs text-gray-500 text-center">
-                                {(() => {
-                                  const score = profileData?.calculations?.insuranceAdequacy?.score || profileData?.calculations?.riskManagementScore || calc?.insuranceScore || 0;
-                                  return score >= 75 ? 'Well Protected' : score >= 50 ? 'Adequate Coverage' : 'Needs Review';
-                                })()}
+                                {insuranceScore >= 75 ? 'Well Protected' : insuranceScore >= 50 ? 'Adequate Coverage' : 'Needs Review'}
                               </div>
                               <div className="w-full px-2">
                                 <div className="w-full bg-gray-700 rounded-full h-3">
                                   <div 
-                                    className={`h-3 rounded-full transition-all duration-500 ${(() => {
-                                      const score = profileData?.calculations?.insuranceAdequacy?.score || profileData?.calculations?.riskManagementScore || calc?.insuranceScore || 0;
-                                      return score >= 75 ? 'bg-green-500' : score >= 50 ? 'bg-blue-500' : 'bg-red-500';
-                                    })()}`}
-                                    style={{ 
-                                      width: `${Math.min(100, Math.max(0, profileData?.calculations?.insuranceAdequacy?.score || profileData?.calculations?.riskManagementScore || calc?.insuranceScore || 0))}%` 
-                                    }}
+                                    className={`h-3 rounded-full transition-all duration-500 ${insuranceScore >= 75 ? 'bg-green-500' : insuranceScore >= 50 ? 'bg-blue-500' : 'bg-red-500'}`}
+                                    style={{ width: `${Math.min(100, Math.max(0, insuranceScore))}%` }}
                                   />
                                 </div>
                               </div>
                             </div>
-                          ) : w === 'emergency_readiness_score' ? (
+                          ) : w === 'emergency_readiness_score_new' ? (
                             <div className="flex flex-col items-center w-full space-y-2">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Emergency Readiness</div>
-                              <div className="text-3xl font-bold text-white">{Math.round(emergencyReadinessScore ?? 0)}</div>
+                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Emergency Readiness (New)</div>
+                              <div className="text-3xl font-bold text-white">{Math.round(emergencyReadinessScoreDashboard)}</div>
                               <div className="text-xs text-gray-500 text-center">
-                                {(emergencyReadinessScore ?? 0) >= 80 ? 'Well Prepared' :
-                                 (emergencyReadinessScore ?? 0) >= 60 ? 'Adequate' : 
+                                {emergencyReadinessScoreDashboard >= 80 ? 'Well Prepared' :
+                                 emergencyReadinessScoreDashboard >= 60 ? 'Adequate' :
                                  'Needs Attention'}
                               </div>
                               <div className="w-full px-2">
                                 <div className="w-full bg-gray-700 rounded-full h-3">
-                                  <div 
+                                  <div
                                     className={`h-3 rounded-full transition-all duration-500 ${
-                                      (emergencyReadinessScore ?? 0) >= 80 ? 'bg-green-500' :
-                                      (emergencyReadinessScore ?? 0) >= 60 ? 'bg-blue-500' :
+                                      emergencyReadinessScoreDashboard >= 80 ? 'bg-green-500' :
+                                      emergencyReadinessScoreDashboard >= 60 ? 'bg-blue-500' :
                                       'bg-red-500'
                                     }`}
-                                    style={{ width: `${Math.min(100, Math.max(0, emergencyReadinessScore ?? 0))}%` }}
+                                    style={{ width: `${Math.min(100, Math.max(0, emergencyReadinessScoreDashboard))}%` }}
                                   />
                                 </div>
                               </div>
@@ -2009,22 +2121,22 @@ function ReportBuilder() {
                           ) : w === 'retirement_stress_test' ? (
                             <div className="flex flex-col items-center w-full">
                               <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">Retirement Stress Test</div>
-                              <RetirementStressTestWidget profileData={profileData} />
+                              <RetirementStressTestWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'social_security_optimization_impact' ? (
                             <div className="flex flex-col items-center w-full">
                               <div className="text-xs text-gray-400 uppercase tracking-wide mb-2 text-center">Social Security Optimization Impact</div>
-                              <SocialSecurityOptimizationWidget profileData={profileData} />
+                              <SocialSecurityOptimizationWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'roth_conversion_impact' ? (
                             <div className="flex flex-col items-center w-full">
                               <div className="text-xs text-gray-400 uppercase tracking-wide mb-2 text-center">Roth Conversion Impact</div>
-                              <RothConversionImpactWidget profileData={profileData} />
+                              <RothConversionImpactWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'life_goals_progress' ? (
                             <div className="flex flex-col items-center w-full">
                               <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">Life Goals Progress</div>
-                              <LifeGoalsProgressWidget />
+                              <LifeGoalsProgressWidget refreshSignal={refreshSignal} />
                             </div>
                           ) : (
                             <>

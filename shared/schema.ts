@@ -238,6 +238,14 @@ export const financialProfiles = pgTable("financial_profiles", {
   lastUpdated: timestamp("last_updated").defaultNow(),
 });
 
+export const rothConversionAnalyses = pgTable("roth_conversion_analyses", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull().unique(),
+  analysis: jsonb("analysis").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export const chatMessages = pgTable("chat_messages", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").references(() => users.id).notNull(),
@@ -1492,6 +1500,8 @@ export type AdvisorInvite = typeof advisorInvites.$inferSelect;
 export type AdvisorAuditLog = typeof advisorAuditLogs.$inferSelect;
 export type FinancialProfile = typeof financialProfiles.$inferSelect;
 export type InsertFinancialProfile = z.infer<typeof insertFinancialProfileSchema>;
+export type RothConversionAnalysis = typeof rothConversionAnalyses.$inferSelect;
+export type InsertRothConversionAnalysis = typeof rothConversionAnalyses.$inferInsert;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatDocument = typeof chatDocuments.$inferSelect;
