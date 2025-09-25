@@ -52,6 +52,23 @@ const DEFAULT_WIDGETS: string[] = [
 
 type InsightItem = { id?: string; text: string; order: number; isCustom?: boolean };
 
+const MAX_INSIGHT_SENTENCES = 2;
+
+const normalizeWhitespace = (value?: string | null) =>
+  typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+
+const takeFirstSentences = (text: string, maxSentences = MAX_INSIGHT_SENTENCES) => {
+  if (!text) return '';
+  const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
+  return sentences.slice(0, maxSentences).join(' ').trim();
+};
+
+const formatInsightText = (insight: { title?: string | null; explanation?: string | null }) => {
+  const title = normalizeWhitespace(insight.title) || 'Insight';
+  const explanation = takeFirstSentences(normalizeWhitespace(insight.explanation));
+  return explanation ? `${title}: ${explanation}` : title;
+};
+
 // Independent component for Roth conversion impact
 function RothConversionImpactWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
   const [rothData, setRothData] = useState<{
@@ -1307,7 +1324,7 @@ function ReportBuilder() {
   }, [layoutData]);
 
   // Insights
-  const { data: insightsResp, refetch: refetchInsights, isFetching: isFetchingInsights } = useQuery<{ insights: Array<{ id: string; title?: string; explanation?: string }> }>({
+  const { data: insightsResp, refetch: refetchInsights, isFetching: isFetchingInsights } = useQuery<{ insights: Array<{ id: string; title?: string; explanation?: string; actionItems?: string[] }> }>({
     queryKey: ['centralInsights', user?.id],
     queryFn: async () => {
       const res = await fetch('/api/central-insights', { credentials: 'include' });
@@ -1319,10 +1336,15 @@ function ReportBuilder() {
     refetchOnMount: true,
     refetchOnWindowFocus: true,
   });
-  const prefilledInsights = (insightsResp?.insights || []).slice(0, 10).map((i, idx) => ({ id: i.id, text: i.title || i.explanation || '', order: idx }));
+  const prefilledInsights = useMemo(
+    () => (insightsResp?.insights || [])
+      .slice(0, 10)
+      .map((i, idx) => ({ id: i.id, text: formatInsightText(i), order: idx })),
+    [insightsResp?.insights]
+  );
 
   const [insights, setInsights] = useState<InsightItem[]>(prefilledInsights);
-  useEffect(() => setInsights(prefilledInsights), [insightsResp?.insights?.length]);
+  useEffect(() => setInsights(prefilledInsights), [prefilledInsights]);
 
   const [disclaimer, setDisclaimer] = useState<string>(branding?.defaultDisclaimer || 'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results. Assumptions, data inputs, and methodologies are subject to change. Please review with a qualified professional before making decisions.');
   useEffect(() => {
@@ -1366,7 +1388,9 @@ function ReportBuilder() {
     },
     onSuccess: (data) => {
       // Reset to freshly generated insights (top 10)
-      const next = (data?.insights || []).slice(0, 10).map((i: any, idx: number) => ({ text: i.title || i.explanation || '', order: idx }));
+      const next = (data?.insights || [])
+        .slice(0, 10)
+        .map((i: any, idx: number) => ({ id: i.id, text: formatInsightText(i), order: idx }));
       setInsights(next);
       refetchInsights();
     }
