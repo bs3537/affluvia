@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useToast } from '@/hooks/use-toast';
 import { 
   AlertDialog, 
   AlertDialogAction, 
@@ -31,19 +32,43 @@ import PptxGenJS from 'pptxgenjs';
 
 function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let latestArgs: Parameters<T> | null = null;
+
+  const invoke = () => {
+    if (!latestArgs) return;
+    const args = latestArgs;
+    latestArgs = null;
+    fn(...args);
+  };
+
   const debounced = (...args: Parameters<T>) => {
+    latestArgs = args;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
-      fn(...args);
+      timer = null;
+      invoke();
     }, delay);
   };
-  (debounced as typeof debounced & { cancel: () => void }).cancel = () => {
+
+  const extended = debounced as typeof debounced & { cancel: () => void; flush: () => void };
+
+  extended.cancel = () => {
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
+    latestArgs = null;
   };
-  return debounced as typeof debounced & { cancel: () => void };
+
+  extended.flush = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    invoke();
+  };
+
+  return extended;
 }
 
 type Branding = {
@@ -145,8 +170,17 @@ type CaptureAssetsResult = { logo: CapturedLogo; widgetImages: CapturedWidgetIma
 
 const MAX_INSIGHT_SENTENCES = 2;
 
+const sanitizePrintable = (value: string) =>
+  value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\uFEFF]/g, '')
+    .replace(/[—–]/g, '-')
+    .replace(/[“”]/g, '"')
+    .replace(/[’‘]/g, "'")
+    .replace(/\u00A0/g, ' ');
+
 const normalizeWhitespace = (value?: string | null) =>
-  typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  typeof value === 'string' ? sanitizePrintable(value).replace(/\s+/g, ' ').trim() : '';
 
 const takeFirstSentences = (text: string, maxSentences = MAX_INSIGHT_SENTENCES) => {
   if (!text) return '';
@@ -168,9 +202,6 @@ const chunkArray = <T,>(items: T[], size: number): T[][] => {
   return chunks;
 };
 
-const sanitizePrintable = (value: string) =>
-  typeof value === 'string' ? value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '') : '';
-
 const formatWidgetTitle = (key: string) => {
   const canonical = normalizeWidgetKey(key) ?? key;
   if (!canonical) return 'Widget';
@@ -179,7 +210,7 @@ const formatWidgetTitle = (key: string) => {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
-const WIDGET_TITLE_CLASS = "text-xs font-semibold uppercase tracking-wide text-gray-200";
+const WIDGET_TITLE_CLASS = "text-lg font-semibold uppercase tracking-wide text-gray-200";
 
 // Independent component for Roth conversion impact
 function RothConversionImpactWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
@@ -1431,6 +1462,7 @@ function SocialSecurityOptimizationWidget({ profileData, refreshSignal }: { prof
 
 function ReportBuilder() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const queryClient = useQueryClient();
   const isAdvisor = user?.role === 'advisor';
   const [refreshSignal, setRefreshSignal] = useState(0);
@@ -1683,6 +1715,39 @@ function ReportBuilder() {
     },
   });
 
+  const { mutate: manualSaveInsights, isPending: isManualSavePending } = useMutation({
+    mutationFn: async (payload: InsightItem[]) => {
+      const res = await fetch('/api/report/draft-insights', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ insights: payload }),
+      });
+      if (!res.ok) throw new Error('Failed to save insights');
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: 'Insights saved',
+        description: 'Your recommendations were saved successfully.',
+      });
+    },
+    onError: () => {
+      toast({
+        title: 'Save failed',
+        description: 'We could not save insights right now. Please try again.',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const handleManualSaveInsights = useCallback(() => {
+    const prepared = insights.map((ins, idx) => ({ ...ins, order: idx }));
+    const serialized = JSON.stringify(prepared);
+    lastSentInsightsRef.current = serialized;
+    manualSaveInsights(prepared);
+  }, [insights, manualSaveInsights]);
+
   const debouncedSaveInsights = useMemo(
     () =>
       debounce((payload: InsightItem[]) => {
@@ -1691,18 +1756,58 @@ function ReportBuilder() {
     [saveDraftInsightsMutation]
   );
 
+  const debouncedSaveInsightsRef = useRef(debouncedSaveInsights);
+  const lastSentInsightsRef = useRef<string>('');
+  useEffect(() => {
+    debouncedSaveInsightsRef.current = debouncedSaveInsights;
+  }, [debouncedSaveInsights]);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      debouncedSaveInsightsRef.current.flush();
+    };
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        debouncedSaveInsightsRef.current.flush();
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     return () => {
-      debouncedSaveInsights.cancel();
+      debouncedSaveInsightsRef.current.flush();
+      debouncedSaveInsightsRef.current.cancel();
     };
-  }, [debouncedSaveInsights]);
+  }, []);
 
   useEffect(() => {
     if (layoutData === undefined) return;
     if (layoutData?.draftInsights && layoutData.draftInsights.length > 0) {
+      lastSentInsightsRef.current = JSON.stringify(
+        layoutData.draftInsights.map((ins, idx) => ({ ...ins, order: idx }))
+      );
       setInsights(layoutData.draftInsights);
       setHasLoadedInitialInsights(true);
     } else if (!hasLoadedInitialInsights) {
+      lastSentInsightsRef.current = '';
       setInsights(prefilledInsights);
       setHasLoadedInitialInsights(true);
     }
@@ -1711,8 +1816,11 @@ function ReportBuilder() {
   useEffect(() => {
     if (!hasLoadedInitialInsights) return;
     const prepared = insights.map((ins, idx) => ({ ...ins, order: idx }));
-    debouncedSaveInsights(prepared);
-  }, [insights, hasLoadedInitialInsights, debouncedSaveInsights]);
+    const serialized = JSON.stringify(prepared);
+    if (serialized === lastSentInsightsRef.current) return;
+    lastSentInsightsRef.current = serialized;
+    debouncedSaveInsightsRef.current(prepared);
+  }, [insights, hasLoadedInitialInsights]);
 
   useEffect(() => {
     if (!hasLoadedInitialInsights) return;
@@ -1723,9 +1831,36 @@ function ReportBuilder() {
     }
   }, [prefilledInsights, hasLoadedInitialInsights, layoutData?.draftInsights, insights.length]);
 
-  const [disclaimer, setDisclaimer] = useState<string>(branding?.defaultDisclaimer || 'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results. Assumptions, data inputs, and methodologies are subject to change. Please review with a qualified professional before making decisions.');
+  const DEFAULT_DISCLAIMER = sanitizePrintable(`IMPORTANT DISCLOSURES
+
+For Informational Purposes Only — The information provided through this platform is for educational and informational purposes only and does not constitute personalized investment advice, legal advice, tax advice, or a recommendation to buy or sell any security. Any investment decisions you make are your sole responsibility.
+
+No Guarantee of Outcomes — Financial projections (including Monte Carlo analyses and scenario modeling) are based on assumptions believed to be reasonable as of the date produced but are not guarantees of future performance or outcomes. Investment returns, inflation, tax laws, and market conditions are uncertain and may differ materially from assumptions.
+
+Past Performance — Past performance is not indicative of future results. All investing involves risk, including the possible loss of principal.
+
+Fiduciary Standard & Conflicts — Integrity Advisors (“Firm”) seeks to act in the best interest of clients at all times. The Firm may receive compensation as disclosed in its Form ADV and other documents. Clients should review the Firm’s disclosures for details on services, fees, and potential conflicts of interest.
+
+Registration & Jurisdiction — Advisory services are offered only to residents of jurisdictions where the Firm is appropriately registered, exempt, or excluded from registration. This material is not an offer to provide advisory services in any jurisdiction where such offer would be unlawful.
+
+Third-Party Data & Assumptions — Certain data, benchmarks, or estimates may be obtained from third-party sources believed to be reliable but are not guaranteed for accuracy or completeness. The Firm is not responsible for errors or omissions from such sources.
+
+Tax & Legal — The Firm does not provide tax or legal advice. Clients should consult their tax advisor or attorney regarding their specific situation. Any tax estimates are for planning purposes only and may not reflect current or future law.
+
+Suitability & Client Responsibility — Recommendations depend on the completeness and accuracy of information you provide. Please promptly notify the Firm of any material changes to your financial situation, goals, or constraints.
+
+Rebalancing, Trading, and Fees — Portfolio rebalancing and trading may have tax consequences and incur costs. Advisory fees reduce returns over time. Refer to your advisory agreement and the Firm’s Form ADV 2A for fee schedules and disclosures.
+
+Cybersecurity & Electronic Communications — While the Firm employs commercially reasonable safeguards, electronic communications may be subject to interception or loss. Do not transmit sensitive personal information unless instructed to do so via a secure channel.
+
+Privacy — The Firm’s Privacy Policy describes how client information is collected, used, and safeguarded. A copy is available upon request.
+
+Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
+
+  const [disclaimer, setDisclaimer] = useState<string>(sanitizePrintable(branding?.defaultDisclaimer || DEFAULT_DISCLAIMER));
   useEffect(() => {
-    if (branding?.defaultDisclaimer && isAdvisor) setDisclaimer(branding.defaultDisclaimer);
+    if (branding?.defaultDisclaimer && isAdvisor) setDisclaimer(sanitizePrintable(branding.defaultDisclaimer));
+    if (!branding?.defaultDisclaimer && !isAdvisor) setDisclaimer(DEFAULT_DISCLAIMER);
   }, [branding?.defaultDisclaimer, isAdvisor]);
   const [isDeckGenerating, setIsDeckGenerating] = useState(false);
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
@@ -2924,9 +3059,24 @@ function ReportBuilder() {
                 </div>
               )}
             </Droppable>
-            <Button className="bg-[#8A00C4] hover:bg-[#7A00B4] text-white border-[#8A00C4] hover:border-[#7A00B4]" onClick={addCustomInsight}>
-              <Plus className="h-4 w-4 mr-2" /> Add Insight
-            </Button>
+            <div className="flex gap-2">
+              <Button className="bg-[#8A00C4] hover:bg-[#7A00B4] text-white border-[#8A00C4] hover:border-[#7A00B4]" onClick={addCustomInsight}>
+                <Plus className="h-4 w-4 mr-2" /> Add Insight
+              </Button>
+              <Button
+                variant="outline"
+                className="border-gray-600 text-gray-300 hover:bg-gray-700"
+                onClick={handleManualSaveInsights}
+                disabled={isManualSavePending}
+              >
+                {isManualSavePending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4 mr-2" />
+                )}
+                Save Insights
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </DragDropContext>
@@ -2938,7 +3088,7 @@ function ReportBuilder() {
         </CardHeader>
         <CardContent className="space-y-3">
           {isAdvisor ? (
-            <Textarea value={disclaimer} onChange={(e) => setDisclaimer(e.target.value)} className="bg-gray-900 border-gray-700 text-gray-200 min-h-[120px]" />
+            <Textarea value={disclaimer} onChange={(e) => setDisclaimer(sanitizePrintable(e.target.value))} className="bg-gray-900 border-gray-700 text-gray-200 min-h-[120px]" />
           ) : (
             <Alert className="bg-gray-900 border-gray-700">
               <AlertDescription className="text-gray-300 whitespace-pre-line">{disclaimer}</AlertDescription>
