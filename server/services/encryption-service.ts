@@ -300,6 +300,7 @@ export class SecurityConfig {
       'X-Frame-Options': 'DENY',
       'X-XSS-Protection': '1; mode=block',
       'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.plaid.com https://cdn.plaid.com",
+      'Permissions-Policy': 'fullscreen=(self "https://cdn.plaid.com")',
       'Referrer-Policy': 'strict-origin-when-cross-origin'
     };
   }

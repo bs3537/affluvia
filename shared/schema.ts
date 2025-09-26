@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, decimal, jsonb, date, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, decimal, jsonb, date, varchar, bigint } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -287,6 +287,24 @@ export const chatDocuments = pgTable("chat_documents", {
   // Metadata
   uploadedAt: timestamp("uploaded_at").defaultNow(),
   processedAt: timestamp("processed_at"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const sharedVaultFiles = pgTable("shared_vault_files", {
+  id: serial("id").primaryKey(),
+  ownerClientId: integer("owner_client_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  advisorId: integer("advisor_id").references(() => users.id, { onDelete: 'set null' }),
+  uploaderId: integer("uploader_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  originalFilename: text("original_filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileSize: bigint("file_size", { mode: "number" }).notNull(),
+  checksum: text("checksum"),
+  encryptionAlgorithm: text("encryption_algorithm").notNull().default('aes-256-gcm'),
+  keySalt: text("key_salt").notNull(),
+  encryptionIv: text("encryption_iv").notNull(),
+  authTag: text("auth_tag").notNull(),
+  encryptedData: text("encrypted_data").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -1345,6 +1363,21 @@ export const reportSnapshotsRelations = relations(reportSnapshots, ({ one }) => 
   })
 }));
 
+export const sharedVaultFilesRelations = relations(sharedVaultFiles, ({ one }) => ({
+  owner: one(users, {
+    fields: [sharedVaultFiles.ownerClientId],
+    references: [users.id],
+  }),
+  advisor: one(users, {
+    fields: [sharedVaultFiles.advisorId],
+    references: [users.id],
+  }),
+  uploader: one(users, {
+    fields: [sharedVaultFiles.uploaderId],
+    references: [users.id],
+  }),
+}));
+
 export const insertUserSchema = createInsertSchema(users).pick({
   email: true,
   password: true,
@@ -1483,6 +1516,7 @@ export const insertReportSnapshotSchema = createInsertSchema(reportSnapshots).om
   createdAt: true,
 });
 
+
 // Goal type enum for validation
 export const goalTypeEnum = z.enum(['retirement', 'college', 'home', 'travel', 'healthcare', 'custom']);
 export const riskPreferenceEnum = z.enum(['conservative', 'moderate', 'aggressive']);
@@ -1510,6 +1544,8 @@ export type ChatMessage = typeof chatMessages.$inferSelect;
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatDocument = typeof chatDocuments.$inferSelect;
 export type InsertChatDocument = z.infer<typeof insertChatDocumentSchema>;
+export type SharedVaultFile = typeof sharedVaultFiles.$inferSelect;
+export type InsertSharedVaultFile = typeof sharedVaultFiles.$inferInsert;
 export type PdfReport = typeof pdfReports.$inferSelect;
 export type InvestmentCache = typeof investmentCache.$inferSelect;
 export type WidgetCache = typeof widgetCache.$inferSelect;

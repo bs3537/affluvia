@@ -31,6 +31,7 @@ import plaidRoutes from './routes/plaid';
 import notificationRoutes from './routes/notifications';
 import willsRoutes from './routes/wills';
 import retirementCalculationRoutes from './routes/retirement-calculations';
+import sharedVaultRoutes from './routes/shared-vault';
 import { calculateFinancialMetricsWithPlaid } from './financial-calculations-enhanced';
 import { calculateFastFinancialMetrics } from './financial-calculations-fast';
 import { enqueuePostProfileCalcs } from './jobs/post-profile-calcs';
@@ -468,6 +469,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Setup notification routes
   app.use('/api', notificationRoutes);
   app.use('/api/wills', willsRoutes);
+  app.use('/api/shared-vault', sharedVaultRoutes);
   app.use('/', retirementCalculationRoutes);
 
   // Acting-as middleware (ensures advisor can view client data across existing routes)

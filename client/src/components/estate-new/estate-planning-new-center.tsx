@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEstatePlanningNew } from "@/hooks/useEstatePlanningNew";
 import { estatePlanningService } from "@/services/estate-planning.service";
@@ -1451,8 +1451,8 @@ export function EstatePlanningNewCenter() {
                       </thead>
                       <tbody className="divide-y divide-gray-800">
                         {CHECKLIST_ITEMS.map((item) => (
-                          <>
-                            <tr key={`${item.type}-label`} className="bg-gray-900/30">
+                          <Fragment key={item.type}>
+                            <tr className="bg-gray-900/30">
                               <td className="px-4 py-3 font-semibold text-gray-200">{item.label}</td>
                               <td className="px-4 py-3 text-center">
                                 {/* Removed WillUploadInline for will type */}
@@ -1463,7 +1463,7 @@ export function EstatePlanningNewCenter() {
                                 </td>
                               )}
                             </tr>
-                            <tr key={`${item.type}-row`} className="bg-gray-950/40">
+                            <tr className="bg-gray-950/40">
                               <td className="px-4 py-3 text-gray-400"> {item.sublabel} </td>
                               <td className="px-4 py-3 text-center">
                                 <Checkbox
@@ -1480,7 +1480,7 @@ export function EstatePlanningNewCenter() {
                                 </td>
                               )}
                             </tr>
-                          </>
+                          </Fragment>
                         ))}
                       </tbody>
                     </table>

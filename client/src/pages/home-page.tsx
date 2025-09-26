@@ -17,18 +17,19 @@ import RetirementPlanning from "@/pages/retirement-planning";
 import { DebtManagementCenter } from "@/components/debt-management-center";
 import { CentralInsights } from "@/components/central-insights";
 import ReportBuilder from "@/pages/report-builder";
+import SharedVaultPage from "@/pages/shared-vault";
 import Connections2 from "@/pages/connections2";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Menu, GraduationCap, DollarSign, Shield, PiggyBank, FileText, Calculator, Clock, CheckCircle } from "lucide-react";
+import { Menu, GraduationCap, DollarSign, Shield, PiggyBank, FileText, Calculator, Clock, CheckCircle, Settings as SettingsIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { PersistentAchievementBar } from "@/components/gamification/persistent-achievement-bar";
 import { useAchievements } from "@/hooks/useAchievements";
 import { useAuth } from "@/hooks/use-auth";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 
-type ActiveView = "dashboard" | "connections2" | "intake" | "life-goals" | "chatbot" | "settings" | "education" | "retirement" | "tax" | "investments" | "goals" | "estate" | "estate-new" | "educationfunding" | "retirement-planning" | "debt-management" | "insights" | "report-builder";
+type ActiveView = "dashboard" | "connections2" | "intake" | "life-goals" | "chatbot" | "settings" | "education" | "retirement" | "tax" | "investments" | "goals" | "estate" | "estate-new" | "educationfunding" | "retirement-planning" | "debt-management" | "insights" | "report-builder" | "shared-vault";
 
 export default function HomePage() {
   const [activeView, setActiveView] = useState<ActiveView>("dashboard");
@@ -56,6 +57,13 @@ export default function HomePage() {
     queryKey: ["/api/financial-profile"],
     enabled: tipsOpen, // Fetch when tips sidebar is open
   });
+
+  const handleOpenSettings = () => {
+    setActiveView("settings");
+    setSidebarOpen(false);
+  };
+
+  const shouldShowTopBanner = user?.role === "individual" && !isAdvisorActingAs && activeView !== "chatbot";
 
   // Listen for navigation events from intake form and dashboard
   useEffect(() => {
@@ -129,7 +137,7 @@ export default function HomePage() {
   const renderContent = () => {
     switch (activeView) {
       case "dashboard":
-        return <Dashboard />;
+        return <Dashboard onOpenTips={() => setTipsOpen(true)} />;
       case "chatbot":
         return (
           <AIChatLayout
@@ -164,6 +172,8 @@ export default function HomePage() {
         return <DebtManagementCenter />;
       case "insights":
         return <CentralInsights />;
+      case "shared-vault":
+        return <SharedVaultPage />;
       case "report-builder":
         return <ReportBuilder />;
       case "education":
@@ -385,26 +395,13 @@ export default function HomePage() {
         return <EducationFundingCenter />;
 
       default:
-        return <Dashboard />;
+        return <Dashboard onOpenTips={() => setTipsOpen(true)} />;
     }
   };
 
-  // Special handling for chatbot view
-  if (activeView === "chatbot") {
-    return (
-      <div className="min-h-screen bg-gray-900">
-        <AIChatLayout 
-          onClose={() => setActiveView("dashboard")}
-          activeView={activeView}
-          setActiveView={setActiveView}
-          sidebarOpen={sidebarOpen}
-          setSidebarOpen={setSidebarOpen}
-        />
-      </div>
-    );
-  }
-
   const isMounted = useRef(false);
+
+  const isChatbotView = activeView === "chatbot";
 
   useEffect(() => {
     if (!isMounted.current && typeof document !== 'undefined') {
@@ -455,29 +452,59 @@ export default function HomePage() {
       />
 
       {/* Desktop header */}
-      <header className={`hidden lg:flex bg-gray-800 border-b border-gray-700 p-4 transition-all duration-300 ease-in-out ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
-        <div className="flex items-center justify-end w-full px-4">
-          <NotificationCenter />
-        </div>
-      </header>
+      {shouldShowTopBanner && (
+        <header className={`hidden lg:flex bg-gray-800 border-b border-gray-700 p-4 transition-all duration-300 ease-in-out ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
+          <div className="flex items-center justify-end w-full px-4 gap-3">
+            <NotificationCenter />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleOpenSettings}
+              className="text-white hover:bg-gray-700"
+              aria-label="Open settings"
+            >
+              <SettingsIcon className="h-5 w-5" />
+            </Button>
+          </div>
+        </header>
+      )}
 
       {/* Mobile header */}
-      <header className="lg:hidden bg-gray-800 border-b border-gray-700 p-4">
-        <div className="flex items-center justify-between">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setSidebarOpen(true)}
-            className="text-white"
-          >
-            <Menu className="h-6 w-6" />
-          </Button>
-          <NotificationCenter />
-        </div>
-      </header>
+      {shouldShowTopBanner && (
+        <header className="lg:hidden bg-gray-800 border-b border-gray-700 p-4">
+          <div className="flex items-center justify-between">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSidebarOpen(true)}
+              className="text-white"
+            >
+              <Menu className="h-6 w-6" />
+            </Button>
+            <div className="flex items-center gap-3">
+              <NotificationCenter />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleOpenSettings}
+                className="text-white hover:bg-gray-700"
+                aria-label="Open settings"
+              >
+                <SettingsIcon className="h-5 w-5" />
+              </Button>
+            </div>
+          </div>
+        </header>
+      )}
 
       {/* Main content */}
-      <main className={`${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'} min-h-screen transition-all duration-300 ease-in-out${showFloatingAssistant && activeView !== 'chatbot' ? ' pb-28 sm:pb-24 md:pb-20' : ''}`}>
+      <main
+        className={`${
+          isChatbotView ? '' : sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
+        } min-h-screen transition-all duration-300 ease-in-out${
+          showFloatingAssistant && !isChatbotView ? ' pb-28 sm:pb-24 md:pb-20' : ''
+        }`}
+      >
         {renderContent()}
       </main>
 

@@ -5,7 +5,6 @@ import {
   LayoutDashboard, 
   ClipboardList, 
   MessageCircle, 
-  Settings as SettingsIcon, 
   X,
   GraduationCap,
   Target,
@@ -18,6 +17,7 @@ import {
   CreditCard,
   Sparkles,
   FileText,
+  FolderSymlink,
   Link2,
   ChevronLeft,
   ChevronRight
@@ -25,7 +25,7 @@ import {
 
 interface SidebarProps {
   activeView: string;
-  setActiveView: (view: "dashboard" | "connections2" | "intake" | "life-goals" | "chatbot" | "settings" | "education" | "tax" | "investments" | "goals" | "estate" | "estate-new" | "educationfunding" | "retirement-planning" | "debt-management" | "insights" | "report-builder") => void;
+  setActiveView: (view: "dashboard" | "connections2" | "intake" | "life-goals" | "chatbot" | "settings" | "education" | "tax" | "investments" | "goals" | "estate" | "estate-new" | "educationfunding" | "retirement-planning" | "debt-management" | "insights" | "report-builder" | "shared-vault") => void;
   isOpen: boolean;
   onClose: () => void;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -56,7 +56,7 @@ export function Sidebar({ activeView, setActiveView, isOpen, onClose, onCollapse
     { id: "chatbot", label: "Financial Assistant", icon: MessageCircle },
     { id: "education", label: "Financial Education", icon: GraduationCap },
     { id: "report-builder", label: "Report Generation", icon: FileText },
-    { id: "settings", label: "Settings", icon: SettingsIcon },
+    { id: "shared-vault", label: "Shared Vault", icon: FolderSymlink },
   ];
 
   const sidebarWidth = isCollapsed ? 'w-16' : 'w-64';

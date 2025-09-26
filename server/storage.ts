@@ -27,6 +27,7 @@ import {
   advisorClients,
   advisorInvites,
   advisorAuditLogs,
+  sharedVaultFiles,
   // Debt management tables
   debts,
   debtPayoffPlans,
@@ -97,6 +98,7 @@ import {
   , type WhiteLabelProfile, type InsertWhiteLabelProfile
   , type ReportLayout, type InsertReportLayout
   , type ReportSnapshot, type InsertReportSnapshot
+  , type SharedVaultFile, type InsertSharedVaultFile
 } from "@shared/schema";
 import { db } from "./db";
 import { withDatabaseRetry } from "./db-utils";
@@ -130,6 +132,11 @@ const sessionPool = usePgSession ? (() => {
   return new pg.Pool({ host, port, database, user, password, ssl, max, min: 1, idleTimeoutMillis: 10000, connectionTimeoutMillis: 30000 });
 })() : null as any;
 
+export type SharedVaultFileWithUploader = SharedVaultFile & {
+  uploaderEmail: string | null;
+  uploaderName: string | null;
+};
+
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -154,6 +161,11 @@ export interface IStorage {
   getChatDocuments(messageId: number): Promise<ChatDocument[]>;
   getChatDocument(documentId: number, userId: number): Promise<ChatDocument | undefined>;
   getUserChatDocuments(userId: number): Promise<ChatDocument[]>;
+  createSharedVaultFile(file: InsertSharedVaultFile): Promise<SharedVaultFile>;
+  listSharedVaultFiles(ownerClientId: number): Promise<SharedVaultFileWithUploader[]>;
+  getSharedVaultFileById(fileId: number): Promise<SharedVaultFile | undefined>;
+  deleteSharedVaultFile(fileId: number): Promise<void>;
+  getActiveAdvisorsForClient(clientId: number): Promise<AdvisorClient[]>;
   getInvestmentCache(userId: number, category: string): Promise<InvestmentCache | undefined>;
   setInvestmentCache(userId: number, category: string, data: any, ttlHours?: number): Promise<InvestmentCache>;
   
@@ -737,6 +749,53 @@ export class DatabaseStorage implements IStorage {
       .from(chatDocuments)
       .where(eq(chatDocuments.userId, userId))
       .orderBy(chatDocuments.uploadedAt);
+  }
+
+  async createSharedVaultFile(file: InsertSharedVaultFile): Promise<SharedVaultFile> {
+    const [created] = await db
+      .insert(sharedVaultFiles)
+      .values(file)
+      .returning();
+    return created as SharedVaultFile;
+  }
+
+  async listSharedVaultFiles(ownerClientId: number): Promise<SharedVaultFileWithUploader[]> {
+    const rows = await db
+      .select({
+        file: sharedVaultFiles,
+        uploaderEmail: users.email,
+        uploaderName: users.fullName,
+      })
+      .from(sharedVaultFiles)
+      .leftJoin(users, eq(sharedVaultFiles.uploaderId, users.id))
+      .where(eq(sharedVaultFiles.ownerClientId, ownerClientId))
+      .orderBy(desc(sharedVaultFiles.createdAt));
+
+    return rows.map((row) => ({
+      ...row.file,
+      uploaderEmail: row.uploaderEmail ?? null,
+      uploaderName: row.uploaderName ?? null,
+    }));
+  }
+
+  async getSharedVaultFileById(fileId: number): Promise<SharedVaultFile | undefined> {
+    const [file] = await db
+      .select()
+      .from(sharedVaultFiles)
+      .where(eq(sharedVaultFiles.id, fileId));
+    return (file as SharedVaultFile) || undefined;
+  }
+
+  async deleteSharedVaultFile(fileId: number): Promise<void> {
+    await db.delete(sharedVaultFiles).where(eq(sharedVaultFiles.id, fileId));
+  }
+
+  async getActiveAdvisorsForClient(clientId: number): Promise<AdvisorClient[]> {
+    const rows = await db
+      .select()
+      .from(advisorClients)
+      .where(and(eq(advisorClients.clientId, clientId), eq(advisorClients.status, 'active')));
+    return rows as AdvisorClient[];
   }
 
   async deleteFinancialProfile(userId: number): Promise<void> {

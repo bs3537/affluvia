@@ -230,3 +230,83 @@ export async function sendAdvisorInviteEmail({ to, advisorName, link, replyTo }:
     return false;
   }
 }
+
+export interface SharedVaultEmailOptions {
+  recipients: string[];
+  uploaderName: string;
+  fileName: string;
+  vaultUrl: string;
+  clientName?: string | null;
+}
+
+export async function sendSharedVaultUploadEmail(options: SharedVaultEmailOptions): Promise<boolean> {
+  const transporter = createTransporter();
+
+  if (!transporter) {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Development mode - Shared Vault email that would be sent:', options);
+      return true;
+    }
+    console.error('Email transporter not configured for shared vault notifications');
+    return false;
+  }
+
+  if (!options.recipients.length) {
+    return true;
+  }
+
+  console.log('[SharedVaultEmail] Attempting to send notification', {
+    recipients: options.recipients,
+    uploader: options.uploaderName,
+    fileName: options.fileName,
+  });
+
+  const subject = `${options.uploaderName} uploaded "${options.fileName}" to the shared vault`;
+  const displayClient = options.clientName ? ` for ${options.clientName}` : '';
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #111827; }
+          .container { max-width: 640px; margin: 0 auto; padding: 24px; background: #f9fafb; border-radius: 12px; border: 1px solid #e5e7eb; }
+          .header { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+          .button { display: inline-block; padding: 12px 18px; background: #7c3aed; color: #fff !important; border-radius: 8px; text-decoration: none; margin-top: 16px; }
+          .meta { margin-top: 24px; font-size: 13px; color: #6b7280; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">Shared Vault Update${displayClient}</div>
+          <p><strong>${options.uploaderName}</strong> uploaded <strong>${options.fileName}</strong> to the shared vault.</p>
+          <p>You can review and download this document securely inside Affluvia.</p>
+          <a class="button" href="${options.vaultUrl}" target="_blank" rel="noopener">Open Shared Vault</a>
+          <div class="meta">If the button above does not work, copy and paste this link into your browser:<br/>${options.vaultUrl}</div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  const mailOptions: SendMailOptions = {
+    from: formatFromAddress('Affluvia Notifications'),
+    to: options.recipients,
+    subject,
+    html: htmlContent,
+    text: `${options.uploaderName} uploaded ${options.fileName} to the shared vault. Visit ${options.vaultUrl} to view the file.`,
+  };
+
+  try {
+    const result = await transporter.sendMail(mailOptions);
+    console.log('[SharedVaultEmail] Notification sent', {
+      messageId: result.messageId,
+      accepted: result.accepted,
+      rejected: result.rejected,
+    });
+    return true;
+  } catch (error) {
+    console.error('Failed to send shared vault email:', error);
+    return false;
+  }
+}
