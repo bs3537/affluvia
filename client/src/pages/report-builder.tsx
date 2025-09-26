@@ -2539,15 +2539,15 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
       pptx.layout = 'LAYOUT_16x9';
 
       const slides: ReturnType<PptxGenJS['addSlide']>[] = [];
-      const darkBg = '111827';
-      const accent = '38BDF8';
-      const textPrimary = 'F9FAFB';
-      const textSecondary = 'E5E7EB';
-      const footerColor = '94A3B8';
+      const lightBg = 'FFFFFF';
+      const accent = '1F2937';
+      const textPrimary = '000000';
+      const textSecondary = '000000';
+      const footerColor = '666666';
       const slideWidth = 10;
       const slideHeight = 5.625;
 
-      const titleSlide = pptx.addSlide({ background: { color: darkBg } });
+      const titleSlide = pptx.addSlide({ background: { color: lightBg } });
       slides.push(titleSlide);
 
       if (logo?.dataUrl) {
@@ -2597,7 +2597,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
       const maxWidgetHeight = slideHeight - 2.4;
 
       widgetImages.forEach((img, index) => {
-        const slide = pptx.addSlide({ background: { color: darkBg } });
+        const slide = pptx.addSlide({ background: { color: lightBg } });
         slides.push(slide);
 
         slide.addText(formatWidgetTitle(img.key), {
@@ -2637,7 +2637,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
 
       const insightChunks = chunkArray(sortedInsights, 2);
       insightChunks.forEach((chunk, idx) => {
-        const slide = pptx.addSlide({ background: { color: darkBg } });
+        const slide = pptx.addSlide({ background: { color: lightBg } });
         slides.push(slide);
 
         slide.addText(`${insightsTitle || 'Insights'} — Slide ${idx + 1}`, {
@@ -2652,36 +2652,42 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
         chunk.forEach((text, insightIdx) => {
           slide.addText(`• ${text}`, {
             x: 0.8,
-            y: 1.2 + insightIdx * 2.0,
+            y: 1.2 + insightIdx * 1.8,
             w: slideWidth - 1.6,
-            h: 1.8,
-            fontSize: 22,
+            h: 1.6,
+            fontSize: 16,
             color: textSecondary,
           });
         });
       });
 
-      const disclaimerSlide = pptx.addSlide({ background: { color: darkBg } });
-      slides.push(disclaimerSlide);
+      const disclaimerText = toPdfSafeText(disclaimer || 'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results. Assumptions, data inputs, and methodologies are subject to change. Please review with a qualified professional before making decisions.');
+      const disclaimerParagraphs = disclaimerText.split('\n\n').filter(p => p.trim());
+      const disclaimerChunks = chunkArray(disclaimerParagraphs, 3);
 
-      disclaimerSlide.addText('Important Disclosures', {
-        x: 0.6,
-        y: 0.6,
-        w: slideWidth - 1.2,
-        fontSize: 30,
-        color: accent,
-        bold: true,
-      });
+      disclaimerChunks.forEach((chunk, idx) => {
+        const disclaimerSlide = pptx.addSlide({ background: { color: lightBg } });
+        slides.push(disclaimerSlide);
 
-      const disclaimerText = sanitizePrintable(disclaimer || 'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results. Assumptions, data inputs, and methodologies are subject to change. Please review with a qualified professional before making decisions.');
+        disclaimerSlide.addText(`Important Disclosures${disclaimerChunks.length > 1 ? ` — Slide ${idx + 1}` : ''}`, {
+          x: 0.6,
+          y: 0.4,
+          w: slideWidth - 1.2,
+          fontSize: 24,
+          color: accent,
+          bold: true,
+        });
 
-      disclaimerSlide.addText(disclaimerText, {
-        x: 0.8,
-        y: 1.4,
-        w: slideWidth - 1.6,
-        h: slideHeight - 2.2,
-        fontSize: 20,
-        color: textSecondary,
+        chunk.forEach((paragraph, pIdx) => {
+          disclaimerSlide.addText(paragraph.trim(), {
+            x: 0.8,
+            y: 1.0 + pIdx * 1.3,
+            w: slideWidth - 1.6,
+            h: 1.2,
+            fontSize: 10,
+            color: textSecondary,
+          });
+        });
       });
 
       slides.forEach((slide, idx) => {
