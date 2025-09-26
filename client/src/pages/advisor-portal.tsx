@@ -142,7 +142,7 @@ function BrandingSettings({ onSaved }: { onSaved?: () => void }) {
   );
 }
 
-type SortKey = 'name' | 'email' | 'status' | 'updated';
+type SortKey = 'name' | 'email' | 'netWorth' | 'status' | 'updated';
 
 export default function AdvisorPortal() {
   const qc = useQueryClient();
@@ -214,6 +214,11 @@ export default function AdvisorPortal() {
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('desc');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [bulkSummary, setBulkSummary] = useState<any | null>(null);
+  const currencyFormatter = useMemo(() => new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  }), []);
 
   const inviteMutation = useMutation({
     mutationFn: async (e: string) => {
@@ -337,6 +342,7 @@ export default function AdvisorPortal() {
       fullName: c.fullName,
       status: c.status || 'active',
       updatedAt: c.lastUpdated || null,
+      netWorth: c.netWorth === null || c.netWorth === undefined ? null : Number(c.netWorth),
     }));
     const inviteRows = (Array.isArray(invites) ? invites : []).map((i: any) => ({
       type: 'invite' as const,
@@ -347,6 +353,7 @@ export default function AdvisorPortal() {
       updatedAt: i.expiresAt || i.createdAt || null,
       inviteCreatedAt: i.createdAt || null,
       inviteExpiresAt: i.expiresAt || null,
+      netWorth: null,
     }));
     const list = [...clientRows, ...inviteRows];
     const q = query.trim().toLowerCase();
@@ -368,6 +375,11 @@ export default function AdvisorPortal() {
         case 'email': {
           const av = (a.email || '').toLowerCase();
           const bv = (b.email || '').toLowerCase();
+          return av < bv ? -1 * dir : av > bv ? 1 * dir : 0;
+        }
+        case 'netWorth': {
+          const av = typeof a.netWorth === 'number' && !Number.isNaN(a.netWorth) ? a.netWorth : Number.NEGATIVE_INFINITY;
+          const bv = typeof b.netWorth === 'number' && !Number.isNaN(b.netWorth) ? b.netWorth : Number.NEGATIVE_INFINITY;
           return av < bv ? -1 * dir : av > bv ? 1 * dir : 0;
         }
         case 'status': {
@@ -425,7 +437,7 @@ export default function AdvisorPortal() {
       className={`flex items-center gap-1 text-sm text-gray-300 hover:text-white ${sortKey===key ? 'font-semibold' : ''}`}
       onClick={() => {
         if (sortKey === key) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-        else { setSortKey(key); setSortDir(key==='updated' ? 'desc' : 'asc'); }
+        else { setSortKey(key); setSortDir(key==='updated' || key==='netWorth' ? 'desc' : 'asc'); }
       }}
       type="button"
     >
@@ -686,8 +698,9 @@ export default function AdvisorPortal() {
             <div className="w-full overflow-x-auto">
               <div className="grid grid-cols-12 text-sm text-gray-300 px-3 py-2 border-b border-gray-700 sticky top-0 bg-gray-900/80 backdrop-blur">
                 <div className="col-span-3">{headerButton('Name', 'name')}</div>
-                <div className="col-span-4">{headerButton('Email', 'email')}</div>
-                <div className="col-span-2">{headerButton('Status', 'status')}</div>
+                <div className="col-span-3">{headerButton('Email', 'email')}</div>
+                <div className="col-span-2">{headerButton('Net Worth', 'netWorth')}</div>
+                <div className="col-span-1">{headerButton('Status', 'status')}</div>
                 <div className="col-span-2">{headerButton('Last Updated', 'updated')}</div>
                 <div className="col-span-1 text-right">Actions</div>
               </div>
@@ -703,6 +716,9 @@ export default function AdvisorPortal() {
                     : isInvited
                     ? 'bg-yellow-500/20 text-yellow-300'
                     : 'bg-gray-500/20 text-gray-200';
+                  const formattedNetWorth = typeof c.netWorth === 'number' && !Number.isNaN(c.netWorth)
+                    ? currencyFormatter.format(c.netWorth)
+                    : '—';
                   return (
                     <div key={c.id} className="grid grid-cols-12 items-center px-3 py-3">
                       <div className="col-span-3 flex items-center gap-3 text-gray-200">
@@ -711,8 +727,9 @@ export default function AdvisorPortal() {
                         </div>
                         <span>{c.fullName || '—'}</span>
                       </div>
-                      <div className="col-span-4 text-gray-300">{c.email}</div>
-                      <div className="col-span-2">
+                      <div className="col-span-3 text-gray-300">{c.email}</div>
+                      <div className="col-span-2 text-gray-200">{formattedNetWorth}</div>
+                      <div className="col-span-1">
                         <span className={`px-2 py-0.5 rounded text-xs ${statusClass}`}>{statusText}</span>
                       </div>
                       <div className="col-span-2 text-gray-400">{c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '—'}</div>

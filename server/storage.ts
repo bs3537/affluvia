@@ -249,7 +249,7 @@ export interface IStorage {
   deleteLifeGoal(userId: number, goalId: number): Promise<void>;
   
   // Advisor linking & invites
-  getAdvisorClients(advisorId: number): Promise<Array<{ id: number; email: string; fullName: string | null; status: string; lastUpdated: Date | null }>>;
+  getAdvisorClients(advisorId: number): Promise<Array<{ id: number; email: string; fullName: string | null; status: string; lastUpdated: Date | null; netWorth: number | null }>>;
   linkAdvisorToClient(advisorId: number, clientId: number): Promise<AdvisorClient>;
   getAdvisorClientLink(advisorId: number, clientId: number): Promise<AdvisorClient | undefined>;
   createAdvisorInvite(
@@ -1765,7 +1765,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Advisor linking & invites
-  async getAdvisorClients(advisorId: number): Promise<Array<{ id: number; email: string; fullName: string | null; status: string; lastUpdated: Date | null }>> {
+  async getAdvisorClients(advisorId: number): Promise<Array<{ id: number; email: string; fullName: string | null; status: string; lastUpdated: Date | null; netWorth: number | null }>> {
     const rows = await db.execute(sql`
       SELECT 
         u.id, 
@@ -1777,6 +1777,7 @@ export class DatabaseStorage implements IStorage {
           ELSE NULL
         END AS "fullName",
         ac.status, 
+        fp.net_worth AS "netWorth",
         fp.last_updated AS "lastUpdated"
       FROM advisor_clients ac
       JOIN users u ON u.id = ac.client_id
@@ -1784,7 +1785,10 @@ export class DatabaseStorage implements IStorage {
       WHERE ac.advisor_id = ${advisorId} AND ac.status != 'removed'
       ORDER BY COALESCE(fp.last_updated, u.created_at) DESC
     `);
-    return rows.rows as any;
+    return rows.rows.map((row: any) => ({
+      ...row,
+      netWorth: row.netWorth === null || row.netWorth === undefined ? null : Number(row.netWorth),
+    })) as any;
   }
 
   async linkAdvisorToClient(advisorId: number, clientId: number): Promise<AdvisorClient> {
