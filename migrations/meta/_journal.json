@@ -57,6 +57,13 @@
       "when": 1758839521011,
       "tag": "0007_wooden_namora",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1774790400000,
+      "tag": "2025-09-26-002-add-report-layout-draft-insights",
+      "breakpoints": true
     }
   ]
 }

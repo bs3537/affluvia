@@ -17,15 +17,34 @@ import {
   AlertDialogTitle, 
   AlertDialogTrigger 
 } from '@/components/ui/alert-dialog';
-import { FileDown, GripVertical, Plus, Save, Trash2, Eye, RefreshCw, X, TrendingUp } from 'lucide-react';
+import { FileDown, GripVertical, Plus, Save, Trash2, Eye, RefreshCw, X, TrendingUp, Presentation, Loader2 } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Gauge } from '@/components/ui/gauge';
 import { MetricDisplay } from '@/components/ui/metric-display';
 import { useReportWidgets } from '@/hooks/use-report-widgets';
 import { useDashboardSnapshot, pickWidget } from '@/hooks/useDashboardSnapshot';
 import { computeEmergencyReadinessMetrics } from '@/utils/emergency-readiness';
+import { ResponsiveContainer, ComposedChart, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Area, Line, ReferenceLine, ReferenceDot } from 'recharts';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import PptxGenJS from 'pptxgenjs';
+
+function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const debounced = (...args: Parameters<T>) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      fn(...args);
+    }, delay);
+  };
+  (debounced as typeof debounced & { cancel: () => void }).cancel = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  return debounced as typeof debounced & { cancel: () => void };
+}
 
 type Branding = {
   firmName?: string | null;
@@ -38,19 +57,91 @@ type Branding = {
 
 const DEFAULT_WIDGETS: string[] = [
   'financial_health_score',
-  'monthly_cash_flow',
   'net_worth',
-  'optimized_retirement_confidence',  // Keep only the new widget with comparison
-  'ending_portfolio_value_increase',   // Impact at longevity age
+  'monthly_cash_flow',
+  'emergency_readiness_score_new',
+  'optimized_retirement_confidence',
+  'insurance_adequacy_score',
+  'optimized_portfolio_projection',
+  'ending_portfolio_value_increase',
   'retirement_stress_test',
-  'social_security_optimization_impact', // New Social Security widget - Row 3, Position 1 (left)
-  'roth_conversion_impact',           // Roth conversion impact - Row 3, Position 2 (middle)
-  'life_goals_progress',              // Life goals funding progress - Row 3, Position 3 (middle-right)
-  'insurance_adequacy_score',         // Row 3, Position 4 (right)
-  'emergency_readiness_score_new',    // Row 4, Position 1
+  'social_security_optimization_impact',
+  'roth_conversion_impact',
 ];
 
+const WIDGET_ORDER = [...DEFAULT_WIDGETS];
+
+const LEGACY_WIDGET_MAP: Record<string, string | null> = {
+  'retirement_confidence_gauge': 'optimized_retirement_confidence',
+  'retirement_confidence_score': 'optimized_retirement_confidence',
+  'net_worth_projection_optimized': 'optimized_portfolio_projection',
+  'net_worth_projection': 'optimized_portfolio_projection',
+  'increase_in_portfolio_value': 'ending_portfolio_value_increase',
+  'optimization_impact_on_balance': 'ending_portfolio_value_increase',
+  'optimization_impact_ending_portfolio': 'ending_portfolio_value_increase',
+  'emergency_readiness_score': 'emergency_readiness_score_new',
+};
+
+const normalizeWidgetKey = (key: string | null | undefined): string | null => {
+  if (!key) return null;
+  if (Object.prototype.hasOwnProperty.call(LEGACY_WIDGET_MAP, key)) {
+    return LEGACY_WIDGET_MAP[key] ?? null;
+  }
+  return key;
+};
+
+const sanitizeWidgetLayout = (layout?: string[]): string[] => {
+  const source = Array.isArray(layout) && layout.length > 0 ? layout : WIDGET_ORDER;
+  const canonical: string[] = [];
+  const seenCanonical = new Set<string>();
+  const extras: string[] = [];
+  const seenExtras = new Set<string>();
+
+  for (const rawKey of source) {
+    const normalized = normalizeWidgetKey(rawKey);
+    if (!normalized) continue;
+    if (WIDGET_ORDER.includes(normalized)) {
+      if (!seenCanonical.has(normalized)) {
+        canonical.push(normalized);
+        seenCanonical.add(normalized);
+      }
+    } else if (!seenExtras.has(normalized)) {
+      extras.push(normalized);
+      seenExtras.add(normalized);
+    }
+  }
+
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+
+  WIDGET_ORDER.forEach((key) => {
+    if (canonical.includes(key) && !seen.has(key)) {
+      ordered.push(key);
+      seen.add(key);
+    }
+  });
+
+  canonical.forEach((key) => {
+    if (!seen.has(key)) {
+      ordered.push(key);
+      seen.add(key);
+    }
+  });
+
+  extras.forEach((key) => {
+    if (!seen.has(key)) {
+      ordered.push(key);
+      seen.add(key);
+    }
+  });
+
+  return ordered;
+};
+
 type InsightItem = { id?: string; text: string; order: number; isCustom?: boolean };
+type CapturedWidgetImage = { key: string; base64: string; dataUrl: string; aspect: number };
+type CapturedLogo = { dataUrl: string; width: number; height: number } | null;
+type CaptureAssetsResult = { logo: CapturedLogo; widgetImages: CapturedWidgetImage[] };
 
 const MAX_INSIGHT_SENTENCES = 2;
 
@@ -68,6 +159,27 @@ const formatInsightText = (insight: { title?: string | null; explanation?: strin
   const explanation = takeFirstSentences(normalizeWhitespace(insight.explanation));
   return explanation ? `${title}: ${explanation}` : title;
 };
+
+const chunkArray = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const sanitizePrintable = (value: string) =>
+  typeof value === 'string' ? value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '') : '';
+
+const formatWidgetTitle = (key: string) => {
+  const canonical = normalizeWidgetKey(key) ?? key;
+  if (!canonical) return 'Widget';
+  return canonical
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const WIDGET_TITLE_CLASS = "text-xs font-semibold uppercase tracking-wide text-gray-200";
 
 // Independent component for Roth conversion impact
 function RothConversionImpactWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
@@ -479,6 +591,253 @@ function EndingPortfolioImpactWidget({ profileData, refreshSignal }: { profileDa
     <div className="text-center">
       <div className="text-gray-500 text-sm">No impact data</div>
       <div className="text-xs text-gray-600 mt-2">Unable to calculate</div>
+    </div>
+  );
+}
+
+type OptimizedBandsResponse = {
+  ages: number[];
+  percentiles: {
+    p05?: number[];
+    p25: number[];
+    p50: number[];
+    p75: number[];
+    p95?: number[];
+  };
+  meta?: {
+    currentAge?: number;
+    retirementAge?: number;
+    longevityAge?: number;
+    runs?: number;
+    calculatedAt?: string;
+  };
+  cached?: boolean;
+  calculationTime?: number;
+};
+
+const portfolioCurrency = (value: number) => {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
+  return `$${Math.round(value)}`;
+};
+
+const OptimizedPortfolioTooltip = ({ active, payload, label }: any) => {
+  if (!active || !payload || !payload.length) return null;
+  const entries = payload.filter((entry: any) => ['p75', 'p50', 'p25'].includes(entry.dataKey));
+  if (!entries.length) return null;
+
+  const labelMap: Record<string, string> = {
+    p75: '75th Percentile',
+    p50: 'Median',
+    p25: '25th Percentile',
+  };
+
+  return (
+    <div className="bg-gray-900/95 border border-gray-700 rounded-md px-3 py-2 shadow-lg">
+      <p className="text-xs font-semibold text-white">Age {label}</p>
+      <div className="mt-1 space-y-1">
+        {entries.map((entry: any) => {
+          const isMedian = entry.dataKey === 'p50';
+          return (
+            <div key={entry.dataKey} className="flex items-center justify-between text-xs">
+              <span className={isMedian ? 'font-semibold text-white' : 'text-gray-300'}>
+                {labelMap[entry.dataKey]}
+              </span>
+              <span className={isMedian ? 'font-semibold text-white' : 'text-gray-200'}>
+                {portfolioCurrency(entry.value)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+function OptimizedPortfolioProjectionWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
+  const { data: dashboardSnapshot } = useDashboardSnapshot();
+  const [bands, setBands] = useState<OptimizedBandsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const refreshRef = useRef<number>(refreshSignal);
+
+  const loadBands = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    let hasLocalData = false;
+
+    try {
+      const snapshotBands = dashboardSnapshot ? pickWidget<OptimizedBandsResponse>(dashboardSnapshot, 'retirement_bands_optimized') : null;
+      if (snapshotBands?.percentiles?.p50?.length) {
+        setBands(snapshotBands);
+        hasLocalData = true;
+      }
+
+      const savedBands = profileData?.optimizationVariables?.optimizedRetirementBands as OptimizedBandsResponse | undefined;
+      if (!hasLocalData && savedBands?.percentiles?.p50?.length) {
+        setBands(savedBands);
+        hasLocalData = true;
+      }
+
+      const response = await fetch('/api/financial-profile', { credentials: 'include' });
+      if (response.ok) {
+        const freshProfile = await response.json();
+        const freshBands = freshProfile?.optimizationVariables?.optimizedRetirementBands as OptimizedBandsResponse | undefined;
+        if (freshBands?.percentiles?.p50?.length) {
+          setBands(freshBands);
+          hasLocalData = true;
+        } else if (!hasLocalData) {
+          setBands(null);
+          setError('Run the optimized plan in Retirement Planning to populate this chart.');
+        }
+      } else if (!hasLocalData) {
+        setBands(null);
+        setError('Unable to load optimized portfolio projections.');
+      }
+    } catch (err) {
+      console.error('[REPORT-BUILDER] Failed to load optimized portfolio projections', err);
+      if (!hasLocalData) {
+        setBands(null);
+        setError('Unable to load optimized portfolio projections right now.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [dashboardSnapshot, profileData?.optimizationVariables?.optimizedRetirementBands]);
+
+  useEffect(() => {
+    loadBands();
+  }, [loadBands]);
+
+  useEffect(() => {
+    if (refreshRef.current !== refreshSignal) {
+      refreshRef.current = refreshSignal;
+      loadBands();
+    }
+  }, [refreshSignal, loadBands]);
+
+  const chartData = useMemo(() => {
+    if (!bands?.ages?.length || !bands.percentiles?.p50?.length) return [] as Array<Record<string, number>>;
+    return bands.ages.map((age, idx) => {
+      const p25 = bands.percentiles.p25?.[idx] ?? 0;
+      const p50 = bands.percentiles.p50?.[idx] ?? 0;
+      const p75 = bands.percentiles.p75?.[idx] ?? p50;
+      const p95 = bands.percentiles.p95?.[idx] ?? p75;
+      const p05 = bands.percentiles.p05?.[idx] ?? p25;
+      return {
+        age,
+        p25,
+        p50,
+        p75,
+        midBase: p25,
+        midFill: Math.max(0, p75 - p25),
+        upperBase: p75,
+        upperFill: Math.max(0, p95 - p75),
+        lowerBase: p05,
+        lowerFill: Math.max(0, p25 - p05),
+      };
+    });
+  }, [bands]);
+
+  const retirementAge = bands?.meta?.retirementAge || profileData?.optimizationVariables?.retirementAge;
+  const longevityAge = bands?.meta?.longevityAge || 93;
+
+  const medianTargetPoint = useMemo(() => {
+    if (!chartData.length) return null;
+    const point = chartData.find((entry) => entry.age === longevityAge) ||
+      chartData.slice().reverse().find((entry) => entry.age < longevityAge) ||
+      chartData[chartData.length - 1];
+    if (!point || typeof point.p50 !== 'number') return null;
+    return { age: point.age, value: point.p50 };
+  }, [chartData, longevityAge]);
+
+  if (!bands && loading) {
+    return (
+      <div className="flex flex-col items-center justify-center flex-1 text-center text-sm text-gray-400">
+        <Loader2 className="h-6 w-6 animate-spin text-sky-300 mb-3" />
+        <span>Loading optimized projections…</span>
+      </div>
+    );
+  }
+
+  if (!bands) {
+    return (
+      <div className="flex flex-col items-center justify-center flex-1 text-center text-sm text-gray-400 px-4">
+        <TrendingUp className="h-6 w-6 text-gray-500 mb-2" />
+        <span>Run the optimized plan in Retirement Planning to view projections.</span>
+        {error && <span className="mt-2 text-xs text-red-400">{error}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-stretch w-full h-full">
+      <div className="flex-1 w-full min-h-[160px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+            <XAxis dataKey="age" stroke="#9CA3AF" tick={{ fill: '#9CA3AF', fontSize: 11 }} />
+            <YAxis stroke="#9CA3AF" tick={{ fill: '#9CA3AF', fontSize: 11 }} tickFormatter={portfolioCurrency} width={64} />
+            <RechartsTooltip content={<OptimizedPortfolioTooltip />} />
+
+            {retirementAge && (
+              <ReferenceLine
+                x={retirementAge}
+                stroke="#60A5FA"
+                strokeDasharray="5 5"
+                label={{ value: 'Retirement', position: 'top', fill: '#60A5FA', fontSize: 11 }}
+              />
+            )}
+
+            {medianTargetPoint && (
+              <>
+                <ReferenceLine
+                  x={medianTargetPoint.age}
+                  stroke="#F59E0B"
+                  strokeDasharray="3 3"
+                  label={{
+                    value: `Median @ ${medianTargetPoint.age}`,
+                    position: 'top',
+                    fill: '#F59E0B',
+                    fontSize: 11,
+                  }}
+                />
+                <ReferenceDot x={medianTargetPoint.age} y={medianTargetPoint.value} r={4} fill="#F59E0B" stroke="#FDE68A" />
+              </>
+            )}
+
+            <Area type="monotone" dataKey="midBase" stackId="mid" stroke="none" fill="transparent" />
+            <Area type="monotone" dataKey="midFill" stackId="mid" stroke="none" fill="#7DB4CC" fillOpacity={0.6} />
+            <Line type="monotone" dataKey="p75" stroke="#7DB4CC" strokeWidth={1} strokeOpacity={0.8} dot={false} />
+            <Line type="monotone" dataKey="p25" stroke="#7DB4CC" strokeWidth={1} strokeOpacity={0.8} dot={false} />
+            <Line type="monotone" dataKey="p50" stroke="#F59E0B" strokeWidth={3} strokeOpacity={1} dot={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-2 w-full text-[11px] text-gray-400 flex items-center justify-between gap-2">
+        <span>{bands?.meta?.runs ? `${bands.meta.runs.toLocaleString()} scenarios` : bands?.cached ? 'Cached result' : 'Optimized plan bands'}</span>
+        {bands?.meta?.calculatedAt && (
+          <span className="text-gray-500">As of {new Date(bands.meta.calculatedAt).toLocaleDateString()}</span>
+        )}
+      </div>
+      {medianTargetPoint && (
+        <div className="mt-2 text-sm text-gray-300">
+          Median portfolio at age {medianTargetPoint.age}:{' '}
+          <span className="font-semibold text-white">{portfolioCurrency(medianTargetPoint.value)}</span>
+        </div>
+      )}
+      {loading && (
+        <div className="mt-2 flex items-center justify-center text-[11px] text-sky-300 gap-2">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          <span>Refreshing data…</span>
+        </div>
+      )}
+      {error && !loading && (
+        <div className="mt-2 text-[10px] text-red-400 text-center">{error}</div>
+      )}
     </div>
   );
 }
@@ -1262,7 +1621,7 @@ function ReportBuilder() {
   }, [snapInsurance?.score, profileData?.calculations, profileData?.riskManagementScore, calc?.insuranceScore]);
 
   // Layout
-  const { data: layoutData } = useQuery<{ layout: string[]; insightsSectionTitle: string } | null>({
+  const { data: layoutData } = useQuery<{ layout: string[]; insightsSectionTitle: string; draftInsights?: InsightItem[] } | null>({
     queryKey: ['reportLayout', user?.id],
     queryFn: async () => {
       const res = await fetch('/api/report/layout', { credentials: 'include' });
@@ -1272,54 +1631,19 @@ function ReportBuilder() {
     enabled: !!user?.id,
   });
 
-  const [widgets, setWidgets] = useState<string[]>(
-    (layoutData?.layout || DEFAULT_WIDGETS)
-      .filter(Boolean) // remove empty strings
-      .filter((w) => w !== 'increase_in_portfolio_value') // drop removed widgets
-      .filter((w) => w !== 'emergency_readiness_score')
-  );
+  const [widgets, setWidgets] = useState<string[]>(() => sanitizeWidgetLayout());
   const [insightsTitle, setInsightsTitle] = useState<string>(layoutData?.insightsSectionTitle || (isAdvisor ? 'Recommendations' : 'Insights'));
   const [isLightTheme, setIsLightTheme] = useState(false);
 
   useEffect(() => {
-    if (layoutData?.layout) {
-      // If saved layout doesn't have the new widget, add it
-      const savedWidgets = layoutData.layout
-        .filter(Boolean) // remove empty strings
-        .filter((w) => w !== 'increase_in_portfolio_value')
-        .filter((w) => w !== 'emergency_readiness_score'); // drop removed widgets
-      
-      // Add new widget if it's not in the saved layout
-      if (!savedWidgets.includes('ending_portfolio_value_increase')) {
-        savedWidgets.splice(4, 0, 'ending_portfolio_value_increase'); // Insert after optimized_retirement_confidence
+    if (layoutData === undefined) return;
+    const nextLayout = sanitizeWidgetLayout(layoutData?.layout);
+    setWidgets((prev) => {
+      if (prev.length === nextLayout.length && prev.every((key, idx) => key === nextLayout[idx])) {
+        return prev;
       }
-      
-      // Add Social Security widget if it's not in the saved layout
-      if (!savedWidgets.includes('social_security_optimization_impact')) {
-        // Insert at position 6 to be in row 3, position 1 (left)
-        const insertPosition = Math.min(6, savedWidgets.length);
-        savedWidgets.splice(insertPosition, 0, 'social_security_optimization_impact');
-      }
-      
-      // Add Roth Conversion widget if it's not in the saved layout
-      if (!savedWidgets.includes('roth_conversion_impact')) {
-        // Insert at position 7 to be in row 3, position 2 (middle)
-        const insertPosition = Math.min(7, savedWidgets.length);
-        savedWidgets.splice(insertPosition, 0, 'roth_conversion_impact');
-      }
-
-      // Add Emergency Readiness (New) widget next to the legacy emergency widget
-      if (!savedWidgets.includes('emergency_readiness_score_new')) {
-        const insuranceIndex = savedWidgets.indexOf('insurance_adequacy_score');
-        const insertPosition = insuranceIndex >= 0 ? insuranceIndex + 1 : savedWidgets.length;
-        savedWidgets.splice(insertPosition, 0, 'emergency_readiness_score_new');
-      }
-      
-      setWidgets(savedWidgets);
-    } else if (layoutData === null) {
-      // No saved layout, use defaults
-      setWidgets(DEFAULT_WIDGETS);
-    }
+      return nextLayout;
+    });
     if (layoutData?.insightsSectionTitle) setInsightsTitle(layoutData.insightsSectionTitle);
   }, [layoutData]);
 
@@ -1343,13 +1667,141 @@ function ReportBuilder() {
     [insightsResp?.insights]
   );
 
-  const [insights, setInsights] = useState<InsightItem[]>(prefilledInsights);
-  useEffect(() => setInsights(prefilledInsights), [prefilledInsights]);
+  const [insights, setInsights] = useState<InsightItem[]>([]);
+  const [hasLoadedInitialInsights, setHasLoadedInitialInsights] = useState(false);
+
+  const saveDraftInsightsMutation = useMutation({
+    mutationFn: async (payload: InsightItem[]) => {
+      const res = await fetch('/api/report/draft-insights', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ insights: payload }),
+      });
+      if (!res.ok) throw new Error('Failed to save draft insights');
+      return res.json();
+    },
+  });
+
+  const debouncedSaveInsights = useMemo(
+    () =>
+      debounce((payload: InsightItem[]) => {
+        saveDraftInsightsMutation.mutate(payload);
+      }, 1000),
+    [saveDraftInsightsMutation]
+  );
+
+  useEffect(() => {
+    return () => {
+      debouncedSaveInsights.cancel();
+    };
+  }, [debouncedSaveInsights]);
+
+  useEffect(() => {
+    if (layoutData === undefined) return;
+    if (layoutData?.draftInsights && layoutData.draftInsights.length > 0) {
+      setInsights(layoutData.draftInsights);
+      setHasLoadedInitialInsights(true);
+    } else if (!hasLoadedInitialInsights) {
+      setInsights(prefilledInsights);
+      setHasLoadedInitialInsights(true);
+    }
+  }, [layoutData, prefilledInsights, hasLoadedInitialInsights]);
+
+  useEffect(() => {
+    if (!hasLoadedInitialInsights) return;
+    const prepared = insights.map((ins, idx) => ({ ...ins, order: idx }));
+    debouncedSaveInsights(prepared);
+  }, [insights, hasLoadedInitialInsights, debouncedSaveInsights]);
+
+  useEffect(() => {
+    if (!hasLoadedInitialInsights) return;
+    if ((layoutData?.draftInsights?.length || 0) > 0) return;
+    if (prefilledInsights.length === 0) return;
+    if (insights.length === 0) {
+      setInsights(prefilledInsights);
+    }
+  }, [prefilledInsights, hasLoadedInitialInsights, layoutData?.draftInsights, insights.length]);
 
   const [disclaimer, setDisclaimer] = useState<string>(branding?.defaultDisclaimer || 'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results. Assumptions, data inputs, and methodologies are subject to change. Please review with a qualified professional before making decisions.');
   useEffect(() => {
     if (branding?.defaultDisclaimer && isAdvisor) setDisclaimer(branding.defaultDisclaimer);
   }, [branding?.defaultDisclaimer, isAdvisor]);
+  const [isDeckGenerating, setIsDeckGenerating] = useState(false);
+  const [isPdfGenerating, setIsPdfGenerating] = useState(false);
+  const [pdfElapsedSeconds, setPdfElapsedSeconds] = useState(0);
+  const [deckElapsedSeconds, setDeckElapsedSeconds] = useState(0);
+  const pdfTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const deckTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const captureReportAssets = useCallback(async (): Promise<CaptureAssetsResult> => {
+    console.log('[EXPORT] Capturing report assets...');
+    setIsLightTheme(true);
+    await new Promise((resolve) => setTimeout(resolve, 320));
+
+    try {
+      let logo: CapturedLogo = null;
+
+      if (branding?.logoUrl) {
+        try {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.src = branding.logoUrl;
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+          });
+
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0);
+          logo = {
+            dataUrl: canvas.toDataURL('image/png'),
+            width: img.width || canvas.width || 1,
+            height: img.height || canvas.height || 1,
+          };
+        } catch (error) {
+          console.error('[EXPORT] Failed to capture logo:', error);
+        }
+      }
+
+      const widgetImages: CapturedWidgetImage[] = [];
+
+      for (let i = 0; i < widgets.length; i++) {
+        const widgetElement = document.getElementById(`widget-${i}`);
+        if (!widgetElement) continue;
+
+        console.log(`[EXPORT] Capturing widget ${i}: ${widgets[i]}`);
+        try {
+          const canvas = await html2canvas(widgetElement, {
+            backgroundColor: '#FFFFFF',
+            scale: 2,
+            useCORS: true,
+            allowTaint: true,
+          });
+          const dataUrl = canvas.toDataURL('image/png');
+          const base64 = dataUrl.split(',')[1] || '';
+          const aspect = canvas.width === 0 ? 0.6 : canvas.height / canvas.width;
+          widgetImages.push({ key: widgets[i], dataUrl, base64, aspect });
+        } catch (error) {
+          console.error(`[EXPORT] Failed to capture widget ${i}:`, error);
+        }
+      }
+
+      return { logo, widgetImages };
+    } finally {
+      setIsLightTheme(false);
+    }
+  }, [branding?.logoUrl, widgets]);
+
+  useEffect(() => {
+    return () => {
+      if (pdfTimerRef.current) clearInterval(pdfTimerRef.current);
+      if (deckTimerRef.current) clearInterval(deckTimerRef.current);
+    };
+  }, []);
 
   const saveLayoutMutation = useMutation({
     mutationFn: async () => {
@@ -1357,13 +1809,24 @@ function ReportBuilder() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ layout: widgets, insightsSectionTitle: insightsTitle }),
+        body: JSON.stringify({ layout: sanitizeWidgetLayout(widgets), insightsSectionTitle: insightsTitle }),
       });
       if (!res.ok) throw new Error('Failed to save layout');
       return res.json();
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['reportLayout', user?.id] }),
   });
+
+  const exportStatuses = useMemo(() => {
+    const statuses: Array<{ label: string; seconds: number }> = [];
+    if (isPdfGenerating) {
+      statuses.push({ label: 'Generating report (PDF)', seconds: pdfElapsedSeconds });
+    }
+    if (isDeckGenerating) {
+      statuses.push({ label: 'Generating report (slide deck)', seconds: deckElapsedSeconds });
+    }
+    return statuses;
+  }, [isPdfGenerating, pdfElapsedSeconds, isDeckGenerating, deckElapsedSeconds]);
 
   const [snapshotId, setSnapshotId] = useState<number | null>(null);
   const createSnapshotMutation = useMutation({
@@ -1372,7 +1835,7 @@ function ReportBuilder() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ layout: widgets, insights, insightsTitle, disclaimerText: disclaimer, force: false }),
+        body: JSON.stringify({ layout: sanitizeWidgetLayout(widgets), insights, insightsTitle, disclaimerText: disclaimer, force: false }),
       });
       if (!res.ok) throw new Error('Failed to create snapshot');
       return res.json();
@@ -1397,231 +1860,429 @@ function ReportBuilder() {
   });
 
   const downloadReport = async () => {
+    if (isPdfGenerating || isDeckGenerating) return;
+    setIsPdfGenerating(true);
+    setPdfElapsedSeconds(0);
+    if (pdfTimerRef.current) clearInterval(pdfTimerRef.current);
+    pdfTimerRef.current = setInterval(() => setPdfElapsedSeconds((prev) => prev + 1), 1000);
+
     try {
       console.log('[PDF-EXPORT] Starting PDF export with client-side capture...');
-      
-      // Step 1: Switch to light theme
-      setIsLightTheme(true);
-      await new Promise(resolve => setTimeout(resolve, 300)); // Wait for re-render
-      
-      // Step 2: Capture advisor logo only (if present)
-      let logoImage: string | null = null;
-      if (branding?.logoUrl) {
-        console.log('[PDF-EXPORT] Capturing advisor logo...');
-        try {
-          // Create a temporary image element to capture the logo
-          const img = new Image();
-          img.crossOrigin = 'anonymous';
-          await new Promise((resolve, reject) => {
-            img.onload = resolve;
-            img.onerror = reject;
-            img.src = branding.logoUrl!;
-          });
-          
-          // Create canvas to convert logo to base64
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx?.drawImage(img, 0, 0);
-          logoImage = canvas.toDataURL('image/png').split(',')[1];
-        } catch (error) {
-          console.error('[PDF-EXPORT] Failed to capture logo:', error);
-        }
-      }
-      
-      // Step 3: Capture each widget as image
-      const widgetImages: { key: string; image: string; }[] = [];
-      
-      for (let i = 0; i < widgets.length; i++) {
-        const widgetElement = document.getElementById(`widget-${i}`);
-        if (widgetElement) {
-          console.log(`[PDF-EXPORT] Capturing widget ${i}: ${widgets[i]}`);
-          try {
-            const canvas = await html2canvas(widgetElement, {
-              backgroundColor: '#FFFFFF',
-              scale: 2, // Higher resolution for print
-              useCORS: true,
-              allowTaint: true,
-            });
-            const base64Image = canvas.toDataURL('image/png').split(',')[1];
-            widgetImages.push({ key: widgets[i], image: base64Image });
-          } catch (error) {
-            console.error(`[PDF-EXPORT] Failed to capture widget ${i}:`, error);
-          }
-        }
-      }
-      
-      // Step 4: Reset theme
-      setIsLightTheme(false);
-      
-      // Step 5: Create PDF using jsPDF
+
+      const { widgetImages, logo } = await captureReportAssets();
+      const headerBranding = branding || { firmName: 'Affluvia' };
+
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
-        format: 'a4'
+        format: 'a4',
       });
-      
+
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 20;
+      const margin = 18;
       const contentWidth = pageWidth - 2 * margin;
       let currentY = margin;
-      
-      // Add professional blue header section (matching template)
-      const headerBranding = branding || { firmName: 'Affluvia' };
-      const headerHeight = 25; // mm
-      
-      // Draw blue header background
-      pdf.setFillColor(52, 73, 115); // Dark blue color from template
+
+      const headerHeight = 22;
+      pdf.setFillColor(52, 73, 115);
       pdf.rect(0, 0, pageWidth, headerHeight, 'F');
-      
-      // Add firm name in white text
+
+      pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(24);
-      pdf.setTextColor(255, 255, 255); // White text
+      pdf.setTextColor(255, 255, 255);
       pdf.text(headerBranding.firmName || 'Affluvia', margin, 12, { baseline: 'middle' });
-      
-      // Add contact info in smaller white text
+
+      if (logo?.dataUrl) {
+        try {
+          const maxWidth = 30;
+          const maxHeight = 14;
+          const imgWidth = Math.max(1, logo.width || maxWidth);
+          const imgHeight = Math.max(1, logo.height || maxHeight);
+          let logoWidth = imgWidth;
+          let logoHeight = imgHeight;
+
+          if (logoWidth > maxWidth) {
+            const scale = maxWidth / logoWidth;
+            logoWidth *= scale;
+            logoHeight *= scale;
+          }
+          if (logoHeight > maxHeight) {
+            const scale = maxHeight / logoHeight;
+            logoWidth *= scale;
+            logoHeight *= scale;
+          }
+
+          const logoX = pageWidth - margin - logoWidth;
+          const logoY = Math.max(4, headerHeight / 2 - logoHeight / 2);
+          pdf.addImage(logo.dataUrl, 'PNG', logoX, logoY, logoWidth, logoHeight, undefined, 'FAST');
+        } catch (logoError) {
+          console.error('[PDF-EXPORT] Failed to place logo in header:', logoError);
+        }
+      }
+
       if (branding) {
+        pdf.setFont('helvetica', 'normal');
         pdf.setFontSize(10);
-        const contactParts = [];
+        const contactParts: string[] = [];
         if (branding.address) contactParts.push(branding.address);
         if (branding.phone) contactParts.push(branding.phone);
         if (branding.email) contactParts.push(branding.email);
-        
         const contactInfo = contactParts.join(' • ');
         if (contactInfo) {
           pdf.text(contactInfo, margin, 18, { baseline: 'middle' });
         }
       }
-      
-      currentY = headerHeight + 10; // Start content after header
-      
-      // Reset text color to black for content
+
+      currentY = headerHeight + 8;
       pdf.setTextColor(0, 0, 0);
-      
-      // Add report title and date
+
       pdf.setFontSize(16);
-      pdf.setTextColor(0, 0, 0);
-      
-      // Create client name from profile data
-      const clientName = profileData?.firstName && profileData?.lastName 
+      const clientName = profileData?.firstName && profileData?.lastName
         ? `${profileData.firstName} ${profileData.lastName}`
         : profileData?.firstName || 'Client';
-      
-      const reportTitle = `Financial Planning Report for ${clientName}`;
-      pdf.text(reportTitle, pageWidth / 2, currentY, { align: 'center' });
-      currentY += 8;
-      
+      pdf.text(`Financial Planning Report for ${clientName}`, pageWidth / 2, currentY, { align: 'center' });
+      currentY += 7;
+
       pdf.setFontSize(12);
       pdf.text(`Report Generated: ${new Date().toLocaleDateString()}`, pageWidth / 2, currentY, { align: 'center' });
-      currentY += 15;
-      
-      // Add widgets section
+      currentY += 12;
+
+      pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(14);
-      pdf.setTextColor(0, 0, 0);
       pdf.text('Financial Overview', margin, currentY);
-      currentY += 15;
-      
-      // Add widget images (3 per row) with optimized sizing
-      const widgetsPerRow = 3;
-      const widgetWidth = contentWidth / widgetsPerRow - 5;
-      const widgetHeight = widgetWidth * 0.7; // Optimized aspect ratio to prevent stretching
-      
+      currentY += 12;
+
+      const widgetsPerRow = 2;
+      const gutterX = 10;
+      const gutterY = 8;
+      const columnWidth = (contentWidth - (widgetsPerRow - 1) * gutterX) / widgetsPerRow;
+
+      let col = 0;
+      let rowY = currentY;
+      let maxRowHeight = 0;
+
       for (let i = 0; i < widgetImages.length; i++) {
-        const col = i % widgetsPerRow;
-        const row = Math.floor(i / widgetsPerRow);
-        
-        const x = margin + col * (widgetWidth + 5);
-        const y = currentY + row * (widgetHeight + 10);
-        
-        // Check if we need a new page
-        if (y + widgetHeight > pageHeight - margin) {
+        const img = widgetImages[i];
+        const width = columnWidth;
+        const height = Math.max(1, width * (img.aspect || 0.6));
+
+        if (col === 0 && rowY + height > pageHeight - margin) {
           pdf.addPage();
-          currentY = margin;
+          rowY = margin;
         }
-        
+
+        const x = margin + col * (width + gutterX);
+        const y = rowY;
+
         try {
-          pdf.addImage(`data:image/png;base64,${widgetImages[i].image}`, 'PNG', x, y, widgetWidth, widgetHeight);
+          const imageData = img.base64 ? `data:image/png;base64,${img.base64}` : img.dataUrl;
+          pdf.addImage(imageData, 'PNG', x, y, width, height);
         } catch (error) {
           console.error(`[PDF-EXPORT] Failed to add image for widget ${i}:`, error);
         }
+
+        maxRowHeight = Math.max(maxRowHeight, height);
+        col++;
+
+        if (col === widgetsPerRow) {
+          col = 0;
+          rowY += maxRowHeight + gutterY;
+          maxRowHeight = 0;
+        }
       }
-      
-      // Calculate position after widgets
-      const widgetRows = Math.ceil(widgetImages.length / widgetsPerRow);
-      currentY += widgetRows * (widgetHeight + 10) + 20;
-      
-      // Check if we need a new page for insights
+
+      if (col !== 0) {
+        rowY += maxRowHeight + gutterY;
+      }
+
+      currentY = rowY + 10;
+
       if (currentY > pageHeight - 60) {
         pdf.addPage();
         currentY = margin;
       }
-      
-      // Add insights section
+
       if (insights.length > 0) {
+        pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(14);
         pdf.text(insightsTitle || 'Insights', margin, currentY);
-        currentY += 10;
-        
+        currentY += 9;
+
+        pdf.setFont('helvetica', 'normal');
         pdf.setFontSize(11);
         insights.forEach((insight) => {
-          if (insight.text && insight.text.trim()) {
-            const lines = pdf.splitTextToSize(`• ${insight.text}`, contentWidth);
-            
-            // Check if we need a new page
-            if (currentY + lines.length * 5 > pageHeight - margin) {
-              pdf.addPage();
-              currentY = margin;
-            }
-            
-            pdf.text(lines, margin, currentY);
-            currentY += lines.length * 5 + 3;
+          if (!insight.text?.trim()) return;
+          const lines = pdf.splitTextToSize(`• ${insight.text}`, contentWidth);
+          const lineHeight = 5;
+          const needed = lines.length * lineHeight + 3;
+
+          if (currentY + needed > pageHeight - margin) {
+            pdf.addPage();
+            currentY = margin;
           }
+
+          pdf.text(lines, margin, currentY);
+          currentY += needed;
         });
-        currentY += 10;
+        currentY += 6;
       }
-      
-      // Add disclaimer
-      if (currentY > pageHeight - 40) {
+
+      const disclaimerTextRaw = disclaimer || 'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results.';
+      const disclaimerText = sanitizePrintable(disclaimerTextRaw);
+      const disclaimerLines = pdf.splitTextToSize(disclaimerText, contentWidth);
+      const disclaimerHeight = disclaimerLines.length * 5.6 + 10;
+
+      if (currentY + disclaimerHeight > pageHeight - margin) {
         pdf.addPage();
         currentY = margin;
       }
-      
+
+      pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(12);
       pdf.text('Important Disclosures', margin, currentY);
-      currentY += 8;
-      
+      currentY += 7;
+
+      pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(10);
-      const disclaimerText = disclaimer || 
-        'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results.';
-      
-      const disclaimerLines = pdf.splitTextToSize(disclaimerText, contentWidth);
-      pdf.text(disclaimerLines, margin, currentY);
-      
-      // Add professional footer (like template)
-      const footerY = pageHeight - 15;
-      pdf.setFontSize(9);
-      pdf.setTextColor(128, 128, 128); // Gray color
-      
-      // Copyright on left
+      const previousLineHeightFactor = typeof (pdf as any).getLineHeightFactor === 'function'
+        ? (pdf as any).getLineHeightFactor()
+        : 1.15;
+      pdf.setLineHeightFactor(1.4);
+      pdf.text(disclaimerLines, margin, currentY, { baseline: 'top' });
+      pdf.setLineHeightFactor(previousLineHeightFactor);
+      currentY += disclaimerLines.length * 5.6;
+
+      const pageCount = pdf.getNumberOfPages();
       const year = new Date().getFullYear();
-      const copyrightText = `© ${year} ${headerBranding.firmName || 'Affluvia'} — Confidential Client Report`;
-      pdf.text(copyrightText, margin, footerY);
-      
-      // Page number on right
-      pdf.text('Page 1', pageWidth - margin, footerY, { align: 'right' });
-      
-      // Save the PDF
-      const fileName = `${headerBranding.firmName || 'Affluvia'}_Report_${new Date().toISOString().slice(0,10)}.pdf`;
+      const footerText = `© ${year} ${headerBranding.firmName || 'Affluvia'} — Confidential Client Report`;
+
+      for (let p = 1; p <= pageCount; p++) {
+        pdf.setPage(p);
+        const footerY = pdf.internal.pageSize.getHeight() - 10;
+        pdf.setFontSize(9);
+        pdf.setTextColor(128, 128, 128);
+        pdf.text(footerText, margin, footerY);
+        pdf.text(`Page ${p} of ${pageCount}`, pageWidth - margin, footerY, { align: 'right' });
+      }
+      pdf.setTextColor(0, 0, 0);
+
+      const fileName = `${headerBranding.firmName || 'Affluvia'}_Report_${new Date().toISOString().slice(0, 10)}.pdf`;
       pdf.save(fileName);
-      
+
       console.log('[PDF-EXPORT] PDF generated and downloaded successfully');
-      
+
     } catch (error) {
       console.error('[PDF-EXPORT] Error generating PDF:', error);
       alert('Failed to generate PDF report. Please try again.');
-      setIsLightTheme(false); // Ensure theme is reset on error
+    }
+    finally {
+      if (pdfTimerRef.current) {
+        clearInterval(pdfTimerRef.current);
+        pdfTimerRef.current = null;
+      }
+      setIsPdfGenerating(false);
+      setPdfElapsedSeconds(0);
+    }
+  };
+
+  const downloadSlideDeck = async () => {
+    if (isDeckGenerating || isPdfGenerating) return;
+    setIsDeckGenerating(true);
+    setDeckElapsedSeconds(0);
+    if (deckTimerRef.current) clearInterval(deckTimerRef.current);
+    deckTimerRef.current = setInterval(() => setDeckElapsedSeconds((prev) => prev + 1), 1000);
+
+    try {
+      console.log('[PPTX-EXPORT] Starting slide deck export...');
+
+      const { logo, widgetImages } = await captureReportAssets();
+      const headerBranding = branding || { firmName: 'Affluvia' };
+      const clientName = profileData?.firstName && profileData?.lastName
+        ? `${profileData.firstName} ${profileData.lastName}`
+        : profileData?.firstName || 'Client';
+
+      const pptx = new PptxGenJS();
+      pptx.layout = 'LAYOUT_16x9';
+
+      const slides: ReturnType<PptxGenJS['addSlide']>[] = [];
+      const darkBg = '111827';
+      const accent = '38BDF8';
+      const textPrimary = 'F9FAFB';
+      const textSecondary = 'E5E7EB';
+      const footerColor = '94A3B8';
+      const slideWidth = 10;
+      const slideHeight = 5.625;
+
+      const titleSlide = pptx.addSlide({ background: { color: darkBg } });
+      slides.push(titleSlide);
+
+      if (logo?.dataUrl) {
+        titleSlide.addImage({ data: logo.dataUrl, x: 8.6, y: 0.4, w: 1.2, h: 1.2, sizing: { type: 'contain', w: 1.2, h: 1.2 } });
+      }
+
+      titleSlide.addText(headerBranding.firmName || 'Affluvia', {
+        x: 0.7,
+        y: 1.0,
+        w: 8.6,
+        fontSize: 36,
+        color: textPrimary,
+        bold: true,
+      });
+
+      titleSlide.addText(`Prepared for ${clientName}`, {
+        x: 0.7,
+        y: 1.9,
+        w: 8.6,
+        fontSize: 24,
+        color: textSecondary,
+      });
+
+      titleSlide.addText(new Date().toLocaleDateString(), {
+        x: 0.7,
+        y: 2.4,
+        w: 8.6,
+        fontSize: 18,
+        color: textSecondary,
+      });
+
+      const contactParts: string[] = [];
+      if (branding?.address) contactParts.push(branding.address);
+      if (branding?.phone) contactParts.push(branding.phone);
+      if (branding?.email) contactParts.push(branding.email);
+      if (contactParts.length > 0) {
+        titleSlide.addText(contactParts.join(' • '), {
+          x: 0.7,
+          y: 2.9,
+          w: 8.6,
+          fontSize: 16,
+          color: textSecondary,
+        });
+      }
+
+      const maxWidgetWidth = slideWidth - 1.0;
+      const maxWidgetHeight = slideHeight - 2.4;
+
+      widgetImages.forEach((img, index) => {
+        const slide = pptx.addSlide({ background: { color: darkBg } });
+        slides.push(slide);
+
+        slide.addText(formatWidgetTitle(img.key), {
+          x: 0.6,
+          y: 0.5,
+          w: slideWidth - 1.2,
+          fontSize: 30,
+          color: textPrimary,
+          bold: true,
+        });
+
+        const aspect = img.aspect || 0.6;
+        let imgWidth = maxWidgetWidth;
+        let imgHeight = imgWidth * aspect;
+        if (imgHeight > maxWidgetHeight) {
+          imgHeight = maxWidgetHeight;
+          imgWidth = imgHeight / aspect;
+        }
+
+        const imgX = (slideWidth - imgWidth) / 2;
+        const imgY = 1.1 + Math.max(0, (maxWidgetHeight - imgHeight) / 2);
+
+        slide.addImage({
+          data: img.dataUrl,
+          x: imgX,
+          y: imgY,
+          w: imgWidth,
+          h: imgHeight,
+        });
+      });
+
+      const sortedInsights = insights
+        .slice()
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .map((i) => i.text?.trim())
+        .filter((text): text is string => Boolean(text));
+
+      const insightChunks = chunkArray(sortedInsights, 2);
+      insightChunks.forEach((chunk, idx) => {
+        const slide = pptx.addSlide({ background: { color: darkBg } });
+        slides.push(slide);
+
+        slide.addText(`${insightsTitle || 'Insights'} — Slide ${idx + 1}`, {
+          x: 0.6,
+          y: 0.5,
+          w: slideWidth - 1.2,
+          fontSize: 28,
+          color: textPrimary,
+          bold: true,
+        });
+
+        chunk.forEach((text, insightIdx) => {
+          slide.addText(`• ${text}`, {
+            x: 0.8,
+            y: 1.2 + insightIdx * 2.0,
+            w: slideWidth - 1.6,
+            h: 1.8,
+            fontSize: 22,
+            color: textSecondary,
+          });
+        });
+      });
+
+      const disclaimerSlide = pptx.addSlide({ background: { color: darkBg } });
+      slides.push(disclaimerSlide);
+
+      disclaimerSlide.addText('Important Disclosures', {
+        x: 0.6,
+        y: 0.6,
+        w: slideWidth - 1.2,
+        fontSize: 30,
+        color: accent,
+        bold: true,
+      });
+
+      const disclaimerText = sanitizePrintable(disclaimer || 'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results. Assumptions, data inputs, and methodologies are subject to change. Please review with a qualified professional before making decisions.');
+
+      disclaimerSlide.addText(disclaimerText, {
+        x: 0.8,
+        y: 1.4,
+        w: slideWidth - 1.6,
+        h: slideHeight - 2.2,
+        fontSize: 20,
+        color: textSecondary,
+      });
+
+      slides.forEach((slide, idx) => {
+        slide.addText(headerBranding.firmName || 'Affluvia', {
+          x: 0.6,
+          y: slideHeight - 0.6,
+          w: slideWidth / 2,
+          fontSize: 12,
+          color: footerColor,
+        });
+        slide.addText(`Slide ${idx + 1} of ${slides.length}`, {
+          x: slideWidth - 2.1,
+          y: slideHeight - 0.6,
+          w: 1.5,
+          fontSize: 12,
+          color: footerColor,
+          align: 'right',
+        });
+      });
+
+      const fileName = `${headerBranding.firmName || 'Affluvia'}_Deck_${new Date().toISOString().slice(0, 10)}.pptx`;
+      await pptx.writeFile({ fileName });
+
+      console.log('[PPTX-EXPORT] Slide deck generated successfully');
+    } catch (error) {
+      console.error('[PPTX-EXPORT] Error generating slide deck:', error);
+      alert('Failed to generate slide deck. Please try again.');
+    } finally {
+      if (deckTimerRef.current) {
+        clearInterval(deckTimerRef.current);
+        deckTimerRef.current = null;
+      }
+      setIsDeckGenerating(false);
+      setDeckElapsedSeconds(0);
     }
   };
 
@@ -1658,11 +2319,13 @@ function ReportBuilder() {
   };
 
   const getWidgetDisplayName = (widgetKey: string) => {
+    const canonical = normalizeWidgetKey(widgetKey) ?? widgetKey;
     const names: { [key: string]: string } = {
       'financial_health_score': 'Financial Health Score',
       'monthly_cash_flow': 'Monthly Cash Flow',
       'net_worth': 'Net Worth',
       'optimized_retirement_confidence': 'Retirement Confidence',
+      'optimized_portfolio_projection': 'Optimized Portfolio Projection',
       'ending_portfolio_value_increase': 'Portfolio Impact',
       'retirement_stress_test': 'Retirement Stress Test',
       'social_security_optimization_impact': 'Social Security Optimization',
@@ -1671,7 +2334,7 @@ function ReportBuilder() {
       'insurance_adequacy_score': 'Insurance Adequacy',
       'emergency_readiness_score_new': 'Emergency Readiness (New)',
     };
-    return names[widgetKey] || widgetKey.replace(/_/g, ' ');
+    return names[canonical] || canonical.replace(/_/g, ' ');
   };
 
   const headerBranding = useMemo(() => {
@@ -1744,6 +2407,9 @@ function ReportBuilder() {
         .light-theme .text-white {
           color: #111827 !important;
         }
+        .light-theme .text-gray-200 {
+          color: #111827 !important;
+        }
         .light-theme .h-4.w-4.text-gray-500,
         .light-theme .h-4.w-4.text-red-400 {
           display: none !important;
@@ -1752,6 +2418,23 @@ function ReportBuilder() {
           display: none !important;
         }
       `}</style>
+
+      {exportStatuses.length > 0 && (
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="mb-4 flex flex-col gap-2 rounded-lg border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm text-slate-100">
+            {exportStatuses.map((status) => (
+              <div key={status.label} className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-sky-300" />
+                <span>
+                  {status.label}…{' '}
+                  <span className="font-semibold text-sky-300">{status.seconds}s</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
       {/* Header/Branding preview */}
       <Card className="bg-gray-800 border-gray-700">
@@ -1775,8 +2458,31 @@ function ReportBuilder() {
             <div className="text-xs text-gray-400">{headerBranding?.phone} {headerBranding?.email ? `• ${headerBranding.email}` : ''}</div>
           </div>
           <div className="ml-auto flex gap-2">
-            <Button size="sm" onClick={downloadReport}>
-              <FileDown className="h-4 w-4 mr-2" /> Download Report
+            <Button
+              size="sm"
+              onClick={downloadReport}
+              disabled={isPdfGenerating || isDeckGenerating}
+              className="disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isPdfGenerating ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <FileDown className="h-4 w-4 mr-2" />
+              )}
+              {isPdfGenerating ? 'Generating…' : 'Download Report'}
+            </Button>
+            <Button
+              size="sm"
+              onClick={downloadSlideDeck}
+              disabled={isDeckGenerating || isPdfGenerating}
+              className="bg-slate-700 hover:bg-slate-600 text-white disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isDeckGenerating ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Presentation className="h-4 w-4 mr-2" />
+              )}
+              {isDeckGenerating ? 'Building Deck…' : 'Download Slide Deck'}
             </Button>
             <Button 
               size="sm" 
@@ -1796,7 +2502,7 @@ function ReportBuilder() {
         <Card className="bg-gray-800 border-gray-700">
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-white">Page 1: Widgets</CardTitle>
+              <CardTitle className="text-white">Widgets</CardTitle>
               <Button 
                 size="sm" 
                 onClick={() => saveLayoutMutation.mutate()}
@@ -1811,7 +2517,7 @@ function ReportBuilder() {
           <CardContent>
             <Droppable droppableId="widgets" direction="horizontal">
               {(provided) => (
-                <div ref={provided.innerRef} {...provided.droppableProps} className={`grid grid-cols-1 md:grid-cols-3 gap-4 ${isLightTheme ? 'light-theme' : ''}`}>
+                <div ref={provided.innerRef} {...provided.droppableProps} className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${isLightTheme ? 'light-theme' : ''}`}>
                   {widgets.map((w, idx) => (
                     <Draggable draggableId={w + '_' + idx} index={idx} key={w + '_' + idx}>
                       {(drag) => (
@@ -1819,7 +2525,7 @@ function ReportBuilder() {
                           id={`widget-${idx}`}
                           ref={drag.innerRef} 
                           {...drag.draggableProps} 
-                          className="bg-gray-900/50 border border-gray-700 rounded p-3 h-44 flex flex-col items-center justify-start text-gray-300 relative pt-8"
+                          className="bg-gray-900/50 border border-gray-700 rounded p-3 min-h-[200px] flex flex-col items-center justify-start text-gray-300 relative pt-8"
                         >
                           <div {...drag.dragHandleProps} className="absolute top-2 left-2">
                             <GripVertical className="h-4 w-4 text-gray-500" />
@@ -1861,7 +2567,7 @@ function ReportBuilder() {
                           </div>
                           {w === 'financial_health_score' ? (
                             <div className="flex flex-col items-center w-full space-y-2">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Financial Health Score</div>
+                          <div className={`${WIDGET_TITLE_CLASS} text-center`}>Financial Health Score</div>
                               <div className="text-3xl font-bold text-white">{Math.round(healthScore ?? 0)}</div>
                               <div className="text-xs text-gray-500 text-center">
                                 {(healthScore ?? 0) >= 75 ? 'Excellent' :
@@ -1883,7 +2589,7 @@ function ReportBuilder() {
                             </div>
                           ) : w === 'net_worth' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Net Worth</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-1`}>Net Worth</div>
                               <MetricDisplay
                                 value={netWorth || 0}
                                 format="currency"
@@ -1904,13 +2610,13 @@ function ReportBuilder() {
                             </div>
                           ) : w === 'monthly_cash_flow' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Monthly Cash Flow</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-1`}>Monthly Cash Flow</div>
                               <MetricDisplay
                                 value={Math.round(monthlyCashFlow || 0)}
                                 format="currency"
                                 size="md"
                                 color={(monthlyCashFlow ?? 0) >= 0 ? 'positive' : 'negative'}
-                                showSign={true}
+                                showSign={false}
                               />
                               <div className={`mt-2 px-2 py-0.5 rounded-full text-xs font-medium ${
                                 (monthlyCashFlow ?? 0) >= 1000 ? 'bg-green-900/30 text-green-400' :
@@ -1925,7 +2631,7 @@ function ReportBuilder() {
                             </div>
                           ) : w === 'retirement_confidence_gauge' ? (
                             <div className="flex flex-col items-center w-full space-y-3">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Retirement Confidence Score</div>
+                          <div className={`${WIDGET_TITLE_CLASS} text-center`}>Retirement Confidence Score</div>
                               <div className="text-3xl font-bold text-white">
                                 {Math.round(profileData?.optimizationVariables?.optimizedScore?.probabilityOfSuccess ?? 
                                            ((calc?.retirementReadinessScore ?? 0) * 100))}
@@ -1961,7 +2667,7 @@ function ReportBuilder() {
                             </div>
                           ) : w === 'optimization_impact_on_balance' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">Optimization Impact on Portfolio Value (Ending Assets)</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-2`}>Optimization Impact on Portfolio Value (Ending Assets)</div>
                               {optimizationImpact !== null ? (
                                 <>
                                   <div className={`text-2xl font-bold ${optimizationImpact >= 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -1980,7 +2686,7 @@ function ReportBuilder() {
                             </div>
                           ) : w === 'optimization_impact_ending_portfolio' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2 text-center">Impact of Optimization on Ending Portfolio Value</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-2 text-center`}>Impact of Optimization on Ending Portfolio Value</div>
                               {optimizationImpact !== null && optimizationImpact !== 0 ? (
                                 <>
                                   <div className="text-center">
@@ -2013,7 +2719,7 @@ function ReportBuilder() {
                           ) : w === 'optimized_retirement_confidence' ? (
                             // New widget for optimized retirement confidence score
                             <div className="flex flex-col items-center w-full space-y-2">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Optimized Retirement Success Probability</div>
+                              <div className={`${WIDGET_TITLE_CLASS} text-center`}>Optimized Retirement Success Probability</div>
                               {(() => {
                                 const rp = (profileData as any)?.retirementPlanningData || {};
                                 const optVars = (profileData as any)?.optimizationVariables || {};
@@ -2097,14 +2803,19 @@ function ReportBuilder() {
                                 );
                               })()}
                             </div>
+                          ) : w === 'optimized_portfolio_projection' ? (
+                            <div className="flex flex-col items-stretch w-full">
+                              <div className={`${WIDGET_TITLE_CLASS} text-center mb-2`}>Optimized Portfolio Projection</div>
+                              <OptimizedPortfolioProjectionWidget profileData={profileData} refreshSignal={refreshSignal} />
+                            </div>
                           ) : w === 'ending_portfolio_value_increase' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2 text-center">Optimization Impact on Portfolio Balance</div>
+                              <div className={`${WIDGET_TITLE_CLASS} mb-2 text-center`}>Optimization Impact on Portfolio Balance</div>
                               <EndingPortfolioImpactWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'insurance_adequacy_score' ? (
                             <div className="flex flex-col items-center w-full space-y-2">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Insurance Adequacy Score</div>
+                          <div className={`${WIDGET_TITLE_CLASS} text-center`}>Insurance Adequacy Score</div>
                               <div className="text-3xl font-bold text-white">
                                 {insuranceScore}
                               </div>
@@ -2122,7 +2833,7 @@ function ReportBuilder() {
                             </div>
                           ) : w === 'emergency_readiness_score_new' ? (
                             <div className="flex flex-col items-center w-full space-y-2">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide text-center">Emergency Readiness (New)</div>
+                          <div className={`${WIDGET_TITLE_CLASS} text-center`}>Emergency Readiness (New)</div>
                               <div className="text-3xl font-bold text-white">{Math.round(emergencyReadinessScoreDashboard)}</div>
                               <div className="text-xs text-gray-500 text-center">
                                 {emergencyReadinessScoreDashboard >= 80 ? 'Well Prepared' :
@@ -2144,27 +2855,27 @@ function ReportBuilder() {
                             </div>
                           ) : w === 'retirement_stress_test' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">Retirement Stress Test</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-2`}>Retirement Stress Test</div>
                               <RetirementStressTestWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'social_security_optimization_impact' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2 text-center">Social Security Optimization Impact</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-2 text-center`}>Social Security Optimization Impact</div>
                               <SocialSecurityOptimizationWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'roth_conversion_impact' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2 text-center">Roth Conversion Impact</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-2 text-center`}>Roth Conversion Impact</div>
                               <RothConversionImpactWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'life_goals_progress' ? (
                             <div className="flex flex-col items-center w-full">
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">Life Goals Progress</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-2`}>Life Goals Progress</div>
                               <LifeGoalsProgressWidget refreshSignal={refreshSignal} />
                             </div>
                           ) : (
                             <>
-                              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">{w.replace(/_/g, ' ')}</div>
+                          <div className={`${WIDGET_TITLE_CLASS} mb-2`}>{w.replace(/_/g, ' ')}</div>
                               <div className="text-2xl font-bold text-white">—</div>
                             </>
                           )}
@@ -2183,7 +2894,7 @@ function ReportBuilder() {
         <Card className="bg-gray-800 border-gray-700">
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
-              <CardTitle className="text-white">Page 2: {insightsTitle}</CardTitle>
+              <CardTitle className="text-white">{insightsTitle}</CardTitle>
               <div className="flex items-center gap-2">
                 <Input value={insightsTitle} onChange={(e) => setInsightsTitle(e.target.value)} className="max-w-xs bg-gray-900 border-gray-700 text-gray-200" />
                 <Button size="sm" className="bg-[#8A00C4] hover:bg-[#7A00B4] text-white border-[#8A00C4] hover:border-[#7A00B4]" onClick={() => regenerateInsightsMutation.mutate()} disabled={regenerateInsightsMutation.isPending}>
@@ -2193,9 +2904,6 @@ function ReportBuilder() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="text-xs text-gray-400">
-              {Math.min(insights.length, 10)} insights fit on page 2. {Math.max(0, insights.length - 10)} overflow to page 3+.
-            </div>
             <Droppable droppableId="insights">
               {(provided) => (
                 <div ref={provided.innerRef} {...provided.droppableProps} className="space-y-3">

@@ -9,15 +9,86 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 
 const DEFAULT_WIDGETS = [
   'financial_health_score',
-  'monthly_cash_flow',
   'net_worth',
-  'optimized_retirement_confidence',  // Widget with baseline comparison
-  'ending_portfolio_value_increase',   // Impact at longevity age
-  'retirement_stress_test',
-  'life_goals_progress',              // Life goals funding progress
+  'monthly_cash_flow',
+  'emergency_readiness_score_new',
+  'optimized_retirement_confidence',
   'insurance_adequacy_score',
-  'emergency_readiness_score',
+  'optimized_portfolio_projection',
+  'ending_portfolio_value_increase',
+  'retirement_stress_test',
+  'social_security_optimization_impact',
+  'roth_conversion_impact',
 ];
+
+const WIDGET_ORDER = [...DEFAULT_WIDGETS];
+
+const LEGACY_WIDGET_MAP: Record<string, string | null> = {
+  retirement_confidence_gauge: 'optimized_retirement_confidence',
+  retirement_confidence_score: 'optimized_retirement_confidence',
+  net_worth_projection_optimized: 'optimized_portfolio_projection',
+  net_worth_projection: 'optimized_portfolio_projection',
+  increase_in_portfolio_value: 'ending_portfolio_value_increase',
+  optimization_impact_on_balance: 'ending_portfolio_value_increase',
+  optimization_impact_ending_portfolio: 'ending_portfolio_value_increase',
+  emergency_readiness_score: 'emergency_readiness_score_new',
+};
+
+const normalizeWidgetKey = (key: string | null | undefined): string | null => {
+  if (!key) return null;
+  if (Object.prototype.hasOwnProperty.call(LEGACY_WIDGET_MAP, key)) {
+    return LEGACY_WIDGET_MAP[key] ?? null;
+  }
+  return key;
+};
+
+const sanitizeWidgetLayout = (layout?: string[] | null): string[] => {
+  const source = Array.isArray(layout) && layout.length ? layout : WIDGET_ORDER;
+  const canonical: string[] = [];
+  const seenCanonical = new Set<string>();
+  const extras: string[] = [];
+  const seenExtras = new Set<string>();
+
+  for (const rawKey of source) {
+    const normalized = normalizeWidgetKey(rawKey);
+    if (!normalized) continue;
+    if (WIDGET_ORDER.includes(normalized)) {
+      if (!seenCanonical.has(normalized)) {
+        canonical.push(normalized);
+        seenCanonical.add(normalized);
+      }
+    } else if (!seenExtras.has(normalized)) {
+      extras.push(normalized);
+      seenExtras.add(normalized);
+    }
+  }
+
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+
+  WIDGET_ORDER.forEach((key) => {
+    if (canonical.includes(key) && !seen.has(key)) {
+      ordered.push(key);
+      seen.add(key);
+    }
+  });
+
+  canonical.forEach((key) => {
+    if (!seen.has(key)) {
+      ordered.push(key);
+      seen.add(key);
+    }
+  });
+
+  extras.forEach((key) => {
+    if (!seen.has(key)) {
+      ordered.push(key);
+      seen.add(key);
+    }
+  });
+
+  return ordered;
+};
 
 function hash(value: any) {
   const json = JSON.stringify(value ?? null);
@@ -48,6 +119,7 @@ function computeFundingPct(goal: any): number {
 }
 
 async function buildWidgetsSnapshot(userId: number, layout: string[]) {
+  const layoutOrder = sanitizeWidgetLayout(layout);
   const profile = await storage.getFinancialProfile(userId);
   const calc = (profile as any)?.calculations || {};
   const base = {
@@ -231,7 +303,7 @@ async function buildWidgetsSnapshot(userId: number, layout: string[]) {
     emergency_readiness_score: { score: base.keyTotals.emergencyReadinessScore },
   };
 
-  return layout.map((key) => ({ key, inputHash, data: dataByKey[key] ?? null, computedAt: new Date().toISOString() }));
+  return layoutOrder.map((key) => ({ key, inputHash, data: dataByKey[key] ?? null, computedAt: new Date().toISOString() }));
 }
 
 export function setupReportRoutes(app: Express) {
@@ -271,17 +343,38 @@ export function setupReportRoutes(app: Express) {
   app.get('/api/report/layout', requireAuth, async (req, res) => {
     const userId = (req as any).user.id as number;
     const row = await storage.getReportLayout(userId);
-    if (!row) return res.json({ layout: DEFAULT_WIDGETS, insightsSectionTitle: 'Insights' });
-    res.json({ layout: row.layout as any, insightsSectionTitle: row.insightsSectionTitle || 'Insights' });
+    if (!row) return res.json({ layout: DEFAULT_WIDGETS, insightsSectionTitle: 'Insights', draftInsights: [] });
+    const layout = sanitizeWidgetLayout((row.layout as any) || undefined);
+    if (JSON.stringify(layout) !== JSON.stringify(row.layout)) {
+      await storage.saveReportLayout(userId, { layout: layout as any, insightsSectionTitle: row.insightsSectionTitle || 'Insights' });
+    }
+    res.json({
+      layout,
+      insightsSectionTitle: row.insightsSectionTitle || 'Insights',
+      draftInsights: (row.draftInsights as any) || [],
+    });
   });
 
   // Save layout
   app.post('/api/report/layout', requireAuth, async (req, res) => {
     const userId = (req as any).user.id as number;
     const { layout, insightsSectionTitle } = req.body as { layout?: string[]; insightsSectionTitle?: string };
-    const normalized = Array.isArray(layout) && layout.length === 9 ? layout : DEFAULT_WIDGETS;
+    const normalized = sanitizeWidgetLayout(layout);
     const saved = await storage.saveReportLayout(userId, { layout: normalized as any, insightsSectionTitle: insightsSectionTitle || 'Insights' });
-    res.json({ layout: saved.layout, insightsSectionTitle: saved.insightsSectionTitle });
+    res.json({ layout: sanitizeWidgetLayout(saved.layout as any), insightsSectionTitle: saved.insightsSectionTitle });
+  });
+
+  // Save draft insights (auto-save while editing)
+  app.post('/api/report/draft-insights', requireAuth, async (req, res) => {
+    const userId = (req as any).user.id as number;
+    const { insights } = req.body as { insights?: Array<{ id?: string; text: string; order: number; isCustom?: boolean }> };
+    try {
+      await storage.saveDraftInsights(userId, insights || []);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Failed to save draft insights:', error);
+      res.status(500).json({ error: 'Failed to save draft insights' });
+    }
   });
 
   // Create (or refresh) snapshot
@@ -299,7 +392,7 @@ export function setupReportRoutes(app: Express) {
       forceRefresh?: boolean;
     };
 
-    const normalizedLayout = Array.isArray(layout) && layout.length === 9 ? layout : DEFAULT_WIDGETS;
+    const normalizedLayout = sanitizeWidgetLayout(layout);
     const widgets = await buildWidgetsSnapshot(user.id, normalizedLayout);
 
     // Try to reuse last snapshot if inputs and content have not changed
@@ -311,9 +404,10 @@ export function setupReportRoutes(app: Express) {
         const lastWidgets: any[] = (latest.widgets as any[]) || [];
         const lastInsights: any[] = (latest.insights as any[]) || [];
         const lastLayout: any[] = (latest.layout as any[]) || [];
+        const sanitizedLastLayout = sanitizeWidgetLayout(lastLayout as any);
         const lastHash = lastWidgets[0]?.inputHash;
         const currentHash = widgets[0]?.inputHash;
-        const layoutEqual = JSON.stringify(lastLayout) === JSON.stringify(normalizedLayout);
+        const layoutEqual = JSON.stringify(sanitizedLastLayout) === JSON.stringify(normalizedLayout);
         const insightsEqual = JSON.stringify(lastInsights.map(i => ({ text: (i.text || '').trim() }))) === JSON.stringify(incomingInsights.map(i => ({ text: (i.text || '').trim() })));
         const disclaimerEqual = (latest.disclaimerText || '') === (disclaimerText || '');
         return Boolean(lastHash && currentHash && lastHash === currentHash && layoutEqual && insightsEqual && disclaimerEqual);
@@ -375,16 +469,17 @@ export function setupReportRoutes(app: Express) {
         .header .logo { height: 42px; width: auto; }
         .header .firm { font-weight: 700; font-size: 18px; }
         .header .meta { color: #555; font-size: 12px; }
-        .divider { height: 1px; background: #e5e7eb; margin: 10px 0 14px; }
+        .divider { height: 1px; background: #e5e7eb; margin: 10px 0 12px; }
         .h1 { font-size: 20px; font-weight: 700; margin: 0 0 8px; }
-        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-        .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; min-height: 160px; }
-        .title { font-weight: 600; margin-bottom: 6px; }
-        .value { font-size: 28px; font-weight: 700; color: #111; }
-        .small { font-size: 11px; color: #666; }
+        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; min-height: 148px; }
+        .title { font-weight: 600; margin-bottom: 4px; }
+        .value { font-size: 26px; font-weight: 700; color: #111; line-height: 1.2; }
+        .small { font-size: 11px; color: #666; line-height: 1.25; }
         .insights { margin-top: 18px; }
         .insight { margin-bottom: 10px; }
         .footer { position: fixed; bottom: 10mm; left: 14mm; right: 14mm; color: #666; font-size: 10px; display: flex; justify-content: space-between; }
+        .footer .pageNumber::after { content: counter(page) " of " counter(pages); }
         .page-break { page-break-before: always; }
         /* Gauges and progress */
         .gauge { width: 100%; height: 0; padding-bottom: 50%; position: relative; }

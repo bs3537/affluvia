@@ -257,6 +257,7 @@ export interface IStorage {
   // Report builder persistence
   getReportLayout(userId: number): Promise<ReportLayout | undefined>;
   saveReportLayout(userId: number, data: InsertReportLayout): Promise<ReportLayout>;
+  saveDraftInsights(userId: number, insights: Array<{ id?: string; text: string; order: number; isCustom?: boolean }>): Promise<void>;
   createReportSnapshot(userId: number, snapshot: Omit<InsertReportSnapshot, 'userId'> & { advisorId?: number | null }): Promise<ReportSnapshot>;
   getReportSnapshot(userId: number, snapshotId: number): Promise<ReportSnapshot | undefined>;
   getReportSnapshotById(snapshotId: number): Promise<ReportSnapshot | undefined>;
@@ -1234,9 +1235,13 @@ export class DatabaseStorage implements IStorage {
   async saveReportLayout(userId: number, data: InsertReportLayout): Promise<ReportLayout> {
     const existing = await this.getReportLayout(userId);
     if (existing) {
+      const updatePayload: any = { updatedAt: new Date() };
+      if (data.layout) updatePayload.layout = data.layout;
+      if (data.insightsSectionTitle !== undefined) updatePayload.insightsSectionTitle = data.insightsSectionTitle;
+      if (data.draftInsights !== undefined) updatePayload.draftInsights = data.draftInsights;
       const [updated] = await db
         .update(reportLayouts)
-        .set({ ...data, updatedAt: new Date() } as any)
+        .set(updatePayload)
         .where(eq(reportLayouts.userId, userId))
         .returning();
       return updated;
@@ -1246,6 +1251,36 @@ export class DatabaseStorage implements IStorage {
         .values({ ...data, userId })
         .returning();
       return created;
+    }
+  }
+
+  async saveDraftInsights(
+    userId: number,
+    insights: Array<{ id?: string; text: string; order: number; isCustom?: boolean }>,
+  ): Promise<void> {
+    const normalized = Array.isArray(insights)
+      ? insights.map((ins, idx) => ({
+          id: ins.id,
+          text: (ins.text ?? '').toString().trim(),
+          order: Number.isFinite(ins.order) ? ins.order : idx,
+          isCustom: Boolean(ins.isCustom),
+        }))
+      : [];
+
+    const existing = await this.getReportLayout(userId);
+    const payload = { draftInsights: normalized, updatedAt: new Date() } as any;
+
+    if (existing) {
+      await db
+        .update(reportLayouts)
+        .set(payload)
+        .where(eq(reportLayouts.userId, userId));
+    } else {
+      await db.insert(reportLayouts).values({
+        userId,
+        insightsSectionTitle: 'Insights',
+        draftInsights: normalized,
+      });
     }
   }
 

@@ -772,18 +772,22 @@ export const reportLayouts = pgTable("report_layouts", {
     id: serial("id").primaryKey(),
     userId: integer("user_id").references(() => users.id).notNull(),
     layout: jsonb("layout").notNull().default([
-        // Default 3x3 order of widget keys
+        // Default widget order for report builder
         "financial_health_score",
         "monthly_cash_flow",
+        "optimized_retirement_confidence",
+        "optimized_portfolio_projection",
         "net_worth",
-        "retirement_confidence_gauge",
-        "optimization_impact_on_balance",
+        "ending_portfolio_value_increase",
         "retirement_stress_test",
-        "net_worth_projection_optimized",
+        "social_security_optimization_impact",
+        "roth_conversion_impact",
+        "life_goals_progress",
         "insurance_adequacy_score",
-        "emergency_readiness_score",
+        "emergency_readiness_score_new",
     ]),
     insightsSectionTitle: text("insights_section_title").default("Insights"),
+    draftInsights: jsonb("draft_insights"),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
 });
