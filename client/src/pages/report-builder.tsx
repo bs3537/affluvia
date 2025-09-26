@@ -153,6 +153,13 @@ const sanitizeWidgetLayout = (layout?: string[]): string[] => {
     seen.add(key);
   });
 
+  const stressIndex = ordered.indexOf('retirement_stress_test');
+  const incomeIndex = ordered.indexOf('retirement_income_sources');
+  if (stressIndex !== -1 && incomeIndex !== -1 && incomeIndex !== stressIndex + 1) {
+    ordered.splice(incomeIndex, 1);
+    ordered.splice(stressIndex + 1, 0, 'retirement_income_sources');
+  }
+
   return [...ordered, ...extras];
 };
 
@@ -167,10 +174,21 @@ const sanitizePrintable = (value: string) =>
   value
     .replace(/\r\n?/g, "\n")
     .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\uFEFF]/g, '')
-    .replace(/[—–]/g, '-')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, '-')
     .replace(/[“”]/g, '"')
     .replace(/[’‘]/g, "'")
+    .replace(/\u00A9/g, '(c)')
     .replace(/\u00A0/g, ' ');
+
+const toPdfSafeText = (value: string) => {
+  const ascii = sanitizePrintable(value)
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '');
+  return ascii
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .join('\n')
+    .trim();
+};
 
 const normalizeWhitespace = (value?: string | null) =>
   typeof value === 'string' ? sanitizePrintable(value).replace(/\s+/g, ' ').trim() : '';
@@ -1069,7 +1087,7 @@ function RetirementStressTestWidget({ profileData, refreshSignal }: { profileDat
 
   // Display results as horizontal bars
   return (
-    <div className="w-full space-y-3">
+    <div className="w-full space-y-6">
       {stressResults.map((result) => (
         <div key={result.id} className="flex items-center gap-4">
           <div className="text-xs text-gray-400 w-28 text-right">{result.name}</div>
@@ -1150,6 +1168,7 @@ function RetirementIncomeSourcesWidget({ profileData, refreshSignal }: { profile
   const [optimizedData, setOptimizedData] = useState<any[] | null>(null);
   const [optimizedSummary, setOptimizedSummary] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -1249,6 +1268,18 @@ function RetirementIncomeSourcesWidget({ profileData, refreshSignal }: { profile
     };
   }, [profileData, refreshSignal]);
 
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingSeconds(0);
+      return;
+    }
+    setLoadingSeconds(0);
+    const interval = setInterval(() => {
+      setLoadingSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isLoading]);
+
   const activeData = optimizedData;
   const activeTimestamp = optimizedSummary?.calculatedAt || null;
 
@@ -1303,7 +1334,7 @@ function RetirementIncomeSourcesWidget({ profileData, refreshSignal }: { profile
       {isLoading ? (
         <div className="flex flex-col items-center justify-center py-10 gap-2 text-gray-400 w-full">
           <Loader2 className="h-5 w-5 animate-spin" />
-          <span>Loading income projections…</span>
+          <span>Loading income projections… {loadingSeconds}s</span>
         </div>
       ) : error ? (
         <div className="text-center text-sm text-red-400 bg-red-900/20 border border-red-500/40 rounded-lg py-6 px-4">
@@ -2413,7 +2444,9 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
         pdf.setFontSize(11);
         insights.forEach((insight) => {
           if (!insight.text?.trim()) return;
-          const lines = pdf.splitTextToSize(`• ${insight.text}`, contentWidth);
+          const insightBody = toPdfSafeText(`- ${insight.text}`);
+          if (!insightBody) return;
+          const lines = pdf.splitTextToSize(insightBody, contentWidth);
           const lineHeight = 5;
           const needed = lines.length * lineHeight + 3;
 
@@ -2429,7 +2462,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
       }
 
       const disclaimerTextRaw = disclaimer || 'This report is for informational purposes only and does not constitute personalized investment, tax, or legal advice. All projections are estimates and are not guarantees of future results.';
-      const disclaimerText = sanitizePrintable(disclaimerTextRaw);
+      const disclaimerText = toPdfSafeText(disclaimerTextRaw);
       const disclaimerLines = pdf.splitTextToSize(disclaimerText, contentWidth);
       const disclaimerHeight = disclaimerLines.length * 5.6 + 10;
 
@@ -2455,7 +2488,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
 
       const pageCount = pdf.getNumberOfPages();
       const year = new Date().getFullYear();
-      const footerText = `© ${year} ${headerBranding.firmName || 'Affluvia'} — Confidential Client Report`;
+      const footerText = toPdfSafeText(`(c) ${year} ${headerBranding.firmName || 'Affluvia'} - Confidential Client Report`);
 
       for (let p = 1; p <= pageCount; p++) {
         pdf.setPage(p);
@@ -2733,7 +2766,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
       'roth_conversion_impact': 'Roth Conversion Impact',
       'life_goals_progress': 'Life Goals Progress',
       'insurance_adequacy_score': 'Insurance Adequacy',
-      'emergency_readiness_score_new': 'Emergency Readiness (New)',
+      'emergency_readiness_score_new': 'Emergency Readiness',
     };
     return names[canonical] || canonical.replace(/_/g, ' ');
   };
@@ -3234,7 +3267,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
                             </div>
                           ) : w === 'emergency_readiness_score_new' ? (
                             <div className="flex flex-col items-center w-full space-y-2">
-                          <div className={`${WIDGET_TITLE_CLASS} text-center`}>Emergency Readiness (New)</div>
+                          <div className={`${WIDGET_TITLE_CLASS} text-center`}>Emergency Readiness</div>
                               <div className="text-3xl font-bold text-white">{Math.round(emergencyReadinessScoreDashboard)}</div>
                               <div className="text-xs text-gray-500 text-center">
                                 {emergencyReadinessScoreDashboard >= 80 ? 'Well Prepared' :
