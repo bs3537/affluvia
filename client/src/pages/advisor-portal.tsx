@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowUpDown, Search, TrendingUp, Users, Mail, Clock, RefreshCw, Trash, X, Eye, ExternalLink, Paintbrush } from "lucide-react";
+import { ArrowUpDown, Search, TrendingUp, Users, Mail, Clock, RefreshCw, Trash, X, Eye, ExternalLink, Paintbrush, Settings as SettingsCog } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { 
   AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle,
@@ -16,6 +16,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFo
 import { useAuth } from "@/hooks/use-auth";
 import { queryClient } from "@/lib/queryClient";
 import { Label } from "@/components/ui/label";
+import { Settings as AccountSettings } from "@/components/settings";
 
 const DEFAULT_ADVISOR_DISCLAIMER = `IMPORTANT DISCLOSURES
 
@@ -148,6 +149,7 @@ export default function AdvisorPortal() {
   const { user } = useAuth();
   const [brandingOpen, setBrandingOpen] = useState(false);
   const brandingAllowCloseRef = useRef(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const handleBrandingOpenChange = (open: boolean) => {
     console.log("[BrandingDrawer] onOpenChange", {
       requestedOpen: open,
@@ -392,13 +394,38 @@ export default function AdvisorPortal() {
               <h1 className="text-2xl md:text-3xl font-extrabold tracking-wide text-white">AFFLUVIA</h1>
               <span className="text-white/70">• Advisor Portal</span>
             </div>
-            <Button
-              onClick={() => setBrandingOpen(true)}
-              className="bg-white/10 hover:bg-white/20 text-white border border-white/20"
-              size="sm"
-            >
-              <Paintbrush className="h-4 w-4 mr-2" /> White-label Branding
-            </Button>
+            <div className="flex items-center gap-2">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="bg-white/10 hover:bg-white/20 text-white border border-white/20"
+                      onClick={() => setBrandingOpen(true)}
+                    >
+                      <Paintbrush className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>White-label Branding</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="bg-white/10 hover:bg-white/20 text-white border border-white/20"
+                      onClick={() => setSettingsOpen(true)}
+                    >
+                      <SettingsCog className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Account Settings</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
           </div>
           <p className="text-white/80 mt-1">Welcome{user?.fullName ? `, ${user.fullName}` : ''}. Manage clients, send invites, and open client portals.</p>
         </div>
@@ -437,7 +464,29 @@ export default function AdvisorPortal() {
             />
           </div>
         </SheetContent>
-      </Sheet>
+  </Sheet>
+
+  <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+    <SheetContent
+      side="bottom"
+      className="flex h-[90vh] flex-col bg-gray-900 text-white border-t border-gray-800"
+    >
+      <SheetHeader className="pb-2">
+        <SheetTitle className="text-white">Advisor Settings</SheetTitle>
+        <SheetDescription className="text-gray-400">
+          Update login email, password, and manage your session.
+        </SheetDescription>
+      </SheetHeader>
+      <div className="flex-1 overflow-y-auto">
+        <AccountSettings />
+      </div>
+      <SheetFooter className="pt-4">
+        <SheetClose asChild>
+          <Button variant="ghost" className="text-gray-300 hover:text-white">Close</Button>
+        </SheetClose>
+      </SheetFooter>
+    </SheetContent>
+  </Sheet>
 
       <div className="p-6 max-w-6xl mx-auto space-y-6">
         {/* Quick Stats */}

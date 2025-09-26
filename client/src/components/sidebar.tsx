@@ -56,7 +56,7 @@ export function Sidebar({ activeView, setActiveView, isOpen, onClose, onCollapse
     { id: "chatbot", label: "Financial Assistant", icon: MessageCircle },
     { id: "education", label: "Financial Education", icon: GraduationCap },
     { id: "report-builder", label: "Report Generation", icon: FileText },
-    { id: "shared-vault", label: "Shared Vault", icon: FolderSymlink },
+    { id: "shared-vault", label: "Vault", icon: FolderSymlink },
   ];
 
   const sidebarWidth = isCollapsed ? 'w-16' : 'w-64';

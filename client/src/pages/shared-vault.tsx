@@ -209,7 +209,7 @@ export default function SharedVaultPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-white">Shared Vault</h1>
+          <h1 className="text-2xl font-semibold text-white">Vault</h1>
           <p className="text-sm text-gray-400 mt-1">
             Securely share documents between you and your advisor.
           </p>
