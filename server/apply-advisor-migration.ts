@@ -44,15 +44,21 @@ async function main() {
       id serial PRIMARY KEY,
       advisor_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       email text NOT NULL,
+      invite_token text NOT NULL,
       token_hash text NOT NULL,
       status text NOT NULL DEFAULT 'sent',
       expires_at timestamp with time zone NOT NULL,
       client_id integer REFERENCES users(id) ON DELETE SET NULL,
+      full_name text,
       created_at timestamp DEFAULT now()
     );
   `);
   await sql(`CREATE INDEX IF NOT EXISTS idx_advisor_invites_email ON advisor_invites(email);`);
   await sql(`CREATE INDEX IF NOT EXISTS idx_advisor_invites_token_hash ON advisor_invites(token_hash);`);
+  await sql(`ALTER TABLE advisor_invites ADD COLUMN IF NOT EXISTS invite_token text`);
+  await sql(`UPDATE advisor_invites SET invite_token = token_hash WHERE invite_token IS NULL`);
+  await sql(`ALTER TABLE advisor_invites ALTER COLUMN invite_token SET NOT NULL`);
+  await sql(`ALTER TABLE advisor_invites ADD COLUMN IF NOT EXISTS full_name text`);
 
   // 4) advisor_audit_logs table
   await sql(`

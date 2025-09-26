@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useMemo, useState, useEffect, useRef } from "react";
+import type { ChangeEvent } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowUpDown, Search, TrendingUp, Users, Mail, Clock, RefreshCw, Trash, X, Eye, ExternalLink, Paintbrush, Settings as SettingsCog } from "lucide-react";
+import { ArrowUpDown, Search, TrendingUp, Users, Mail, Clock, RefreshCw, Trash, X, Eye, ExternalLink, Upload, Paintbrush, Settings as SettingsCog } from "lucide-react";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { 
   AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle,
@@ -211,6 +212,8 @@ export default function AdvisorPortal() {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>('updated');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('desc');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [bulkSummary, setBulkSummary] = useState<any | null>(null);
 
   const inviteMutation = useMutation({
     mutationFn: async (e: string) => {
@@ -219,6 +222,55 @@ export default function AdvisorPortal() {
     onSuccess: () => toast({ title: 'Invite sent', description: `Invitation sent to ${email}` }),
     onError: (err: any) => toast({ title: 'Invite failed', description: String(err?.message || err), variant: 'destructive' })
   });
+
+  const bulkInviteMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/advisor/invites/bulk', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        let message = 'Bulk invite failed';
+        if (text) {
+          try {
+            const payload = JSON.parse(text);
+            message = payload?.message || payload?.error || message;
+          } catch {
+            message = text;
+          }
+        }
+        throw new Error(message);
+      }
+      return text ? JSON.parse(text) : { ok: true };
+    },
+    onSuccess: (data: any) => {
+      setBulkSummary(data);
+      toast({
+        title: 'Bulk invites processed',
+        description: `${data?.counts?.invited ?? 0} invited, ${data?.counts?.skipped ?? 0} skipped`,
+      });
+      qc.invalidateQueries({ queryKey: ["/api/advisor/clients"] });
+      qc.invalidateQueries({ queryKey: ["/api/advisor/invites"] });
+    },
+    onError: (err: any) => {
+      toast({ title: 'Bulk upload failed', description: String(err?.message || err), variant: 'destructive' });
+    },
+  });
+
+  const handleBulkFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBulkSummary(null);
+    bulkInviteMutation.mutate(file, {
+      onSettled: () => {
+        event.target.value = "";
+      },
+    });
+  };
 
   const linkMutation = useMutation({
     mutationFn: async (e: string) => {
@@ -290,7 +342,7 @@ export default function AdvisorPortal() {
       type: 'invite' as const,
       id: i.id,
       email: i.email,
-      fullName: null,
+      fullName: i.fullName || null,
       status: 'invited',
       updatedAt: i.expiresAt || i.createdAt || null,
       inviteCreatedAt: i.createdAt || null,
@@ -542,6 +594,76 @@ export default function AdvisorPortal() {
             <Search className="h-4 w-4 text-gray-400" />
             <Input placeholder="Search by name, email, status" value={query} onChange={(e) => setQuery(e.target.value)} className="bg-gray-800 border-gray-700 text-white" />
           </div>
+          <div className="mt-4 space-y-2 max-w-md">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.xls,.xlsx"
+              className="hidden"
+              onChange={handleBulkFileChange}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              className="flex items-center gap-2 text-white bg-gray-900/40 border border-[#8A00C4] hover:bg-[#8A00C4] hover:text-white"
+              disabled={bulkInviteMutation.isPending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {bulkInviteMutation.isPending ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Uploading…
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4" />
+                  Upload CSV Invites
+                </>
+              )}
+            </Button>
+            <p className="text-xs text-gray-400">
+              Upload a CSV or Excel file with columns like Email, Name, First, or Last. We'll automatically invite each unique address.
+            </p>
+            {bulkSummary && (
+              <div className="rounded border border-gray-700 bg-gray-900/60 p-3 text-xs text-gray-300 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span>Invited</span>
+                  <span className="text-white font-semibold">{bulkSummary?.counts?.invited ?? 0}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Skipped</span>
+                  <span className="text-white font-semibold">{bulkSummary?.counts?.skipped ?? 0}</span>
+                </div>
+                {bulkSummary?.counts?.reasons && (
+                  <div className="pt-1 border-t border-gray-800 mt-1">
+                    {Object.entries(bulkSummary.counts.reasons)
+                      .filter(([, value]) => Number(value) > 0)
+                      .map(([reason, value]) => (
+                        <div key={reason} className="flex items-center justify-between text-gray-400">
+                          <span>{reason.replace(/_/g, ' ')}</span>
+                          <span className="text-gray-200">{value as number}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {Array.isArray(bulkSummary?.skipped) && bulkSummary.skipped.length > 0 && (
+                  <div className="pt-1 border-t border-gray-800 mt-1 text-gray-400">
+                    <div className="mb-1">Examples skipped:</div>
+                    <ul className="list-disc ml-4 space-y-1">
+                      {bulkSummary.skipped.slice(0, 3).map((item: any, idx: number) => (
+                        <li key={`${item.email || 'row'}-${idx}`}>
+                          {(item.email || 'No email')} — {String(item.reason || '').replace(/_/g, ' ')}
+                        </li>
+                      ))}
+                      {bulkSummary.skipped.length > 3 && (
+                        <li>+{bulkSummary.skipped.length - 3} more</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -570,82 +692,94 @@ export default function AdvisorPortal() {
                 <div className="col-span-1 text-right">Actions</div>
               </div>
               <div className="divide-y divide-gray-800">
-                {paged.map((c: any) => (
-                  <div key={c.id} className="grid grid-cols-12 items-center px-3 py-3">
-                    <div className="col-span-3 flex items-center gap-3 text-gray-200">
-                      <div className="h-8 w-8 rounded-full bg-purple-600/30 border border-purple-500/30 flex items-center justify-center text-sm text-purple-200">
-                        {(c.fullName || c.email || '?').slice(0,1).toUpperCase()}
+                {paged.map((c: any) => {
+                  const rawStatus = typeof c.status === 'string' ? c.status : '';
+                  const normalized = rawStatus.replace(/_/g, ' ').toLowerCase();
+                  const statusText = normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : '—';
+                  const isActive = rawStatus.toLowerCase() === 'active';
+                  const isInvited = rawStatus.toLowerCase() === 'invited';
+                  const statusClass = isActive
+                    ? 'bg-green-500/20 text-green-300'
+                    : isInvited
+                    ? 'bg-yellow-500/20 text-yellow-300'
+                    : 'bg-gray-500/20 text-gray-200';
+                  return (
+                    <div key={c.id} className="grid grid-cols-12 items-center px-3 py-3">
+                      <div className="col-span-3 flex items-center gap-3 text-gray-200">
+                        <div className="h-8 w-8 rounded-full bg-purple-600/30 border border-purple-500/30 flex items-center justify-center text-sm text-purple-200">
+                          {(c.fullName || c.email || '?').slice(0,1).toUpperCase()}
+                        </div>
+                        <span>{c.fullName || '—'}</span>
                       </div>
-                      <span>{c.fullName || '—'}</span>
+                      <div className="col-span-4 text-gray-300">{c.email}</div>
+                      <div className="col-span-2">
+                        <span className={`px-2 py-0.5 rounded text-xs ${statusClass}`}>{statusText}</span>
+                      </div>
+                      <div className="col-span-2 text-gray-400">{c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '—'}</div>
+                      <div className="col-span-1 flex items-center justify-end gap-1">
+                        {c.type === 'client' ? (
+                          <TooltipProvider>
+                            <>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button size="icon" variant="ghost" className="text-gray-200" onClick={() => openMutation.mutate(c.id)} aria-label="Open client portal">
+                                    <ExternalLink className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Open Client Portal</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button size="icon" variant="ghost" className="text-gray-200" onClick={() => setDetailsTarget(c)} aria-label="View details">
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>View details</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button size="icon" variant="ghost" onClick={() => setUnlinkTarget({ id: c.id, email: c.email, fullName: c.fullName })} aria-label="Remove client">
+                                    <Trash className="h-4 w-4 text-red-300" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Remove client</TooltipContent>
+                              </Tooltip>
+                            </>
+                          </TooltipProvider>
+                        ) : (
+                          <TooltipProvider>
+                            <>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button size="icon" variant="ghost" className="text-gray-200" onClick={() => resendInviteMutation.mutate(c.id)} disabled={resendInviteMutation.isPending} aria-label="Resend invite">
+                                    <RefreshCw className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Resend Invite</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button size="icon" variant="ghost" className="text-gray-200" onClick={() => setDetailsTarget(c)} aria-label="View invite details">
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>View details</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button size="icon" variant="ghost" className="text-red-300 hover:text-red-200" onClick={() => setCancelInviteTarget({ id: c.id, email: c.email })} aria-label="Cancel invite">
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Cancel Invite</TooltipContent>
+                              </Tooltip>
+                            </>
+                          </TooltipProvider>
+                        )}
+                      </div>
                     </div>
-                    <div className="col-span-4 text-gray-300">{c.email}</div>
-                    <div className="col-span-2">
-                      <span className={`px-2 py-0.5 rounded text-xs ${c.status==='active' ? 'bg-green-500/20 text-green-300' : 'bg-yellow-500/20 text-yellow-300'}`}>{c.status}</span>
-                    </div>
-                    <div className="col-span-2 text-gray-400">{c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '—'}</div>
-                    <div className="col-span-1 flex items-center justify-end gap-1">
-                      {c.type === 'client' ? (
-                        <TooltipProvider>
-                          <>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button size="icon" variant="ghost" className="text-gray-200" onClick={() => openMutation.mutate(c.id)} aria-label="Open client portal">
-                                  <ExternalLink className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Open Client Portal</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button size="icon" variant="ghost" className="text-gray-200" onClick={() => setDetailsTarget(c)} aria-label="View details">
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>View details</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button size="icon" variant="ghost" onClick={() => setUnlinkTarget({ id: c.id, email: c.email, fullName: c.fullName })} aria-label="Remove client">
-                                  <Trash className="h-4 w-4 text-red-300" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Remove client</TooltipContent>
-                            </Tooltip>
-                          </>
-                        </TooltipProvider>
-                      ) : (
-                        <TooltipProvider>
-                          <>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button size="icon" variant="ghost" className="text-gray-200" onClick={() => resendInviteMutation.mutate(c.id)} disabled={resendInviteMutation.isPending} aria-label="Resend invite">
-                                  <RefreshCw className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Resend Invite</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button size="icon" variant="ghost" className="text-gray-200" onClick={() => setDetailsTarget(c)} aria-label="View invite details">
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>View details</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button size="icon" variant="ghost" className="text-red-300 hover:text-red-200" onClick={() => setCancelInviteTarget({ id: c.id, email: c.email })} aria-label="Cancel invite">
-                                  <X className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Cancel Invite</TooltipContent>
-                            </Tooltip>
-                          </>
-                        </TooltipProvider>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               {/* Pagination Controls */}
               <div className="flex items-center justify-between mt-4 text-sm text-gray-300">
@@ -825,6 +959,7 @@ function InviteDetails({ invite, invites, onResend, onCancel }: { invite: any; i
         <Button onClick={onResend}>Resend Invite</Button>
         <Button variant="secondary" onClick={onCancel}>Cancel Invite</Button>
       </div>
+      <div className="text-xs text-gray-500">Name: {invite.fullName || '—'}</div>
       <div className="text-xs text-gray-500">Email: {invite.email}</div>
     </div>
   );

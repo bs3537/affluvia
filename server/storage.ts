@@ -252,7 +252,14 @@ export interface IStorage {
   getAdvisorClients(advisorId: number): Promise<Array<{ id: number; email: string; fullName: string | null; status: string; lastUpdated: Date | null }>>;
   linkAdvisorToClient(advisorId: number, clientId: number): Promise<AdvisorClient>;
   getAdvisorClientLink(advisorId: number, clientId: number): Promise<AdvisorClient | undefined>;
-  createAdvisorInvite(advisorId: number, email: string, inviteToken: string | undefined, tokenHash: string | undefined, expiresAt: Date): Promise<AdvisorInvite>;
+  createAdvisorInvite(
+    advisorId: number,
+    email: string,
+    inviteToken: string | undefined,
+    tokenHash: string | undefined,
+    expiresAt: Date,
+    options?: { fullName?: string | null }
+  ): Promise<AdvisorInvite>;
   getInviteByTokenHash(tokenHash: string): Promise<AdvisorInvite | undefined>;
   markInviteAccepted(inviteId: number, clientId: number): Promise<void>;
   getPendingInvitesByEmail(email: string): Promise<AdvisorInvite[]>;
@@ -1803,12 +1810,20 @@ export class DatabaseStorage implements IStorage {
     return row as any || undefined;
   }
 
-  async createAdvisorInvite(advisorId: number, email: string, inviteToken: string | undefined, tokenHash: string | undefined, expiresAt: Date): Promise<AdvisorInvite> {
+  async createAdvisorInvite(
+    advisorId: number,
+    email: string,
+    inviteToken: string | undefined,
+    tokenHash: string | undefined,
+    expiresAt: Date,
+    options?: { fullName?: string | null }
+  ): Promise<AdvisorInvite> {
     const rawToken = (inviteToken && inviteToken.trim().length > 0) ? inviteToken : crypto.randomBytes(32).toString("hex");
     const hashedToken = (tokenHash && tokenHash.trim().length > 0) ? tokenHash : crypto.createHash("sha256").update(rawToken).digest("hex");
+    const normalizedName = options?.fullName ? options.fullName.trim() : null;
     const [invite] = await db
       .insert(advisorInvites)
-      .values({ advisorId, email, inviteToken: rawToken, tokenHash: hashedToken, expiresAt, status: "sent" })
+      .values({ advisorId, email, inviteToken: rawToken, tokenHash: hashedToken, expiresAt, status: "sent", fullName: normalizedName && normalizedName.length > 0 ? normalizedName : null })
       .returning();
     return invite as AdvisorInvite;
   }

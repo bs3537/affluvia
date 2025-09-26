@@ -37,6 +37,7 @@ export const advisorInvites = pgTable("advisor_invites", {
   status: text("status").notNull().default('sent'), // 'sent' | 'accepted' | 'expired'
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   clientId: integer("client_id").references(() => users.id),
+  fullName: text("full_name"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
