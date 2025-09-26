@@ -216,6 +216,26 @@ const chunkArray = <T,>(items: T[], size: number): T[][] => {
 const formatWidgetTitle = (key: string) => {
   const canonical = normalizeWidgetKey(key) ?? key;
   if (!canonical) return 'Widget';
+  const names: { [key: string]: string } = {
+    'financial_health_score': 'Financial Health Score',
+    'monthly_cash_flow': 'Monthly Cash Flow',
+    'net_worth': 'Net Worth',
+    'optimized_retirement_confidence': 'Optimized Retirement Success Probability (Monte Carlo)',
+    'optimized_portfolio_projection': 'Optimized Portfolio Projection',
+    'ending_portfolio_value_increase': 'Portfolio Impact',
+    'retirement_stress_test': 'Retirement Stress Test',
+    'retirement_income_sources': 'Retirement Income Sources',
+    'social_security_optimization_impact': 'Social Security Optimization',
+    'roth_conversion_impact': 'Roth Conversion Impact',
+    'life_goals_progress': 'Life Goals Progress',
+    'insurance_adequacy_score': 'Insurance Adequacy',
+    'emergency_readiness_score_new': 'Emergency Readiness',
+  };
+
+  if (names[canonical]) {
+    return names[canonical];
+  }
+
   return canonical
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
@@ -2763,7 +2783,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
       'financial_health_score': 'Financial Health Score',
       'monthly_cash_flow': 'Monthly Cash Flow',
       'net_worth': 'Net Worth',
-      'optimized_retirement_confidence': 'Retirement Confidence',
+      'optimized_retirement_confidence': 'Optimized Retirement Success Probability (Monte Carlo)',
       'optimized_portfolio_projection': 'Optimized Portfolio Projection',
       'ending_portfolio_value_increase': 'Portfolio Impact',
       'retirement_stress_test': 'Retirement Stress Test',
