@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Gauge } from '@/components/ui/gauge';
@@ -606,7 +606,7 @@ function MonteCarloWithdrawalContent({
   currentScore,
   onDataUpdate
 }: { 
-  variables: any; boolean; 
+  variables: any;
   hasOptimizedOnce: boolean; 
   setActiveTab: (tab: string) => void;
   profile?: any;
@@ -683,26 +683,6 @@ function MonteCarloWithdrawalContent({
       if (interval) clearInterval(interval);
     };
   }, [isLoading]);
-
-  // Fetch both baseline and optimized data (like deterministic tab)
-  useEffect(() => {
-    // Check if current data has the detailed withdrawal breakdown
-    const hasDetailedData = (baselineData?.length > 0 && 
-      baselineData.some((d: any) => 
-        'taxableWithdrawal' in d || 
-        'taxDeferredWithdrawal' in d || 
-        'taxFreeWithdrawal' in d
-      )) || (optimizedData?.length > 0 && 
-      optimizedData.some((d: any) => 
-        'taxableWithdrawal' in d || 
-        'taxDeferredWithdrawal' in d || 
-        'taxFreeWithdrawal' in d
-      ));
-    
-    if (hasOptimizedOnce && !hasDetailedData) {
-      fetchMonteCarloWithdrawals();
-    }
-  }, [hasOptimizedOnce, baselineData, optimizedData, fetchMonteCarloWithdrawals]);
 
   const fetchMonteCarloWithdrawals = useCallback(async () => {
     setIsLoading(true);
@@ -825,6 +805,26 @@ function MonteCarloWithdrawalContent({
       setIsLoading(false);
     }
   }, [currentScore, optimizedScore, hasOptimizedOnce, onDataUpdate, profile, variables]);
+
+  // Fetch both baseline and optimized data (like deterministic tab)
+  useEffect(() => {
+    // Check if current data has the detailed withdrawal breakdown
+    const hasDetailedData = (baselineData?.length > 0 && 
+      baselineData.some((d: any) => 
+        'taxableWithdrawal' in d || 
+        'taxDeferredWithdrawal' in d || 
+        'taxFreeWithdrawal' in d
+      )) || (optimizedData?.length > 0 && 
+      optimizedData.some((d: any) => 
+        'taxableWithdrawal' in d || 
+        'taxDeferredWithdrawal' in d || 
+        'taxFreeWithdrawal' in d
+      ));
+    
+    if (hasOptimizedOnce && !hasDetailedData) {
+      fetchMonteCarloWithdrawals();
+    }
+  }, [hasOptimizedOnce, baselineData, optimizedData, fetchMonteCarloWithdrawals]);
 
   if (!hasOptimizedOnce) {
     return (
@@ -1475,6 +1475,7 @@ function RetirementPlanningInner() {
   
   // Profile state
   const [profile, setProfile] = useState<any>(null);
+  const profileLoadedRef = useRef(false);
   const isMarried = (profile?.maritalStatus === 'married' || profile?.maritalStatus === 'partnered');
   
   // Withdrawal sequence state
@@ -1952,7 +1953,7 @@ function RetirementPlanningInner() {
           }
 
           // Mark that profile data and any saved optimization variables are loaded
-          setProfileLoaded(true);
+          profileLoadedRef.current = true;
         } else {
           // Pre-populate form with intake form data (baseline values)
           // This ensures users always start from their intake form values on first visit

@@ -25,7 +25,7 @@ import { MetricDisplay } from '@/components/ui/metric-display';
 import { useReportWidgets } from '@/hooks/use-report-widgets';
 import { useDashboardSnapshot, pickWidget } from '@/hooks/useDashboardSnapshot';
 import { computeEmergencyReadinessMetrics } from '@/utils/emergency-readiness';
-import { ResponsiveContainer, ComposedChart, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Area, Line, ReferenceLine, ReferenceDot } from 'recharts';
+import { ResponsiveContainer, ComposedChart, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Area, Line, ReferenceLine, ReferenceDot, BarChart, Bar, Legend } from 'recharts';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import PptxGenJS from 'pptxgenjs';
@@ -90,6 +90,7 @@ const DEFAULT_WIDGETS: string[] = [
   'optimized_portfolio_projection',
   'ending_portfolio_value_increase',
   'retirement_stress_test',
+  'retirement_income_sources',
   'social_security_optimization_impact',
   'roth_conversion_impact',
 ];
@@ -116,51 +117,43 @@ const normalizeWidgetKey = (key: string | null | undefined): string | null => {
 };
 
 const sanitizeWidgetLayout = (layout?: string[]): string[] => {
-  const source = Array.isArray(layout) && layout.length > 0 ? layout : WIDGET_ORDER;
-  const canonical: string[] = [];
-  const seenCanonical = new Set<string>();
+  const rawSource = Array.isArray(layout) && layout.length > 0 ? layout : WIDGET_ORDER;
   const extras: string[] = [];
-  const seenExtras = new Set<string>();
-
-  for (const rawKey of source) {
-    const normalized = normalizeWidgetKey(rawKey);
-    if (!normalized) continue;
-    if (WIDGET_ORDER.includes(normalized)) {
-      if (!seenCanonical.has(normalized)) {
-        canonical.push(normalized);
-        seenCanonical.add(normalized);
-      }
-    } else if (!seenExtras.has(normalized)) {
-      extras.push(normalized);
-      seenExtras.add(normalized);
-    }
-  }
-
   const ordered: string[] = [];
   const seen = new Set<string>();
 
+  for (const rawKey of rawSource) {
+    const normalized = normalizeWidgetKey(rawKey);
+    if (!normalized) continue;
+    if (WIDGET_ORDER.includes(normalized)) {
+      if (!seen.has(normalized)) {
+        ordered.push(normalized);
+        seen.add(normalized);
+      }
+    } else if (!extras.includes(normalized)) {
+      extras.push(normalized);
+    }
+  }
+
   WIDGET_ORDER.forEach((key) => {
-    if (canonical.includes(key) && !seen.has(key)) {
-      ordered.push(key);
-      seen.add(key);
+    if (seen.has(key)) {
+      return;
     }
+
+    // Find insertion point based on global order so new widgets land near related ones
+    const insertionIndex = ordered.findIndex((existing) =>
+      WIDGET_ORDER.indexOf(existing) > WIDGET_ORDER.indexOf(key)
+    );
+
+    if (insertionIndex === -1) {
+      ordered.push(key);
+    } else {
+      ordered.splice(insertionIndex, 0, key);
+    }
+    seen.add(key);
   });
 
-  canonical.forEach((key) => {
-    if (!seen.has(key)) {
-      ordered.push(key);
-      seen.add(key);
-    }
-  });
-
-  extras.forEach((key) => {
-    if (!seen.has(key)) {
-      ordered.push(key);
-      seen.add(key);
-    }
-  });
-
-  return ordered;
+  return [...ordered, ...extras];
 };
 
 type InsightItem = { id?: string; text: string; order: number; isCustom?: boolean };
@@ -1076,19 +1069,291 @@ function RetirementStressTestWidget({ profileData, refreshSignal }: { profileDat
 
   // Display results as horizontal bars
   return (
-    <div className="w-3/4 mx-auto space-y-1.5">
+    <div className="w-full space-y-3">
       {stressResults.map((result) => (
-        <div key={result.id} className="flex items-center gap-2">
-          <div className="text-xs text-gray-400 w-24 text-right">{result.name}</div>
-          <div className="flex-1 bg-gray-700 rounded-full h-3 relative overflow-hidden">
+        <div key={result.id} className="flex items-center gap-4">
+          <div className="text-xs text-gray-400 w-28 text-right">{result.name}</div>
+          <div className="flex-1 bg-gray-700 rounded-full h-4 relative overflow-hidden">
             <div 
               className={`absolute left-0 top-0 h-full ${result.color} transition-all duration-500`}
               style={{ width: `${result.successRate}%` }}
             />
           </div>
-          <div className="text-xs text-gray-300 w-8 text-left">{result.successRate}</div>
+          <div className="text-xs text-gray-300 w-10 text-left">{result.successRate}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function buildReportOptimizationVariables(profile: any): Record<string, any> | null {
+  const savedOpt = profile?.optimizationVariables;
+  if (!savedOpt?.hasOptimized) {
+    return null;
+  }
+
+  const riskProfileToAllocation: { [key: number]: string } = {
+    1: "5",
+    2: "5.6",
+    3: "6.1",
+    4: "6.6",
+    5: "7"
+  };
+
+  const userRiskProfile = profile?.riskQuestions?.[0] || 3;
+  const spouseRiskProfile = profile?.spouseRiskQuestions?.[0] || userRiskProfile;
+
+  const mapAllocation = (
+    value: string | undefined,
+    fallback: string,
+    expectedReturn: number | undefined
+  ) => {
+    if (value) return value;
+    if (expectedReturn === -2) return "current-allocation";
+    if (expectedReturn === -1) return "glide-path";
+    if (expectedReturn && expectedReturn > 0) return (expectedReturn * 100).toString();
+    return fallback;
+  };
+
+  const defaultUserAllocation = riskProfileToAllocation[userRiskProfile] || "6.1";
+  const defaultSpouseAllocation = profile?.maritalStatus === "married"
+    ? riskProfileToAllocation[spouseRiskProfile] || defaultUserAllocation
+    : defaultUserAllocation;
+
+  return {
+    retirementAge: savedOpt.retirementAge ?? profile?.desiredRetirementAge ?? 65,
+    spouseRetirementAge: savedOpt.spouseRetirementAge ?? profile?.spouseDesiredRetirementAge ?? 65,
+    socialSecurityAge: savedOpt.socialSecurityAge ?? profile?.socialSecurityClaimAge ?? 67,
+    spouseSocialSecurityAge: savedOpt.spouseSocialSecurityAge ?? profile?.spouseSocialSecurityClaimAge ?? 67,
+    socialSecurityBenefit: savedOpt.socialSecurityBenefit ?? profile?.socialSecurityBenefit ?? undefined,
+    spouseSocialSecurityBenefit: savedOpt.spouseSocialSecurityBenefit ?? profile?.spouseSocialSecurityBenefit ?? undefined,
+    pensionBenefit: savedOpt.pensionBenefit ?? profile?.pensionBenefit ?? undefined,
+    spousePensionBenefit: savedOpt.spousePensionBenefit ?? profile?.spousePensionBenefit ?? undefined,
+    assetAllocation: mapAllocation(savedOpt.assetAllocation, defaultUserAllocation, profile?.expectedRealReturn),
+    spouseAssetAllocation: mapAllocation(savedOpt.spouseAssetAllocation, defaultSpouseAllocation, profile?.spouseExpectedRealReturn),
+    monthlyEmployee401k: savedOpt.monthlyEmployee401k ?? Math.round(profile?.retirementContributions?.employee || 0),
+    monthlyEmployer401k: savedOpt.monthlyEmployer401k ?? Math.round(profile?.retirementContributions?.employer || 0),
+    annualTraditionalIRA: savedOpt.annualTraditionalIRA ?? Math.round(profile?.traditionalIRAContribution || 0),
+    annualRothIRA: savedOpt.annualRothIRA ?? Math.round(profile?.rothIRAContribution || 0),
+    spouseMonthlyEmployee401k: savedOpt.spouseMonthlyEmployee401k ?? Math.round(profile?.spouseRetirementContributions?.employee || 0),
+    spouseMonthlyEmployer401k: savedOpt.spouseMonthlyEmployer401k ?? Math.round(profile?.spouseRetirementContributions?.employer || 0),
+    spouseAnnualTraditionalIRA: savedOpt.spouseAnnualTraditionalIRA ?? Math.round(profile?.spouseTraditionalIRAContribution || 0),
+    spouseAnnualRothIRA: savedOpt.spouseAnnualRothIRA ?? Math.round(profile?.spouseRothIRAContribution || 0),
+    monthlyExpenses: savedOpt.monthlyExpenses ?? (profile?.expectedMonthlyExpensesRetirement ? Math.round(profile.expectedMonthlyExpensesRetirement) : undefined),
+    partTimeIncome: savedOpt.partTimeIncome ?? Math.round(profile?.partTimeIncomeRetirement || 0),
+    spousePartTimeIncome: savedOpt.spousePartTimeIncome ?? Math.round(profile?.spousePartTimeIncomeRetirement || 0),
+    hasLongTermCareInsurance: savedOpt.hasLongTermCareInsurance ?? (profile?.hasLongTermCareInsurance || false)
+  };
+}
+
+function RetirementIncomeSourcesWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
+  const [optimizedData, setOptimizedData] = useState<any[] | null>(null);
+  const [optimizedSummary, setOptimizedSummary] = useState<any | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let cancelled = false;
+
+    async function loadIncomeData() {
+      setIsLoading(true);
+      setError(null);
+      try {
+        let profile = profileData;
+
+        try {
+          const profileResponse = await fetch('/api/financial-profile', { credentials: 'include', signal: controller.signal });
+          if (profileResponse.ok) {
+            profile = await profileResponse.json();
+          } else {
+            console.warn('[REPORT-BUILDER] Failed to refresh profile for income widget:', profileResponse.status);
+          }
+        } catch (profileError) {
+          if (!(profileError instanceof DOMException) || profileError.name !== 'AbortError') {
+            console.warn('[REPORT-BUILDER] Profile refresh failed for income widget:', profileError);
+          } else {
+            return;
+          }
+        }
+
+        if (!profile) {
+          throw new Error('Profile data unavailable');
+        }
+
+        const currentAge = profile.age ?? profileData?.age ?? 35;
+        const lifeExpectancy = 93;
+        const projectionYears = Math.max(0, lifeExpectancy - currentAge);
+
+        const basePayload = {
+          startFromCurrentAge: true,
+          projectionYears
+        };
+
+        let optimizedResult: any = null;
+        const optimizedPayload = buildReportOptimizationVariables(profile);
+        if (optimizedPayload) {
+          try {
+            const optimizedResponse = await fetch('/api/calculate-monte-carlo-withdrawal-sequence', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ ...optimizedPayload, ...basePayload }),
+              signal: controller.signal
+            });
+            if (optimizedResponse.ok) {
+              optimizedResult = await optimizedResponse.json();
+            } else {
+              console.warn('[REPORT-BUILDER] Optimized income fetch failed:', optimizedResponse.status);
+            }
+          } catch (optimizedError) {
+            if (optimizedError instanceof DOMException && optimizedError.name === 'AbortError') {
+              return;
+            }
+            console.warn('[REPORT-BUILDER] Optimized income fetch error:', optimizedError);
+          }
+        } else {
+          setOptimizedData(null);
+          setOptimizedSummary(null);
+        }
+
+        if (cancelled) return;
+
+        const optimizedProjections = optimizedResult?.projections || optimizedResult?.yearlyCashFlows || null;
+
+        setOptimizedData(Array.isArray(optimizedProjections) ? optimizedProjections : null);
+        setOptimizedSummary(optimizedResult?.monteCarloSummary || null);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
+        if (cancelled) return;
+        console.error('[REPORT-BUILDER] RetirementIncomeSourcesWidget error:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load retirement income data');
+        setOptimizedData(null);
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void loadIncomeData();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [profileData, refreshSignal]);
+
+  const activeData = optimizedData;
+  const activeTimestamp = optimizedSummary?.calculatedAt || null;
+
+  const incomeChartData = useMemo(() => {
+    if (!Array.isArray(activeData)) return [];
+    return activeData.map((entry: any) => ({
+      year: entry.year,
+      age: entry.age,
+      workingIncome: Math.round(entry.workingIncome || 0),
+      spouseWorkingIncome: Math.round(entry.spouseWorkingIncome || 0),
+      socialSecurity: Math.round(entry.socialSecurity || 0),
+      spouseSocialSecurity: Math.round(entry.spouseSocialSecurity || 0),
+      pension: Math.round(entry.pension || 0),
+      partTimeIncome: Math.round(entry.partTimeIncome || 0),
+      taxableWithdrawal: Math.round(entry.taxableWithdrawal || 0),
+      taxDeferredWithdrawal: Math.round(entry.taxDeferredWithdrawal || 0),
+      taxFreeWithdrawal: Math.round(entry.taxFreeWithdrawal || 0),
+      hsaWithdrawal: Math.round(entry.hsaWithdrawal || 0)
+    }));
+  }, [activeData]);
+
+  const tickYears = useMemo(() => {
+    if (incomeChartData.length === 0) return [];
+    const firstYear = incomeChartData[0]?.year ?? 0;
+    return incomeChartData
+      .map((d) => d.year)
+      .filter((year, index, arr) => {
+        if (index === 0) return true;
+        return ((year - firstYear) % 5 === 0) || index === arr.length - 1;
+      });
+  }, [incomeChartData]);
+
+  const formatCurrency = (value: number | null | undefined) => {
+    if (value == null || Number.isNaN(value)) return '$0';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(value);
+  };
+
+  return (
+    <div className="flex flex-col w-full">
+      <div className="flex items-start justify-between w-full mb-3">
+        <div className={`${WIDGET_TITLE_CLASS} text-left`}>Retirement Income Sources</div>
+        <div className="px-3 py-1 text-xs font-semibold rounded-full border border-purple-500 text-white bg-purple-600">
+          Optimized Plan
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="flex flex-col items-center justify-center py-10 gap-2 text-gray-400 w-full">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>Loading income projections…</span>
+        </div>
+      ) : error ? (
+        <div className="text-center text-sm text-red-400 bg-red-900/20 border border-red-500/40 rounded-lg py-6 px-4">
+          {error}
+        </div>
+      ) : incomeChartData.length === 0 ? (
+        <div className="text-center text-sm text-gray-400 bg-gray-800/40 border border-gray-700/50 rounded-lg py-6 px-4">
+          Run and lock your retirement optimization to view detailed income sources.
+        </div>
+      ) : (
+        <div className="bg-gray-900/40 border border-gray-700/60 rounded-lg p-3">
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={incomeChartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis
+                dataKey="year"
+                stroke="#9CA3AF"
+                ticks={tickYears}
+                angle={0}
+                textAnchor="middle"
+                height={40}
+              />
+              <YAxis stroke="#9CA3AF" tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
+              <RechartsTooltip
+                contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '8px', color: '#ffffff' }}
+                labelStyle={{ color: '#ffffff' }}
+                itemStyle={{ color: '#ffffff' }}
+                formatter={(value: any) => formatCurrency(value)}
+              />
+              <Legend />
+              <Bar dataKey="workingIncome" stackId="income" fill="#10b981" name="Employment" />
+              <Bar dataKey="spouseWorkingIncome" stackId="income" fill="#34d399" name="Spouse Employment" />
+              <Bar dataKey="socialSecurity" stackId="income" fill="#60a5fa" name="Social Security" />
+              <Bar dataKey="spouseSocialSecurity" stackId="income" fill="#93c5fd" name="Spouse Social Security" />
+              <Bar dataKey="pension" stackId="income" fill="#fbbf24" name="Pension" />
+              <Bar dataKey="partTimeIncome" stackId="income" fill="#f97316" name="Part-Time Income" />
+              <Bar dataKey="taxableWithdrawal" stackId="withdrawals" fill="#a855f7" name="Taxable Withdrawals" />
+              <Bar dataKey="taxDeferredWithdrawal" stackId="withdrawals" fill="#6366f1" name="Tax-Deferred Withdrawals" />
+              <Bar dataKey="taxFreeWithdrawal" stackId="withdrawals" fill="#ec4899" name="Tax-Free Withdrawals" />
+              <Bar dataKey="hsaWithdrawal" stackId="withdrawals" fill="#f472b6" name="HSA Withdrawals" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {activeTimestamp && (
+        <div className="mt-3 text-[11px] text-gray-400 w-full text-right">
+          {`As of ${new Date(activeTimestamp).toLocaleDateString()}`}
+        </div>
+      )}
     </div>
   );
 }
@@ -2463,6 +2728,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
       'optimized_portfolio_projection': 'Optimized Portfolio Projection',
       'ending_portfolio_value_increase': 'Portfolio Impact',
       'retirement_stress_test': 'Retirement Stress Test',
+      'retirement_income_sources': 'Retirement Income Sources',
       'social_security_optimization_impact': 'Social Security Optimization',
       'roth_conversion_impact': 'Roth Conversion Impact',
       'life_goals_progress': 'Life Goals Progress',
@@ -2992,6 +3258,10 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
                             <div className="flex flex-col items-center w-full">
                           <div className={`${WIDGET_TITLE_CLASS} mb-2`}>Retirement Stress Test</div>
                               <RetirementStressTestWidget profileData={profileData} refreshSignal={refreshSignal} />
+                            </div>
+                          ) : w === 'retirement_income_sources' ? (
+                            <div className="flex flex-col items-center w-full">
+                              <RetirementIncomeSourcesWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'social_security_optimization_impact' ? (
                             <div className="flex flex-col items-center w-full">
