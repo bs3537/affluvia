@@ -25,6 +25,7 @@ import { MetricDisplay } from '@/components/ui/metric-display';
 import { useReportWidgets } from '@/hooks/use-report-widgets';
 import { useDashboardSnapshot, pickWidget } from '@/hooks/useDashboardSnapshot';
 import { computeEmergencyReadinessMetrics } from '@/utils/emergency-readiness';
+import { calculateEstateProjection, buildAssetCompositionFromProfile } from '@/lib/estate-new/analysis';
 import { ResponsiveContainer, ComposedChart, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Area, Line, ReferenceLine, ReferenceDot, BarChart, Bar, Legend } from 'recharts';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -92,7 +93,7 @@ const DEFAULT_WIDGETS: string[] = [
   'retirement_stress_test',
   'retirement_income_sources',
   'social_security_optimization_impact',
-  'roth_conversion_impact',
+  'roth_conversion_impact_new',
 ];
 
 const WIDGET_ORDER = [...DEFAULT_WIDGETS];
@@ -106,6 +107,7 @@ const LEGACY_WIDGET_MAP: Record<string, string | null> = {
   'optimization_impact_on_balance': 'ending_portfolio_value_increase',
   'optimization_impact_ending_portfolio': 'ending_portfolio_value_increase',
   'emergency_readiness_score': 'emergency_readiness_score_new',
+  'roth_conversion_impact': 'roth_conversion_impact_new',
 };
 
 const normalizeWidgetKey = (key: string | null | undefined): string | null => {
@@ -175,8 +177,8 @@ const sanitizePrintable = (value: string) =>
     .replace(/\r\n?/g, "\n")
     .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\uFEFF]/g, '')
     .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, '-')
-    .replace(/[“”]/g, '"')
-    .replace(/[’‘]/g, "'")
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'")
     .replace(/\u00A9/g, '(c)')
     .replace(/\u00A0/g, ' ');
 
@@ -226,7 +228,7 @@ const formatWidgetTitle = (key: string) => {
     'retirement_stress_test': 'Retirement Stress Test',
     'retirement_income_sources': 'Retirement Income Sources',
     'social_security_optimization_impact': 'Social Security Optimization',
-    'roth_conversion_impact': 'Roth Conversion Impact',
+    'roth_conversion_impact_new': 'Roth Conversion Impact',
     'life_goals_progress': 'Life Goals Progress',
     'insurance_adequacy_score': 'Insurance Adequacy',
     'emergency_readiness_score_new': 'Emergency Readiness',
@@ -243,168 +245,225 @@ const formatWidgetTitle = (key: string) => {
 
 const WIDGET_TITLE_CLASS = "text-lg font-semibold uppercase tracking-wide text-gray-200";
 
-// Independent component for Roth conversion impact
-function RothConversionImpactWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
-  const [rothData, setRothData] = useState<{
-    estateValueIncrease?: number;
-    hasAnalysis?: boolean;
-    calculatedAt?: string;
-    message?: string;
-    baselineEstateValue?: number | null;
-    optimizedEstateValue?: number | null;
-  } | null>(null);
-  const [isCalculating, setIsCalculating] = useState(false);
+const ESTATE_TARGET_AGE = 93;
+
+const safeNumber = (value: unknown): number | null => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const deriveAge = (explicitAge: unknown, dob?: unknown): number | null => {
+  const ageValue = safeNumber(explicitAge);
+  if (ageValue != null) return ageValue;
+  if (typeof dob === 'string' || dob instanceof Date) {
+    const date = new Date(dob);
+    if (!Number.isNaN(date.getTime())) {
+      const diff = Date.now() - date.getTime();
+      return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)));
+    }
+  }
+  return null;
+};
+
+type RothImpactSummary = {
+  delta: number | null;
+  baseline: number | null;
+  optimized: number | null;
+};
+
+const extractEstateSummaryFromAnalysis = (analysis: any): RothImpactSummary => {
+  const summary = analysis?.summary || {};
+  const baseline = safeNumber(summary?.baselineAfterHeir);
+  const optimized = safeNumber(summary?.withAfterHeir);  
+  const delta = safeNumber(summary?.estateValueIncrease);
+
+  return {
+    baseline: baseline ?? null,
+    optimized: optimized ?? null,
+    delta: delta ?? null,
+  };
+};
+
+const extractEstateSummaryFromEstateDelta = (payload: any): RothImpactSummary | null => {
+  if (!payload) return null;
+  const baseline = safeNumber(payload?.baselineAfterHeir ?? payload?.baseline);
+  const optimized = safeNumber(payload?.withAfterHeir ?? payload?.optimized);
+  let delta = safeNumber(payload?.delta);
+  if (delta == null && baseline != null && optimized != null) {
+    delta = optimized - baseline;
+  }
+  if (baseline == null && optimized == null && delta == null) return null;
+  return {
+    baseline: baseline ?? null,
+    optimized: optimized ?? null,
+    delta: delta ?? null,
+  };
+};
+
+type RothWidgetViewState = {
+  hasAnalysis: boolean;
+  delta: number | null;
+  baseline: number | null;
+  optimized: number | null;
+  calculatedAt: string | null;
+  source: string | null;
+  message?: string;
+};
+
+function RothConversionImpactNewWidget({ profileData, refreshSignal }: { profileData: any; refreshSignal: number }) {
+  const currencyFormatter = useMemo(
+    () => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }),
+    []
+  );
+
+  const [viewState, setViewState] = useState<RothWidgetViewState>({
+    hasAnalysis: false,
+    delta: null,
+    baseline: null,
+    optimized: null,
+    calculatedAt: null,
+    source: null,
+    message: 'Run a Roth conversion analysis to populate this widget.'
+  });
+  const [isLoading, setIsLoading] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const calculatedForRef = useRef<string | null>(null);
+  const lastKeyRef = useRef<string | null>(null);
   const prevRefreshRef = useRef<number | null>(null);
 
-  // Timer effect
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isCalculating) {
+    let interval: NodeJS.Timeout | undefined;
+    if (isLoading) {
       setElapsedSeconds(0);
       interval = setInterval(() => {
-        setElapsedSeconds(prev => prev + 1);
+        setElapsedSeconds((prev) => prev + 1);
       }, 1000);
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isCalculating]);
+  }, [isLoading]);
 
   useEffect(() => {
     if (prevRefreshRef.current !== refreshSignal) {
       prevRefreshRef.current = refreshSignal;
-      calculatedForRef.current = null;
-      setRothData(null);
+      lastKeyRef.current = null;
     }
 
     let isMounted = true;
 
-    const resolveEstateSummary = (payload: any): {
-      delta: number | null;
-      baseline?: number | null;
-      optimized?: number | null;
-    } | null => {
-      if (!payload) return null;
+    const loadAnalysis = async () => {
+      const keyParts = [
+        profileData?.rothConversionAnalysisMeta?.updatedAt,
+        profileData?.rothConversionAnalysisMeta?.calculatedAt,
+        profileData?.optimizationVariables?.lockedAt,
+        profileData?.lastUpdated,
+      ].filter(Boolean);
 
-      const baseline = Number(payload?.results?.baselineScenario?.projections?.afterTaxEstateValueAt85);
-      const strategies = Array.isArray(payload?.results?.strategies) ? payload.results.strategies : [];
-      const firstStrategy = strategies.length ? strategies[0] : null;
-      const strategyValue = Number(firstStrategy?.projections?.afterTaxEstateValueAt85);
+      const analysisKey = keyParts.length ? keyParts.join('|') : profileData ? 'profile-present' : 'no-profile';
 
-      if (Number.isFinite(baseline) && Number.isFinite(strategyValue)) {
-        return {
-          delta: strategyValue - baseline,
-          baseline,
-          optimized: strategyValue,
-        };
-      }
-
-      const summaryValue = Number(payload?.summary?.estateValueIncrease);
-      if (Number.isFinite(summaryValue) && !Number.isNaN(summaryValue)) {
-        return {
-          delta: summaryValue,
-          baseline: Number.isFinite(baseline) ? baseline : null,
-          optimized: Number.isFinite(strategyValue) ? strategyValue : Number.isFinite(baseline) ? baseline + summaryValue : null,
-        };
-      }
-
-      return null;
-    };
-
-    async function fetchRothAnalysis() {
-      const analysisKey =
-        profileData?.rothConversionAnalysisMeta?.updatedAt ||
-        profileData?.rothConversionAnalysisMeta?.calculatedAt ||
-        profileData?.optimizationVariables?.lockedAt ||
-        profileData?.lastUpdated ||
-        (profileData ? "profile-present" : "no-profile");
-
-      if (calculatedForRef.current === analysisKey) {
+      if (lastKeyRef.current === analysisKey) {
         return;
       }
+      lastKeyRef.current = analysisKey;
 
-      setIsCalculating(true);
+      setIsLoading(true);
+
       try {
-        console.log("[ROTH-CONVERSION-WIDGET] Fetching stored Roth conversion analysis");
+        let summary: RothImpactSummary | null = null;
+        let calculatedAt: string | null = null;
+        let source: string | null = null;
 
-        const response = await fetch('/api/roth-conversion/analysis', {
-          credentials: 'include',
-        });
-
-        if (!isMounted) return;
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.hasAnalysis) {
-            const summary = resolveEstateSummary(data);
-
-            setRothData({
-              estateValueIncrease: summary?.delta ?? 0,
-              hasAnalysis: true,
-              calculatedAt: data.calculatedAt,
-              baselineEstateValue: summary?.baseline ?? null,
-              optimizedEstateValue: summary?.optimized ?? (summary?.baseline != null && summary?.delta != null ? summary.baseline + summary.delta : null)
-            });
-            calculatedForRef.current = analysisKey;
-            console.log("[ROTH-CONVERSION-WIDGET] Successfully loaded Roth analysis:", { summary });
-          } else {
-            setRothData({
-              hasAnalysis: false,
-              message: "Run a Roth conversion analysis to populate this widget."
-            });
-            calculatedForRef.current = analysisKey;
-            console.log("[ROTH-CONVERSION-WIDGET] No Roth conversion analysis found");
-          }
-        } else if (response.status === 404) {
-          setRothData({
-            hasAnalysis: false,
-            message: "Run a Roth conversion analysis to populate this widget."
+        // Only retrieve saved data from the estate-delta endpoint - no fallback calculations
+        try {
+          const estateResponse = await fetch('/api/roth-conversion/estate-delta', {
+            credentials: 'include',
+            cache: 'no-store',
           });
-          calculatedForRef.current = analysisKey;
-          console.log("[ROTH-CONVERSION-WIDGET] No Roth conversion analysis found (404)");
-        } else {
-          throw new Error("Failed to fetch Roth conversion analysis");
+
+          if (estateResponse.ok) {
+            const estateData = await estateResponse.json();
+            summary = extractEstateSummaryFromEstateDelta(estateData);
+            calculatedAt = estateData?.updatedAt ?? null;
+            source = estateData?.source ?? 'saved-analysis';
+            
+            console.log('[RothConversionImpactNewWidget] Successfully retrieved saved data:', {
+              delta: summary?.delta,
+              source: source,
+              calculatedAt: calculatedAt
+            });
+          } else if (estateResponse.status === 404) {
+            console.log('[RothConversionImpactNewWidget] No saved Roth analysis found');
+          } else {
+            console.error('[RothConversionImpactNewWidget] Failed to load saved estate delta:', estateResponse.statusText);
+          }
+        } catch (error) {
+          console.error('[RothConversionImpactNewWidget] Error fetching saved estate delta:', error);
+        }
+
+        // Set widget state based on saved data only - no fallbacks
+        if (isMounted) {
+          if (summary && (summary.delta != null || summary.baseline != null || summary.optimized != null)) {
+            setViewState({
+              hasAnalysis: true,
+              delta: summary.delta ?? null,
+              baseline: summary.baseline ?? null,
+              optimized: summary.optimized ?? null,
+              calculatedAt,
+              source,
+            });
+          } else {
+            setViewState({
+              hasAnalysis: false,
+              delta: null,
+              baseline: null,
+              optimized: null,
+              calculatedAt: null,
+              source: null,
+              message: 'Run a Roth conversion analysis to populate this widget.',
+            });
+          }
         }
       } catch (error) {
-        if (!isMounted) return;
-        console.error("[ROTH-CONVERSION-WIDGET] Error fetching Roth analysis:", error);
-        setRothData({
-          hasAnalysis: false,
-          message: "Unable to load Roth conversion impact right now."
-        });
-        calculatedForRef.current = null;
+        console.error('[RothConversionImpactNewWidget] Unexpected error:', error);
+        if (isMounted) {
+          setViewState({
+            hasAnalysis: false,
+            delta: null,
+            baseline: null,
+            optimized: null,
+            calculatedAt: null,
+            source: null,
+            message: 'Error loading Roth conversion analysis.'
+          });
+        }
       } finally {
         if (isMounted) {
-          setIsCalculating(false);
+          setIsLoading(false);
         }
       }
-    }
+    };
 
-    fetchRothAnalysis();
+    if (profileData) {
+      loadAnalysis();
+    } else {
+      setViewState({
+        hasAnalysis: false,
+        delta: null,
+        baseline: null,
+        optimized: null,
+        calculatedAt: null,
+        source: null,
+        message: 'Loading...'
+      });
+    }
 
     return () => {
       isMounted = false;
     };
-  }, [
-    profileData?.id,
-    profileData?.rothConversionAnalysisMeta?.calculatedAt,
-    profileData?.rothConversionAnalysisMeta?.updatedAt,
-    profileData?.optimizationVariables?.lockedAt,
-    profileData?.lastUpdated,
-    refreshSignal
-  ]);
-
-  const currencyFormatter = useMemo(
-    () => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }),
-    []
-  );
+  }, [profileData, refreshSignal]);
 
   const formatCurrency = (value: number) => currencyFormatter.format(value);
-
   const formatCurrencyMagnitude = (value: number) => currencyFormatter.format(Math.abs(value));
-
   const formatWithSign = (value: number) => {
     const formatted = formatCurrencyMagnitude(value);
     if (value > 0) return `+${formatted}`;
@@ -412,10 +471,10 @@ function RothConversionImpactWidget({ profileData, refreshSignal }: { profileDat
     return formatted;
   };
 
-  if (isCalculating) {
+  if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[80px]">
-        <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+        <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mb-2" />
         <div className="text-xs text-gray-400">
           Loading analysis... {elapsedSeconds}s
         </div>
@@ -423,33 +482,46 @@ function RothConversionImpactWidget({ profileData, refreshSignal }: { profileDat
     );
   }
 
-  if (!rothData?.hasAnalysis) {
+  if (!viewState.hasAnalysis) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[80px]">
         <div className="text-lg font-semibold text-white mb-1">—</div>
         <div className="text-xs text-gray-400 text-center">
-          {rothData?.message || 'No analysis available'}
+          {viewState.message || 'No analysis available'}
         </div>
       </div>
     );
   }
-  
-  // Handle case where estate value increase is 0 or negative
-  const delta = rothData.estateValueIncrease ?? 0;
-  const baseline = rothData.baselineEstateValue ?? null;
-  const optimized = rothData.optimizedEstateValue ?? (baseline != null ? baseline + delta : null);
+
+  const delta = viewState.delta ?? 0;
+  const baseline = viewState.baseline;
+  const optimized = viewState.optimized ?? (baseline != null ? baseline + delta : null);
   const percentChange = baseline && baseline !== 0 ? (delta / baseline) * 100 : null;
   const isNeutral = delta === 0;
   const isPositive = delta > 0;
 
   const percentText = percentChange != null
-    ? `${percentChange > 0 ? "+" : ""}${percentChange.toFixed(1)}% ${isPositive ? "increase" : isNeutral ? "change" : "decrease"}`
-    : "—% change";
+    ? `${percentChange > 0 ? '+' : ''}${percentChange.toFixed(1)}% ${isPositive ? 'increase' : isNeutral ? 'change' : 'decrease'}`
+    : '—% change';
 
-  const amountColor = isNeutral ? "text-gray-300" : isPositive ? "text-green-400" : "text-orange-400";
+  const amountColor = isNeutral ? 'text-gray-300' : isPositive ? 'text-green-400' : 'text-orange-400';
   const percentColor = percentChange != null
-    ? (percentChange === 0 ? "text-gray-400" : percentChange > 0 ? "text-green-400" : "text-orange-400")
-    : "text-gray-400";
+    ? (percentChange === 0 ? 'text-gray-400' : percentChange > 0 ? 'text-green-400' : 'text-orange-400')
+    : 'text-gray-400';
+
+  const formattedBaseline = baseline != null ? formatCurrency(baseline) : null;
+  const formattedOptimized = optimized != null ? formatCurrency(optimized) : null;
+
+  const calculatedLabel = (() => {
+    if (!viewState.calculatedAt) return null;
+    try {
+      const date = new Date(viewState.calculatedAt);
+      if (Number.isNaN(date.getTime())) return null;
+      return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    } catch {
+      return null;
+    }
+  })();
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[80px]">
@@ -460,11 +532,18 @@ function RothConversionImpactWidget({ profileData, refreshSignal }: { profileDat
         {percentText}
       </div>
       <div className="text-xs text-gray-400 text-center mt-1">
-        Net to heirs (age 93)
+        Net to heirs (age {ESTATE_TARGET_AGE})
       </div>
-      {baseline != null && optimized != null && (
+      {formattedBaseline && formattedOptimized && (
         <div className="text-xs text-gray-500 text-center mt-1">
-          {`${formatCurrency(baseline)} → ${formatCurrency(optimized)}`}
+          {`${formattedBaseline} → ${formattedOptimized}`}
+        </div>
+      )}
+      {(calculatedLabel || viewState.source) && (
+        <div className="text-[10px] text-gray-500 text-center mt-1">
+          {calculatedLabel ? `Calculated ${calculatedLabel}` : ''}
+          {calculatedLabel && viewState.source ? ' • ' : ''}
+          {viewState.source ? `Source: ${viewState.source === 'analysis' ? 'Saved Roth analysis' : 'Estate plan'}` : ''}
         </div>
       )}
     </div>
@@ -662,9 +741,9 @@ type OptimizedBandsResponse = {
   percentiles: {
     p05?: number[];
     p25: number[];
-    p50: number[];
-    p75: number[];
-    p95?: number[];
+    p50: number;
+    p75: number;
+    p95?: number;
   };
   meta?: {
     currentAge?: number;
@@ -2155,7 +2234,7 @@ No Guarantee of Outcomes — Financial projections (including Monte Carlo analys
 
 Past Performance — Past performance is not indicative of future results. All investing involves risk, including the possible loss of principal.
 
-Fiduciary Standard & Conflicts — Integrity Advisors (“Firm”) seeks to act in the best interest of clients at all times. The Firm may receive compensation as disclosed in its Form ADV and other documents. Clients should review the Firm’s disclosures for details on services, fees, and potential conflicts of interest.
+Fiduciary Standard & Conflicts — Integrity Advisors (“Firm”) seeks to act in the best interest of clients at all times. The Firm may receive compensation as disclosed in its Form ADV and other documents. Clients should review the Firm's disclosures for details on services, fees, and potential conflicts of interest.
 
 Registration & Jurisdiction — Advisory services are offered only to residents of jurisdictions where the Firm is appropriately registered, exempt, or excluded from registration. This material is not an offer to provide advisory services in any jurisdiction where such offer would be unlawful.
 
@@ -2165,11 +2244,11 @@ Tax & Legal — The Firm does not provide tax or legal advice. Clients should co
 
 Suitability & Client Responsibility — Recommendations depend on the completeness and accuracy of information you provide. Please promptly notify the Firm of any material changes to your financial situation, goals, or constraints.
 
-Rebalancing, Trading, and Fees — Portfolio rebalancing and trading may have tax consequences and incur costs. Advisory fees reduce returns over time. Refer to your advisory agreement and the Firm’s Form ADV 2A for fee schedules and disclosures.
+Rebalancing, Trading, and Fees — Portfolio rebalancing and trading may have tax consequences and incur costs. Advisory fees reduce returns over time. Refer to your advisory agreement and the Firm's Form ADV 2A for fee schedules and disclosures.
 
 Cybersecurity & Electronic Communications — While the Firm employs commercially reasonable safeguards, electronic communications may be subject to interception or loss. Do not transmit sensitive personal information unless instructed to do so via a secure channel.
 
-Privacy — The Firm’s Privacy Policy describes how client information is collected, used, and safeguarded. A copy is available upon request.
+Privacy — The Firm's Privacy Policy describes how client information is collected, used, and safeguarded. A copy is available upon request.
 
 Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
 
@@ -2789,7 +2868,7 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
       'retirement_stress_test': 'Retirement Stress Test',
       'retirement_income_sources': 'Retirement Income Sources',
       'social_security_optimization_impact': 'Social Security Optimization',
-      'roth_conversion_impact': 'Roth Conversion Impact',
+      'roth_conversion_impact_new': 'Roth Conversion Impact',
       'life_goals_progress': 'Life Goals Progress',
       'insurance_adequacy_score': 'Insurance Adequacy',
       'emergency_readiness_score_new': 'Emergency Readiness',
@@ -3327,10 +3406,10 @@ Contact — Bhavneesh Sharma, bsharma@integrityadvisors.org`);
                           <div className={`${WIDGET_TITLE_CLASS} mb-2 text-center`}>Social Security Optimization Impact</div>
                               <SocialSecurityOptimizationWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
-                          ) : w === 'roth_conversion_impact' ? (
+                          ) : w === 'roth_conversion_impact_new' ? (
                             <div className="flex flex-col items-center w-full">
                           <div className={`${WIDGET_TITLE_CLASS} mb-2 text-center`}>Roth Conversion Impact</div>
-                              <RothConversionImpactWidget profileData={profileData} refreshSignal={refreshSignal} />
+                              <RothConversionImpactNewWidget profileData={profileData} refreshSignal={refreshSignal} />
                             </div>
                           ) : w === 'life_goals_progress' ? (
                             <div className="flex flex-col items-center w-full">

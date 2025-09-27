@@ -781,7 +781,7 @@ export const reportLayouts = pgTable("report_layouts", {
         "ending_portfolio_value_increase",
         "retirement_stress_test",
         "social_security_optimization_impact",
-        "roth_conversion_impact",
+        "roth_conversion_impact_new",
         "life_goals_progress",
         "insurance_adequacy_score",
         "emergency_readiness_score_new",

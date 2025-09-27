@@ -260,8 +260,11 @@ function TaxReductionCenterContent() {
     if (impact?.projectionData && Array.isArray(impact.projectionData)) {
       const row = impact.projectionData.find((r: any) => Math.floor(r.age) === 93);
       if (row) {
-        const hasOptimized = Boolean(p?.optimizationVariables?.optimizedScore);
-        const val = hasOptimized ? (Number(row.optimized) || 0) : (Number(row.baseline) || 0);
+        const baselineVal = Number(row.baseline);
+        const optimizedVal = Number(row.optimized);
+        const val = Number.isFinite(baselineVal) && baselineVal >= 0
+          ? baselineVal
+          : (Number.isFinite(optimizedVal) ? optimizedVal : 0);
         if (val > 0) return val;
       }
     }
@@ -351,20 +354,25 @@ function TaxReductionCenterContent() {
       (assumptions as any).projectedDeathAge = 93;
       (assumptions as any).appreciationRate = 0;
 
-      const baseline = calculateEstateProjection({
-        baseEstateValue,
-        assetComposition,
-        strategies,
-        assumptions,
-        profile,
-      });
-
+      const withoutProj: any[] = storedRothAnalysis.rawResults.withoutConversionProjection || [];
       const withProj: any[] = storedRothAnalysis.rawResults.withConversionProjection || [];
-      if (!Array.isArray(withProj) || withProj.length === 0) return null;
+      if (!Array.isArray(withProj) || withProj.length === 0 || !Array.isArray(withoutProj) || withoutProj.length === 0) return null;
       const yearsUntilDeath = Math.max(0, 93 - (elderAge || 0));
       const targetYear = new Date().getFullYear() + yearsUntilDeath;
-      const deathRow = withProj.find((r: any) => r.year === targetYear) || withProj.slice().reverse().find((r: any) => r.year <= targetYear) || withProj[withProj.length - 1];
-      if (!deathRow) return null;
+      const pickRowAtTarget = (arr: any[]) =>
+        arr.find((r: any) => r.year === targetYear) ||
+        arr.slice().reverse().find((r: any) => r.year <= targetYear) ||
+        arr[arr.length - 1];
+      const baselineRow = pickRowAtTarget(withoutProj);
+      const deathRow = pickRowAtTarget(withProj);
+      if (!baselineRow || !deathRow) return null;
+
+      const baselineRetirement = Math.max(0,
+        Number(baselineRow.traditionalBalance || 0) +
+        Number(baselineRow.rothBalance || 0) +
+        Number(baselineRow.taxableBalance || 0) +
+        Number(baselineRow.savingsBalance || 0)
+      );
       const traditional = Math.max(0, Number(deathRow.traditionalBalance || 0));
       const rothBal = Math.max(0, Number(deathRow.rothBalance || 0));
       const taxable = Math.max(0, Number(deathRow.taxableBalance || 0));
@@ -375,7 +383,13 @@ function TaxReductionCenterContent() {
         roth: rothBal,
         illiquid: Math.max(0, Number((assetComposition as any)?.illiquid || 0)),
       } as any;
-      const baselineRetirement = Math.max(0, Number(retirementAt93 || 0));
+      const baselineSummary = calculateEstateProjection({
+        baseEstateValue,
+        assetComposition,
+        strategies,
+        assumptions,
+        profile,
+      });
       const rothRetirement = traditional + rothBal + taxable + savings;
       const baseEstateValueRoth = Math.max(0, baseEstateValue - baselineRetirement + rothRetirement);
       const withSummary = calculateEstateProjection({
@@ -385,7 +399,7 @@ function TaxReductionCenterContent() {
         assumptions,
         profile,
       });
-      return Math.max(0, withSummary.heirTaxEstimate.netAfterIncomeTax - baseline.heirTaxEstimate.netAfterIncomeTax);
+      return Math.max(0, withSummary.heirTaxEstimate.netAfterIncomeTax - baselineSummary.heirTaxEstimate.netAfterIncomeTax);
     } catch {
       return null;
     }

@@ -18,7 +18,7 @@ const DEFAULT_WIDGETS = [
   'ending_portfolio_value_increase',
   'retirement_stress_test',
   'social_security_optimization_impact',
-  'roth_conversion_impact',
+  'roth_conversion_impact_new',
 ];
 
 const WIDGET_ORDER = [...DEFAULT_WIDGETS];
@@ -32,6 +32,7 @@ const LEGACY_WIDGET_MAP: Record<string, string | null> = {
   optimization_impact_on_balance: 'ending_portfolio_value_increase',
   optimization_impact_ending_portfolio: 'ending_portfolio_value_increase',
   emergency_readiness_score: 'emergency_readiness_score_new',
+  roth_conversion_impact: 'roth_conversion_impact_new',
 };
 
 const normalizeWidgetKey = (key: string | null | undefined): string | null => {
